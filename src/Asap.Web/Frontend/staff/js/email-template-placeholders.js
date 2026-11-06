@@ -73,8 +73,7 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
       const style = view.getComputedStyle(ancestor);
       if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
     }
-    const override = card.owner.querySelector('.settings-template-override');
-    return !override || override.checked;
+    return true;
   }
 
   function supported(card) {
@@ -132,8 +131,7 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
 
   function effectiveText(card, role) {
     const control = card.owner.querySelector(`[data-template-field="${role}"]`);
-    const override = card.owner.querySelector('.settings-template-override');
-    if (override && (!override.checked || !control.value.trim())) {
+    if (!control.value.trim()) {
       return card.owner.dataset[role === 'subject' ? 'templateInheritedSubject' : 'templateInheritedBody'] ?? control.value;
     }
     return control.value;
@@ -226,7 +224,7 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
         pageX: view.scrollX, pageY: view.scrollY,
         anchorScrollTop: control.scrollTop, anchorScrollLeft: control.scrollLeft,
         scrollTop: scroll.scrollTop, scrollLeft: scroll.scrollLeft,
-        value: control.value, override: card.owner.querySelector('.settings-template-override')?.checked,
+        value: control.value,
         start, end };
       renderPicker(entry);
       trigger.setAttribute('aria-expanded', 'true');
@@ -247,7 +245,6 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
       const key = button.dataset.placeholderKey;
       if (!isContextCurrent(saved.context) || !editable(entry) || control.value !== saved.value ||
           target.key !== saved.key || target.usage !== saved.usage || target.kind !== saved.kind || target.id !== saved.id ||
-          card.owner.querySelector('.settings-template-override')?.checked !== saved.override ||
           !supported(card).includes(key) || !popup.contains(document.activeElement)) { clear(); return; }
       const token = `{{${key}}}`;
       clear();
@@ -325,9 +322,10 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
     }
     for (const owner of panel.querySelectorAll('fieldset.settings-template, .settings-template-row')) {
       const card = ensureCard(owner);
-      // Override controls are populated separately from the static built-in fields.
-      const override = owner.querySelector('.settings-template-override-control');
-      if (override && !card.details.contains(override)) card.details.querySelector('.settings-template-admin').append(override);
+      for (const entry of card.entries) {
+        const inheritance = owner.querySelector(`[data-template-status="${entry.role}"]`);
+        if (inheritance) entry.control.closest('.settings-template-field').append(inheritance);
+      }
       if (reset) {
         setExpanded(card, false);
         card.error.textContent = '';

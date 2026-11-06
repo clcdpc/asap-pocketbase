@@ -79,25 +79,24 @@ const scenarios = ['system', '2'].flatMap(scope => [
       for (const [index, expanded] of [[0, true], [1, false]]) {
         const card = cards(t.page).nth(index), material = materials.nth(index);
         if (!expanded) await toggle(card).click();
-        const label = material.locator('input[type="text"]').nth(1);
+        const label = material.locator('[data-material-field="label"]');
         const originalLabel = await label.inputValue(), code = await card.getAttribute('data-rule-code');
-        const override = material.locator('.settings-domain-override-toggle');
-        const originalOverride = scope === '2' && await override.isChecked();
+        const originalOverride = scope === '2' && (await material.locator(':scope > .settings-inheritance .settings-inheritance-status').textContent()).startsWith('Library setting');
         originals.push({ index, label: originalLabel, override: originalOverride });
-        if (scope === '2') await override.check();
         const control = await card.locator('[data-format-label="title"]').elementHandle();
         const draftLabel = 'Shared format label <draft>';
         await label.fill(draftLabel);
         assert.equal(await card.locator('.settings-rule-identity strong').innerText(), draftLabel);
-        assert.equal(await toggle(card).getAttribute('aria-label'), `${expanded ? 'Collapse' : 'Expand'} ${draftLabel} (${code}) format rules`);
-        assert.equal(await card.locator('[data-format-field="title"]').getAttribute('aria-label'), `Title requirement for ${draftLabel} (${code})`);
+        const context = index ? `${draftLabel}, format 2` : draftLabel;
+        assert.equal(await toggle(card).getAttribute('aria-label'), `${expanded ? 'Collapse' : 'Expand'} ${context} format rules`);
+        assert.equal(await card.locator('[data-format-field="title"]').getAttribute('aria-label'), `Title requirement for ${context}`);
         assert.deepEqual(await card.locator('.settings-row-actions button').evaluateAll(buttons =>
           buttons.map(button => [button.title, button.getAttribute('aria-label')])),
-        [`Move ${draftLabel} (${code}) up`, `Move ${draftLabel} (${code}) down`, `Delete ${draftLabel} (${code}) format rule`]
+        [`Move ${context} up`, `Move ${context} down`, `Delete ${context} format rule`]
           .map(name => [name, name]));
         assert.equal(await control.evaluate(node => node.isConnected), true, 'Renaming never replaces draft controls');
         await toggle(card).click(); await toggle(card).click();
-        assert.equal(await toggle(card).getAttribute('aria-label'), `${expanded ? 'Collapse' : 'Expand'} ${draftLabel} (${code}) format rules`);
+        assert.equal(await toggle(card).getAttribute('aria-label'), `${expanded ? 'Collapse' : 'Expand'} ${context} format rules`);
         // Retain both draft labels at once to exercise duplicate accessible names.
         await control.dispose();
       }
@@ -105,10 +104,15 @@ const scenarios = ['system', '2'].flatMap(scope => [
       assert.equal(new Set(names).size, names.length, 'Duplicate configured labels have distinct actions in either scope');
       for (const original of originals) {
         const material = materials.nth(original.index);
-        await material.locator('input[type="text"]').nth(1).fill(original.label);
-        if (scope === '2') await material.locator('.settings-domain-override-toggle').setChecked(original.override);
+        await material.locator('[data-material-field="label"]').fill(original.label);
+        if (scope === '2' && !original.override) await material.locator(':scope > .settings-inheritance .settings-use-system').click();
       }
-      assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Restoring labels and inheritance clears the draft');
+      if (scope === '2') {
+        const decision = confirm(t.page, 'Discard changes'); await t.page.locator('#settings-discard').click(); await decision;
+        await t.page.waitForFunction(() => document.querySelector('#settings-save-title').textContent === 'No changes' && !document.querySelector('#settings-form').inert);
+        await toggle(first).click();
+      }
+      assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Discard restores accepted labels and ownership');
       const author = first.locator('[data-format-field="author"]');
       const original = await author.inputValue();
       for (const mode of ['required', 'optional', 'hidden']) {
@@ -118,6 +122,11 @@ const scenarios = ['system', '2'].flatMap(scope => [
         assert.equal(await summary.innerText(), `${counts.required} required · ${counts.optional} optional · ${counts.hidden} hidden`);
       }
       await author.selectOption(original);
+      if (scope === '2') {
+        const decision = confirm(t.page, 'Discard changes'); await t.page.locator('#settings-discard').click(); await decision;
+        await t.page.waitForFunction(() => document.querySelector('#settings-save-title').textContent === 'No changes' && !document.querySelector('#settings-form').inert);
+        await toggle(first).click();
+      }
       assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Restoring requirement modes clears the draft');
       if (scope === '2') {
         const custom = first.locator('[data-custom-rule-key="i390_note"] select');

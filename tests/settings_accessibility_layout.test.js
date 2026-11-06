@@ -123,7 +123,7 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(legend('auto-promote'), 'Suggestion and eligibility');
     assert.strictEqual(legend('patron-code-picker'), 'Patron code eligibility');
     assert.deepStrictEqual(controls(fieldset('patron-code-picker')), [
-      'patron-code-eligibility-enabled', 'patron-codes-use-system', 'patron-code-picker',
+      'patron-code-eligibility-enabled', 'patron-code-picker',
       'patron-code-selection', 'patron-code-eligibility-message'
     ]);
     const patronCodeEligibility = document.getElementById('patron-code-eligibility');
@@ -200,7 +200,7 @@ const { JSDOM } = require('jsdom');
     assert.equal(commonAuthorsOptions.contains(commonAuthorsEnabled), false,
       'The controlling checkbox remains outside the hidden options.');
     assert.deepStrictEqual(controls(commonAuthorsOptions), [
-      'common-authors-label', 'common-authors-help', 'common-authors-message', 'common-creators-use-system'
+      'common-authors-label', 'common-authors-help', 'common-authors-message'
     ]);
     for (const id of ['add-common-creator', 'common-creators-editor']) {
       assert.ok(commonAuthorsOptions.contains(document.getElementById(id)), `${id} stays inside the collapsed options.`);

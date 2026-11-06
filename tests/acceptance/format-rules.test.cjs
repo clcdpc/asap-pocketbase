@@ -140,7 +140,7 @@ test('format cards retain complete drafts and use the actual container width at 
   await button.click();
   const title = first.locator('[data-format-label="title"]');
   const material = page.locator('#material-formats-editor [data-domain-row]').first();
-  await material.locator('.settings-domain-override-toggle').check();
+  assert.equal(await material.locator('[data-material-field="label"]').isEditable(), true);
   const label = material.locator('[data-material-field="label"]');
   const retainedTitle = await title.elementHandle();
   await label.fill('Renamed Book <draft>');
@@ -155,7 +155,10 @@ test('format cards retain complete drafts and use the actual container width at 
   await button.click();
   assert.equal(await button.getAttribute('aria-label'), 'Collapse Collapsed Book format rules');
   await label.fill('Configured Book');
-  await material.locator('.settings-domain-override-toggle').uncheck();
+  await material.locator(':scope > .settings-inheritance .settings-use-system').click();
+  assert.equal(await page.evaluate(() => window.editors.collect().values.formats[0].reset), true);
+  await page.evaluate(() => window.editors.populate(window.ruleData, false));
+  await button.click();
   assert.equal(await page.evaluate(() => window.editors.collect().changed), false);
   await retainedTitle.dispose();
   await title.fill('Unsaved title draft');

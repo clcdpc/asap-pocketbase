@@ -109,6 +109,22 @@ async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeou
   }
 }
 
+async function librarySetting(field) {
+  const status = field.locator(':scope > .settings-inheritance .settings-inheritance-status');
+  return await status.count() ? (await status.first().textContent()).startsWith('Library setting') : null;
+}
+async function useSystemValue(page, field, group = false) {
+  const reset = field.locator(':scope > .settings-inheritance .settings-use-system');
+  if (!await reset.count()) return;
+  if (group) await decideConfirmation(page, () => reset.click(), dialog => dialog.accept());
+  else await reset.click();
+}
+async function discardSettingsDraft(page) {
+  if (!await page.locator('#settings-save').isEnabled()) return;
+  await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
+  await page.waitForFunction(() => document.getElementById('settings-save-title').textContent === 'No changes' && !document.getElementById('settings-form').inert);
+}
+
 async function verifyFormatRuleDraftNames(page) {
   const cards = page.locator('#format-rules-editor [data-rule-code]');
   const materials = page.locator('#material-formats-editor [data-domain-row]');
@@ -118,10 +134,7 @@ async function verifyFormatRuleDraftNames(page) {
     const toggle = card.locator('[data-rule-toggle]');
     const code = await card.getAttribute('data-rule-code');
     const label = material.locator('[data-material-field="label"]');
-    const override = material.locator('.settings-domain-override-toggle');
-    originals.push({ index, label: await label.inputValue(), expanded: await toggle.getAttribute('aria-expanded'),
-      override: await override.count() ? await override.isChecked() : null });
-    if (await override.count()) await override.check();
+    originals.push({ index, label: await label.inputValue(), expanded: await toggle.getAttribute('aria-expanded') });
     const control = await card.locator('[data-format-label="title"]').elementHandle();
     await label.fill('Shared label <draft>');
     const context = index ? 'Shared label <draft>, format 2' : 'Shared label <draft>';
@@ -139,8 +152,8 @@ async function verifyFormatRuleDraftNames(page) {
   for (const original of originals) {
     const material = materials.nth(original.index);
     await material.locator('[data-material-field="label"]').fill(original.label);
-    if (original.override !== null) await material.locator('.settings-domain-override-toggle').setChecked(original.override);
   }
+  if (await page.locator('#settings-scope').inputValue() !== 'system') await discardSettingsDraft(page);
 }
 
 async function runSystemFormatRuleEditor(page, report, waitForSettingsReady) {
@@ -289,7 +302,7 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   await page.locator(`#external-search-provider-editor [data-provider-id="${providerA}"] input`).nth(0)
     .fill('Changed provider A');
   let payload = await saveSettings();
-  assert.equal(payload.providers.find(item => item.id === providerB).reset, false);
+  assert.equal(payload.providers.some(item => item.id === providerB), false);
   let current = await read();
   assert.deepEqual(rawProvider(current, providerB), untouchedProvider, 'Untouched provider SQL row/version must survive sibling save.');
 
@@ -297,7 +310,7 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   await page.locator(`#material-formats-editor [data-format-id="${formatA}"] [data-material-field="label"]`)
     .fill('Changed format A');
   payload = await saveSettings();
-  assert.equal(payload.formats.find(item => item.id === formatB).reset, false);
+  assert.equal(payload.formats.some(item => item.id === formatB), false);
   current = await read();
   assert.deepEqual(rawFormat(current, formatB), untouchedFormat, 'Untouched format SQL row/version must survive sibling save.');
   assert.deepEqual(rawOwned(current, sparseId), initialSparse, 'Untouched active owned SQL row/version must survive sibling save.');
@@ -344,15 +357,13 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   assert.equal(rejected.body.code, 'settings_invalid');
   assert.deepEqual(await read(), beforeStaleOwned);
 
-  await page.locator(`#material-formats-editor [data-format-id="${formatA}"] .settings-domain-override-toggle`).uncheck();
+  await useSystemValue(page, page.locator(`#material-formats-editor [data-format-id="${formatA}"]`));
   payload = await saveSettings();
   assert.equal(payload.formats.find(item => item.id === formatA).reset, true);
   current = await read();
   assert.equal(rawFormat(current, formatA), undefined);
   assert.deepEqual(rawFormat(current, formatB), untouchedFormat);
   assert.deepEqual(rawProvider(current, providerB), untouchedProvider);
-
-  await page.locator('[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle').check();
   await page.locator('#patron-login-note').fill('Unrelated scalar metadata witness');
   payload = await saveSettings();
   assert.equal(Object.hasOwn(payload, 'providers'), false);
@@ -432,8 +443,8 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   const beforeProviderClear = untouchedProvider;
   await page.locator('#settings-nav-workflow').click();
   const providerRow = page.locator(`#external-search-provider-editor [data-provider-id="${providerB}"]`);
-  await providerRow.locator('input').nth(0).fill('');
-  await providerRow.locator('input').nth(1).fill('');
+  await providerRow.locator('[data-provider-status="label"] .settings-use-system').click();
+  await providerRow.locator('[data-provider-status="urlTemplate"] .settings-use-system').click();
   payload = await saveSettings();
   assert.equal(payload.providers.find(item => item.id === providerB).label, null);
   assert.equal(payload.providers.find(item => item.id === providerB).urlTemplate, null);
@@ -450,7 +461,7 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   const beforeAuthorLabelClear = untouchedFormat;
   await page.locator('#settings-nav-patron').click();
   await page.locator(`#format-rules-editor [data-rule-code="${codeB}"] [data-rule-toggle]`).click();
-  await page.locator(`#format-rules-editor [data-rule-code="${codeB}"] [data-format-label="author"]`).fill('');
+  await page.locator(`#format-rules-editor [data-rule-code="${codeB}"] [data-rule-inheritance="author.label"] .settings-use-system`).click();
   await saveSettings();
   current = await read();
   untouchedFormat = rawFormat(current, formatB);
@@ -568,9 +579,8 @@ async function runPatronTextRefinements(page, axeSource, args, report, saveSetti
   const systemBefore = (await read(library)).stored.configuredSystem.patron.successMessage;
   const successField = page.locator('[data-setting-key="successMessage"]');
   const duplicateField = page.locator('[data-setting-key="alreadySubmittedMessage"]');
-  assert.equal(await successField.locator('textarea').isDisabled(), true);
-  assert.equal(await successField.locator('.patron-placeholder-trigger').isDisabled(), true);
-  await successField.locator('.settings-override-toggle').check();
+  assert.equal(await successField.locator('textarea').isDisabled(), false);
+  assert.equal(await successField.locator('.patron-placeholder-trigger').isDisabled(), false);
   const message = 'Library <img src=x onerror="alert(1)"> & é\nCard: selected\n\nLibby help:\nhttps://help.libbyapp.com/en-us/6260.htm\n';
   await successField.locator('textarea').fill(message);
   const start = message.indexOf('selected');
@@ -582,7 +592,6 @@ async function runPatronTextRefinements(page, axeSource, args, report, saveSetti
   assert.equal(await successField.locator('textarea').inputValue(), expected);
   assert.equal(await successField.locator('textarea').evaluate(element => document.activeElement === element), true);
   assert.equal(await successField.locator('textarea').evaluate(element => element.selectionStart), start + '{{barcode_label}}'.length);
-  await duplicateField.locator('.settings-override-toggle').check();
   await duplicateField.locator('textarea').fill('Previous: ');
   await duplicateField.locator('textarea').evaluate(element => element.setSelectionRange(10, 10));
   await duplicateField.locator('.patron-placeholder-trigger').click();
@@ -714,8 +723,8 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     assert.equal(await page.locator('#settings-scope-field').isVisible(), false);
     await page.locator('#settings-nav-templates').click();
     const inherited = await row('rejection:template_1');
-    assert.equal(await inherited.locator('.template-subject').isDisabled(), true);
-    await inherited.locator('.settings-template-override').check();
+    assert.equal(await inherited.locator('.template-subject').isDisabled(), false);
+
     await inherited.locator('.template-body').fill('Library admin {{title}}');
     const payload = await saveSettings();
     assert.equal(Object.hasOwn(payload.email, 'postmarkToken'), false);
@@ -910,8 +919,8 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await assertLibraryContext();
     await page.locator('#settings-nav-templates').click();
     const inherited = await row(createdKey);
-    assert.equal(await inherited.locator('.template-subject').isDisabled(), true);
-    await inherited.locator('.settings-template-override').check();
+    assert.equal(await inherited.locator('.template-subject').isDisabled(), false);
+
     await inherited.locator('.template-body').fill('Library body: ');
     await selectRange(inherited.locator('.template-body'), 14);
     await titleButton().click();
@@ -1110,7 +1119,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   const source = customSaved.stored.templates.find(item =>
     item.organizationId === '1' && item.templateKey === 'rejection:template_3');
   let returning = await row(source.templateKey);
-  await returning.locator('.settings-template-override').check();
+
   await returning.locator('.template-display-name').fill('Library-owned display override');
   await returning.locator('.template-subject').fill('Library subject override');
   await returning.locator('.template-body').fill('Library body override');
@@ -1177,7 +1186,7 @@ async function runLibraryFormatRuleDrafts(page, args, report, ready) {
   await historicalField.locator('[data-option-id="selected-choice"] [data-option-field="label"]').fill('Renamed historical selection');
   await historicalField.locator('[data-option-id="selected-choice"] [data-option-field="enabled"]').uncheck();
   const sharedFormat = page.locator('#material-formats-editor [data-format-code="book"]');
-  await sharedFormat.locator('.settings-domain-override-toggle').check();
+
   await sharedFormat.locator('[data-material-field="label"]').fill('Historical witness library book');
 
   await page.locator('#add-material-format').click();
@@ -1216,7 +1225,7 @@ async function runLibraryFormatRuleDrafts(page, args, report, ready) {
   await historicalField.locator('[data-row-action="down"]').click();
   assert.equal(await historicalField.getAttribute('data-field-key'), savedKey, 'Reordering a renamed disabled definition retains its stored selection key.');
 
-  await page.locator('#publication-options-use-system').uncheck();
+  assert.equal(await page.locator('#add-publication-option').isEnabled(), true);
   const publication = page.locator('#publication-options-editor [data-domain-row]');
   const existingPublicationIds = await publication.evaluateAll(rows => rows.map(row => row.dataset.optionId));
   const historicalPublication = page.locator('#publication-options-editor [data-option-id="historical-publication"]');
@@ -1386,22 +1395,29 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
   }, scope);
   const readEditor = () => page.evaluate(() => {
     const enabled = document.getElementById('common-authors-enabled');
-    const override = enabled.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
+    const override = enabled.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-inheritance-status');
     return {
       enabled: enabled.checked,
-      enabledOverridden: override ? override.checked : null,
+      enabledOverridden: override ? override.textContent.startsWith('Library setting') : null,
       label: document.getElementById('common-authors-label').value,
       help: document.getElementById('common-authors-help').value,
       message: document.getElementById('common-authors-message').value,
-      creatorsUseSystem: document.getElementById('common-creators-use-system').checked,
+      creatorsUseSystem: document.getElementById('settings-scope').value === 'system' || document.getElementById('common-creators-inherit-field').textContent.includes('Using system value'),
       creators: [...document.querySelectorAll('#common-creators-editor [data-domain-row] input')].map(input => input.value)
     };
   });
   const enabled = page.locator('#common-authors-enabled');
   const options = page.locator('#common-authors-options');
   const enabledOverride = page.locator(
-    '[data-setting-section="workflow"][data-setting-key="commonAuthorsEnabled"] .settings-override-toggle');
-  const useSystem = page.locator('#common-creators-use-system');
+    '[data-setting-section="workflow"][data-setting-key="commonAuthorsEnabled"]');
+  const creatorStatus = page.locator('#common-creators-inherit-field');
+  const creatorsInherited = async () => !await librarySetting(creatorStatus);
+  const resetCreators = () => useSystemValue(page, creatorStatus, true);
+  const pinCreators = async () => {
+    const input = rows.first().locator('input');
+    if (await rows.count()) { const value = await input.inputValue(); await input.fill(value + ' draft'); await input.fill(value); }
+    else { await page.locator('#add-common-creator').click(); await rows.last().locator('[data-row-action="delete"]').click(); }
+  };
   const rows = page.locator('#common-creators-editor [data-domain-row]');
   const creatorValues = () => rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value));
   const creatorGeometry = () => page.evaluate(() => {
@@ -1477,7 +1493,7 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     await page.locator('#settings-workflow').waitFor({ state: 'visible' });
   };
   const ensureLibraryParentEditable = async () => {
-    if (await enabledOverride.count() && !await enabledOverride.isChecked()) await enabledOverride.check();
+    assert.equal(await enabled.isEnabled(), true);
   };
   const saveIfDirty = async () => {
     if (await page.locator('#settings-save').isEnabled()) return saveSettings();
@@ -1520,16 +1536,16 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     await ensureLibraryParentEditable();
     await setEnabledByKeyboard(true);
     if (snapshot.creatorsUseSystem) {
-      if (!await useSystem.isChecked()) await useSystem.check();
+      if (!await creatorsInherited()) await resetCreators();
     } else {
-      if (await useSystem.isChecked()) await useSystem.uncheck();
+      if (await creatorsInherited()) await pinCreators();
       await setCreatorRows(snapshot.creators);
     }
     if (snapshot.enabledOverridden) {
-      if (!await enabledOverride.isChecked()) await enabledOverride.check();
+      if (!await librarySetting(enabledOverride)) { await setEnabledByKeyboard(!snapshot.enabled); }
       await setEnabledByKeyboard(snapshot.enabled);
-    } else if (await enabledOverride.count() && await enabledOverride.isChecked()) {
-      await enabledOverride.uncheck();
+    } else if (await librarySetting(enabledOverride)) {
+      await useSystemValue(page, enabledOverride);
     }
     await saveIfDirty();
     await reloadScope(libraryScope);
@@ -1635,7 +1651,8 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     assert.deepEqual(await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value)), expectedSystemRows,
       'Retained hidden Add/Delete handlers cannot mutate the invisible System list.');
     const systemOffPayload = await saveSettings();
-    assert.equal(systemOffPayload.workflow.commonAuthorsEnabled, false);
+    assert.equal(systemOffPayload.workflow.commonAuthorsEnabled, systemSnapshot.enabled ? false : undefined,
+      'A changed System flag is submitted; an accepted false/null presentation is preserved by omission.');
     assert.equal(systemOffPayload.workflow.commonAuthorsLabel, systemDraft.label);
     assert.equal(systemOffPayload.workflow.commonAuthorsHelp, systemDraft.help);
     assert.equal(systemOffPayload.workflow.commonAuthorsMessage, systemDraft.message);
@@ -1688,20 +1705,20 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     const libraryInitially = await readEditor();
     const systemConfig = await readSettings('system');
     const systemEnabled = systemConfig.stored?.configuredSystem?.workflow?.commonAuthorsEnabled === true;
-    if (!libraryInitially.enabledOverridden) await enabledOverride.check();
+    assert.equal(await enabled.isEnabled(), true);
     await setEnabledByKeyboard(true);
     assert.equal(await options.isVisible(), true);
-    if (!await useSystem.isChecked()) await useSystem.check();
+    if (!await creatorsInherited()) await resetCreators();
     const inheritedSystemCreators = (systemConfig.stored?.configuredSystem?.commonCreators?.values || [])
       .map(creator => typeof creator === 'string' ? creator : creator.value);
     assert.deepEqual(await creatorValues(), inheritedSystemCreators,
       'Use system renders the whole accepted System creator list in Library context.');
-    assert.equal(await rows.first().locator('input').isDisabled(), true,
+    assert.equal(await rows.first().locator('input').isDisabled(), false,
       'Inherited creator inputs remain disabled.');
-    assert.equal(await rows.first().getByRole('button', { name: 'Move down', exact: true }).isDisabled(), true,
+    assert.equal(await rows.first().getByRole('button', { name: 'Move down', exact: true }).isDisabled(), false,
       'Inherited row actions remain disabled.');
-    assert.equal(await page.locator('#add-common-creator').isDisabled(), true,
-      'The inherited Library list cannot add a row.');
+    assert.equal(await page.locator('#add-common-creator').isDisabled(), false,
+      'The inherited Library list can be edited directly.');
     await page.setViewportSize({ width: 1280, height: 900 });
     const inheritedGeometry = await creatorGeometry();
     assertCreatorContainment(inheritedGeometry, 'Library inherited desktop');
@@ -1711,7 +1728,7 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     report.commonCreatorLayouts.push({ name: 'library-inherited-desktop', ...inheritedGeometry });
     await page.screenshot({ path: path.join(args.artifactRoot, 'common-creators-library-inherited-desktop.png'), fullPage: true });
     await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-inherited-desktop');
-    if (await useSystem.isChecked()) await useSystem.uncheck();
+    assert.equal(await page.locator('#add-common-creator').isEnabled(), true);
     const libraryCreator = `Collapsed Library creator ${args.identity.staffId}`;
     await page.locator('#add-common-creator').click();
     await rows.last().locator('input').fill(libraryCreator);
@@ -1732,34 +1749,31 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     assert.equal(await options.isHidden(), true);
     await assertOptionsDisabled('Library hidden draft');
     assert.equal(await enabled.evaluate(node => document.activeElement === node), true);
-    const useSystemBefore = await useSystem.isChecked();
-    await useSystem.evaluate(node => {
-      node.checked = !node.checked;
-      node.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    assert.equal(await useSystem.isChecked(), useSystemBefore,
+    const useSystemBefore = await creatorsInherited();
+    await creatorStatus.locator('.settings-use-system').evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    assert.equal(await creatorsInherited(), useSystemBefore,
       'A hidden Use system list event cannot change Library list ownership.');
     const libraryOffPayload = await saveSettings();
     assert.equal(libraryOffPayload.workflow.commonAuthorsEnabled, false);
     assert.deepEqual(libraryOffPayload.workflow.commonAuthorsList, libraryDraftRows);
     await reloadScope(libraryScope);
     assert.equal(await enabled.isChecked(), false);
-    assert.equal(await enabledOverride.isChecked(), true);
+    assert.equal(await librarySetting(enabledOverride), true);
     assert.equal(await options.isHidden(), true);
-    assert.equal(await useSystem.isChecked(), false);
+    assert.equal(await creatorsInherited(), false);
     assert.deepEqual(await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value)), libraryDraftRows,
       'The hidden Library creator list and its override survive accepted save and reload.');
     await page.setViewportSize({ width: 390, height: 844 });
     await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-mobile-off');
 
-    await enabledOverride.uncheck();
+    await useSystemValue(page, enabledOverride);
     assert.equal(await enabled.isChecked(), systemEnabled,
       'Resetting the Library feature override displays the authoritative System flag.');
-    assert.equal(await enabled.isDisabled(), true);
+    assert.equal(await enabled.isDisabled(), false);
     assert.equal(await options.isHidden(), !systemEnabled,
       'Inherited true reveals options, while inherited false keeps them collapsed.');
-    await enabledOverride.check();
-    assert.equal(await enabled.isChecked(), false, 'Re-enabling Override restores its local false value.');
+    await setEnabledByKeyboard(false);
+    assert.equal(await enabled.isChecked(), false, 'A direct false edit prepares the local feature value.');
     assert.equal(await options.isHidden(), true);
     await setEnabledByKeyboard(true);
     await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-mobile-on');
@@ -1788,12 +1802,12 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
   });
   const retainedOption = picker.locator('[data-suggestion-placeholder="next_available_date"]');
   const override = page.locator(
-    '[data-setting-section="workflow"][data-setting-key="suggestionLimitMessage"] .settings-override-toggle');
+    '[data-setting-section="workflow"][data-setting-key="suggestionLimitMessage"]');
   const scope = page.locator('#settings-scope');
   let librarySnapshot = null;
   const readEditor = async () => ({
     value: await message.inputValue(),
-    overridden: await override.count() ? await override.isChecked() : null
+    overridden: await librarySetting(override)
   });
   const switchScope = async target => {
     if (await scope.inputValue() !== target) {
@@ -2002,7 +2016,7 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
       'The accepted Library message still reflects the initial System fallback before Library editing.');
     await trackInputEvents();
     assert.equal(await override.count(), 1);
-    if (!await override.isChecked()) await override.check();
+    assert.equal(await message.isEditable(), true);
     const librarySource = `Library selected suffix ${args.identity.staffId}`;
     const libraryInserted = `Library {{next_available_date}} suffix ${args.identity.staffId}`;
     assert.notEqual(libraryInserted, librarySnapshot.value, 'The Library round trip uses a distinct message draft.');
@@ -2018,7 +2032,7 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
     assert.equal(libraryPayload.workflow.suggestionLimitMessage, libraryInserted,
       'The Library token is saved through the existing Workflow override payload.');
     await reloadScope('2');
-    assert.equal(await override.isChecked(), true);
+    assert.equal(await librarySetting(override), true);
     assert.equal(await message.inputValue(), libraryInserted,
       'The explicit Library message survives an accepted save and reload.');
     if (librarySnapshot.overridden) {
@@ -2026,7 +2040,7 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
       const restoreLibraryValue = await saveSettings();
       assert.equal(restoreLibraryValue.workflow.suggestionLimitMessage, librarySnapshot.value);
     } else {
-      await override.uncheck();
+      await useSystemValue(page, override);
       const resetLibraryOverride = await saveSettings();
       assert.equal(resetLibraryOverride.workflow.suggestionLimitMessage, null,
         'Restoring an initially inherited message removes only the temporary Library override.');
@@ -2036,17 +2050,14 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
       'The Library message and Override ownership are restored after the insertion round trip.');
 
     await trackInputEvents();
-    if (!await override.isChecked()) await override.check();
+    assert.equal(await message.isEditable(), true);
     await message.fill('Library override draft for stale picker');
     await message.evaluate(node => node.setSelectionRange(8, 20));
     await trigger.focus();
     await trigger.press('Enter');
     await option.waitFor({ state: 'visible' });
-    await override.evaluate(node => {
-      node.checked = false;
-      node.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    assert.equal(await trigger.isDisabled(), true, 'The inherited Library editor disables its picker.');
+    await useSystemValue(page, override);
+    assert.equal(await trigger.isDisabled(), false, 'The inherited Library editor keeps its picker editable.');
     const overrideDraft = await message.inputValue();
     const inputEventsBeforeOverrideClick = await message.evaluate(node => window.__suggestionLimitInputTypes.length);
     await retainedOption.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
@@ -2058,7 +2069,7 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
       'The Library message and Override ownership are restored after the stale-value check.');
 
     await trackInputEvents();
-    if (!await override.isChecked()) await override.check();
+    assert.equal(await message.isEditable(), true);
     await message.fill('Library scope draft before switch');
     await message.evaluate(node => node.setSelectionRange(0, 7));
     await trigger.focus();
@@ -2102,10 +2113,10 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
     await switchScope('2');
     const currentLibrary = await readEditor();
     if (librarySnapshot.overridden) {
-      if (!currentLibrary.overridden) await override.check();
-      if (currentLibrary.value !== librarySnapshot.value) await message.fill(librarySnapshot.value);
+      if (!currentLibrary.overridden) { const value = await message.inputValue(); await message.fill(value + ' draft'); }
+      if (await message.inputValue() !== librarySnapshot.value) await message.fill(librarySnapshot.value);
     } else if (currentLibrary.overridden) {
-      await override.uncheck();
+      await useSystemValue(page, override);
     }
     if (await page.locator('#settings-save').isEnabled()) {
       const payload = await saveSettings();
@@ -2706,9 +2717,9 @@ async function main() {
     assert.equal(await rejectionTemplateInput.isDisabled(), true);
     assert.equal(await rejectionTemplateInput.inputValue(), testTemplateId);
     const emailOffTimeoutPayload = await saveSettings();
-    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutEnabled, true);
+    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutEnabled, undefined, 'The unchanged main flag is preserved by omission.');
     assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutSendEmail, false);
-    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, testTemplateId,
+    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, undefined,
       'Saving with only the email option off retains the nonblank template choice.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('system');
@@ -2745,16 +2756,16 @@ async function main() {
     const disabledTimeoutPayload = await saveSettings();
     for (const [key, expected] of Object.entries({
       outstandingTimeoutEnabled: false,
-      outstandingTimeoutDays: 43,
+      outstandingTimeoutDays: undefined,
       outstandingTimeoutSendEmail: true,
-      outstandingTimeoutRejectionTemplateId: testTemplateId || null,
+      outstandingTimeoutRejectionTemplateId: undefined,
       holdPickupTimeoutEnabled: false,
-      holdPickupTimeoutDays: 9,
+      holdPickupTimeoutDays: undefined,
       pendingHoldTimeoutEnabled: false,
-      pendingHoldTimeoutDays: 17,
+      pendingHoldTimeoutDays: undefined,
       additionalCopyTimeoutEnabled: false,
-      additionalCopyTimeoutDays: 24
-    })) assert.equal(disabledTimeoutPayload.workflow[key], expected, `${key} remains in the save payload while disabled.`);
+      additionalCopyTimeoutDays: undefined
+    })) assert.equal(disabledTimeoutPayload.workflow[key], expected, `${key} is changed explicitly or preserved by omission while disabled.`);
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('system');
     await page.locator('#settings-nav-workflow').click();
@@ -2855,8 +2866,7 @@ async function main() {
       .map(rule => ({ materialFormatId: rule.materialFormatId, staffUserId: rule.staffUserId }));
 
     await page.locator('#settings-nav-patron').click();
-    const initialLoginNoteToggle = page.locator('[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle');
-    if (!await initialLoginNoteToggle.isChecked()) await initialLoginNoteToggle.check();
+    assert.equal(await page.locator('#patron-login-note').isEditable(), true);
     await page.locator('#patron-login-note').fill('Initial unrelated library scalar edit');
     const initialScalarPayload = await saveSettings();
     assert.equal(initialScalarPayload.patron.loginNote, 'Initial unrelated library scalar edit');
@@ -2879,11 +2889,15 @@ async function main() {
       'An unrelated scalar save and authoritative reload must preserve every original active auto-claim rule.');
     report.libraryInitialScalarSavePreservedAutoClaimRules = true;
 
+    // Complete this presentation probe before creating the unrelated code and
+    // auto-claim drafts: Library edits now deliberately retain pin/reset intent.
+    await page.locator('#settings-nav-patron').click();
+    await verifyFormatRuleDraftNames(page);
+
     await page.locator('#settings-nav-workflow').click();
     await page.waitForFunction(() => document.getElementById('settings-scope')?.value === '2');
 
-    const useSystemCodes = page.locator('#patron-codes-use-system');
-    if (await useSystemCodes.isChecked()) await useSystemCodes.uncheck();
+    assert.equal(await codePicker.isEnabled(), true);
     const libraryCodeRows = page.locator('#patron-codes-editor [data-code-id]');
     assert.deepEqual(await libraryCodeRows.evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2'],
       'The library override must begin with numeric IDs 1 and 2.');
@@ -2893,7 +2907,6 @@ async function main() {
 
     await page.locator('#settings-nav-patron').click();
     const autoClaimEditor = page.locator('#format-claim-rules-editor');
-    await verifyFormatRuleDraftNames(page);
     const existingAutoClaimRules = await autoClaimEditor.locator('[data-domain-row]').evaluateAll(rows => rows.map(row => {
       const selects = row.querySelectorAll('select');
       return { materialFormatId: selects[0]?.value || '', staffUserId: selects[1]?.value || '' };
@@ -2976,7 +2989,7 @@ async function main() {
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
-    assert.equal(await page.locator('#patron-codes-use-system').isChecked(), false);
+    assert.equal(!await librarySetting(page.locator('#patron-codes-inherit-field')), false);
     assert.deepEqual(await page.locator('#patron-codes-editor [data-code-id]')
       .evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2', '3']);
     await page.locator('#settings-nav-patron').click();
@@ -3009,7 +3022,6 @@ async function main() {
     assert.equal(await addedRule.locator('[data-custom-rule-property="labelOverride"]').inputValue(), 'Browser choice');
 
     await page.locator('#settings-nav-patron').click();
-    await page.locator('[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle').check();
     await page.locator('#patron-login-note').fill('Unrelated library setting edit');
     const unrelatedLibraryPayload = await saveSettings();
     assert.equal(unrelatedLibraryPayload.patron.loginNote, 'Unrelated library setting edit',
@@ -3048,43 +3060,48 @@ async function main() {
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
-    assert.equal(await page.locator('#patron-codes-use-system').isChecked(), false,
+    assert.equal(!await librarySetting(page.locator('#patron-codes-inherit-field')), false,
       'An empty replacement set must remain a library override.');
     assert.equal(await page.locator('#patron-codes-editor [data-code-id]').count(), 0,
       'An empty replacement set must round-trip as an empty editor.');
     report.libraryEmptyPatronCodeReplacementRoundTrip = true;
 
-    await page.locator('#patron-codes-use-system').check();
+    await useSystemValue(page, page.locator('#patron-codes-inherit-field'), true);
     const resetLibraryCodesPayload = await saveSettings();
     assert.equal(resetLibraryCodesPayload.workflow.allowedPatronCodeIds, null,
       'Use system must send an explicit reset, not an empty replacement.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
-    assert.equal(await page.locator('#patron-codes-use-system').isChecked(), true);
+    assert.equal(!await librarySetting(page.locator('#patron-codes-inherit-field')), true);
     assert.deepEqual(await page.locator('#patron-codes-editor [data-code-id]')
       .evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2', '3']);
     report.libraryPatronCodeResetRoundTrip = true;
 
     const libraryTimeoutSnapshot = await page.evaluate(definitions => Object.fromEntries(definitions.map(({ key, id, kind }) => {
       const control = document.getElementById(id);
-      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
-      return [key, { overridden: override?.checked === true, value: kind === 'checkbox' ? control.checked : control.value }];
+      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-inheritance-status');
+      return [key, { overridden: override?.textContent.startsWith('Library setting') === true, value: kind === 'checkbox' ? control.checked : control.value }];
     })), timeoutFieldDefinitions);
     const libraryTimeoutOverride = key => page.locator(
-      `[data-setting-section="workflow"][data-setting-key="${key}"] .settings-override-toggle`);
+      `[data-setting-section="workflow"][data-setting-key="${key}"]`);
     const libraryTimeoutControl = key => page.locator(`#${timeoutFieldDefinitions.find(field => field.key === key).id}`);
     const setLibraryTimeoutOverride = async (key, checked) => {
-      const toggle = libraryTimeoutOverride(key);
-      if (await toggle.isChecked() !== checked) await toggle.setChecked(checked);
+      if (!checked) await useSystemValue(page, libraryTimeoutOverride(key));
     };
     const setLibraryTimeoutValue = async (key, value) => {
       const definition = timeoutFieldDefinitions.find(field => field.key === key);
       const control = libraryTimeoutControl(key);
       const normalized = value ?? '';
-      if (definition.kind === 'checkbox') await control.setChecked(Boolean(normalized));
-      else if (definition.kind === 'select') await control.selectOption(String(normalized));
-      else await control.fill(String(normalized));
+      if (definition.kind === 'checkbox') { if (await control.isChecked() === Boolean(normalized)) await control.setChecked(!Boolean(normalized)); await control.setChecked(Boolean(normalized)); }
+      else if (definition.kind === 'select') {
+        if (await control.inputValue() === String(normalized)) {
+          const alternate = await control.locator('option').evaluateAll((options, desired) => options.find(option => option.value !== desired)?.value, String(normalized));
+          if (alternate !== undefined) await control.selectOption(alternate);
+        }
+        await control.selectOption(String(normalized));
+      }
+      else { if (await control.inputValue() === String(normalized)) await control.fill(String(Number(normalized) + 1)); await control.fill(String(normalized)); }
     };
     assert.equal(await page.getByRole('group', { name: 'Auto-reject unreviewed suggestions' }).count(), 1);
     assert.equal(await page.getByRole('group', { name: 'Send auto-rejection email' }).count(), 1);
@@ -3100,12 +3117,12 @@ async function main() {
     await setLibraryTimeoutOverride('holdPickupTimeoutEnabled', false);
     await setLibraryTimeoutOverride('holdPickupTimeoutDays', false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), false);
-    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), true,
+    assert.equal(await librarySetting(libraryTimeoutOverride('outstandingTimeoutEnabled')), true,
       'The test begins from an explicit false Library override over a true System parent.');
     assert.equal(await libraryTimeoutControl('holdPickupTimeoutEnabled').isChecked(), true);
-    assert.equal(await libraryTimeoutOverride('holdPickupTimeoutDays').isChecked(), false);
-    assert.equal(await libraryTimeoutControl('holdPickupTimeoutDays').isDisabled(), true,
-      'An inherited true parent cannot unlock a dependent without its own Library override.');
+    assert.equal(await librarySetting(libraryTimeoutOverride('holdPickupTimeoutDays')), false);
+    assert.equal(await libraryTimeoutControl('holdPickupTimeoutDays').isDisabled(), false,
+      'An inherited true parent enables a directly editable dependent.');
     const explicitLibraryTimeoutPayload = await saveSettings();
     assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutEnabled, false);
     assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutDays, 47);
@@ -3118,35 +3135,35 @@ async function main() {
     assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isChecked(), true);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
 
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    await useSystemValue(page, libraryTimeoutOverride('outstandingTimeoutEnabled'));
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true,
       'Removing the explicit false override displays the inherited true System parent.');
-    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
     assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
+    await libraryTimeoutControl('outstandingTimeoutEnabled').uncheck();
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), false,
-      'Re-enabling Override restores the saved Library draft value.');
+      'A direct false edit prepares a Library draft.');
     assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    await useSystemValue(page, libraryTimeoutOverride('outstandingTimeoutEnabled'));
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
     const resetLibraryTimeoutPayload = await saveSettings();
     assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutEnabled, null,
       'The explicit false parent reset is saved as inheritance.');
-    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutDays, 47,
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutDays, undefined,
       'Resetting the parent keeps the independently owned days override.');
-    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutSendEmail, true);
-    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, testTemplateId,
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutSendEmail, undefined);
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, undefined,
       'Resetting the parent keeps the independently owned nonblank template choice.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
-    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), false);
+    assert.equal(await librarySetting(libraryTimeoutOverride('outstandingTimeoutEnabled')), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
-    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
     assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isChecked(), true);
@@ -3154,21 +3171,22 @@ async function main() {
     assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').isDisabled(), false);
 
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
     await libraryTimeoutControl('outstandingTimeoutEnabled').uncheck();
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    await useSystemValue(page, libraryTimeoutOverride('outstandingTimeoutEnabled'));
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
-    await page.locator('#settings-scope').selectOption('system');
+    await decideConfirmation(page, () => page.locator('#settings-scope').selectOption('system'), dialog => dialog.dismiss());
+    assert.equal(await page.locator('#settings-scope').inputValue(), '2', 'Cancelling departure preserves the pending reset owner.');
+    assert.match(await libraryTimeoutOverride('outstandingTimeoutEnabled').textContent(), /Using system value.*Unsaved/);
+    await decideConfirmation(page, () => page.locator('#settings-scope').selectOption('system'), dialog => dialog.accept());
     await waitForSettingsReady('system');
     await page.locator('#settings-scope').selectOption('2');
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
-    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), false);
+    assert.equal(await librarySetting(libraryTimeoutOverride('outstandingTimeoutEnabled')), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true,
       'Scope population retires the previous unsaved timeout override draft.');
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    await useSystemValue(page, libraryTimeoutOverride('outstandingTimeoutEnabled'));
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
     await page.setViewportSize({ width: 1280, height: 900 });
     await scan(page, axeSource, args.artifactRoot, report, 'library-desktop', true);
@@ -3207,8 +3225,8 @@ async function main() {
     await page.locator('#settings-nav-workflow').click();
     const libraryTimeoutAfterRestore = await page.evaluate(definitions => Object.fromEntries(definitions.map(({ key, id, kind }) => {
       const control = document.getElementById(id);
-      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
-      return [key, { overridden: override?.checked === true, value: kind === 'checkbox' ? control.checked : control.value }];
+      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-inheritance-status');
+      return [key, { overridden: override?.textContent.startsWith('Library setting') === true, value: kind === 'checkbox' ? control.checked : control.value }];
     })), timeoutFieldDefinitions);
     for (const { key } of timeoutFieldDefinitions) {
       assert.equal(libraryTimeoutAfterRestore[key].overridden, libraryTimeoutSnapshot[key].overridden,

@@ -160,17 +160,17 @@ const { JSDOM } = require('jsdom');
       'Removing a different row must preserve existing override identity and field intent.');
     lineage = document.querySelector('#email-templates-editor [data-template-kind="lineage"]');
 
-    lineage.querySelector('.settings-template-override').checked = false;
-    lineage.querySelector('.settings-template-override').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    lineage.querySelector('[data-template-item-status] .settings-use-system').click();
     assert.strictEqual(lineage.querySelector('.template-body').value, systemTemplate.body);
     assert.strictEqual(lineage.querySelector('.settings-template-preview-body').textContent, systemTemplate.body);
-    assert.strictEqual(lineage.querySelector('.template-placeholder-trigger').disabled, true);
+    assert.strictEqual(lineage.querySelector('.template-placeholder-trigger').disabled, false);
     const reset = editors.collect();
     assert.ok(reset.templates.some(item => item.reset && item.sourceTemplateId === systemTemplate.id));
     assert.strictEqual(reset.templates.find(item => item.reset).sourceTemplateId, systemTemplate.id);
-    lineage.querySelector('.settings-template-override').checked = true;
-    lineage.querySelector('.settings-template-override').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
-    assert.strictEqual(lineage.querySelector('.template-body').value, 'Library body', 'Returning to Override restores the local draft.');
+    editors.populate(data, false);
+    lineage = document.querySelector('#email-templates-editor [data-template-kind="lineage"]');
+    lineage.querySelector('[data-template-toggle]').click();
+    assert.strictEqual(lineage.querySelector('.template-body').value, 'Library body', 'Discard restores the accepted Library content.');
     lineage.querySelector('.template-body').value = '';
     lineage.querySelector('.template-body').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
     assert.strictEqual(lineage.querySelector('.settings-template-preview-body').textContent, systemTemplate.body,
@@ -181,8 +181,8 @@ const { JSDOM } = require('jsdom');
     const templateOrder = () => [...document.querySelectorAll('#email-templates-editor [data-domain-row]')]
       .map(row => row.dataset.templateUiId);
     const assertInheritedActions = () => {
-      assert.strictEqual(inherited.querySelector('.settings-template-override').checked, false);
-      assert.strictEqual(inherited.querySelector('.template-subject').disabled, true);
+      assert.strictEqual(inherited.querySelector('.settings-template-override'), null);
+      assert.strictEqual(inherited.querySelector('.template-subject').disabled, false);
       assert.strictEqual(inherited.querySelector('[aria-label="Move up"]').disabled, true);
       assert.strictEqual(inherited.querySelector('[aria-label="Move down"]').disabled, true);
       const before = templateOrder();
@@ -327,7 +327,7 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(systemEditors.snapshot(), beforeBlocked);
     assert.strictEqual(systemEditors.collect().domainsChanged.templates, false);
     for (const row of document.querySelectorAll('[data-template-kind="lineage"]')) {
-      assert.strictEqual(row.querySelector('.settings-template-override').checked, false);
+      assert.strictEqual(row.querySelector('.settings-template-override'), null);
       assert.strictEqual(row.querySelector('[aria-label="Move up"]').disabled, true);
       assert.strictEqual(row.querySelector('[aria-label="Move down"]').disabled, true);
     }

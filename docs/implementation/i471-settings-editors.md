@@ -176,6 +176,60 @@ Profile's Weekly summary email override is a per-account preference managed by
 an intentional non-inheritance control, like library-owned custom-field label
 rules, genuine feature switches and global staff records.
 
+### #463 implementation ownership reconciliation
+
+The initial inventory was rechecked against the live issue, current markup,
+controllers/tools, raw Administration snapshots/writers and patron runtime.
+No additional System/library inheritance mechanism was found. The resulting
+editors use explicit draft intent; no hidden checkbox stores inheritance.
+
+- Workflow, Patron, duplicated sender and branding-alt scalars are directly
+  editable. Presence comes from accepted raw columns. Only actual edits or
+  explicit resets are submitted; population, focus and tool opening are clean.
+  Timeout and Common creator feature dependencies still control their dependents.
+- Built-in Subject/Body and inherited additional-template content retain their
+  independent nullable fallback, source identity and raw/native-newline baseline.
+  Each supported field has status/reset; additional lineage also has an item
+  reset. Placeholder insertion uses the same edit path and resets retire picker
+  targets. Custom templates remain owned records.
+- Publication options, Common creators and patron codes have one status/reset
+  per whole list/set. Direct add/edit/move/delete prepares that group's override,
+  including explicit empty sets. Reset confirmation explains replacement of
+  library choices and preservation of historical request selections.
+- Providers retain item and nullable-column ownership. Shared material formats
+  expose label/visibility and item resets; built-in format-rule properties expose
+  column resets. The two format editors share one intent map and item reset,
+  while library custom-field rules remain separate owned data. Owned formats,
+  fields/options, templates and auto-claims receive no inheritance affordance.
+- Per-account Profile weekly-summary preferences, custom-rule patron-facing
+  `labelOverride`, actual feature switches, global Staff records and System-only
+  controls retain their distinct contracts. Library payloads omit System-only
+  configuration and comparisons never include credentials.
+
+The existing provider/format contract accepts a narrow `pinOverrides: true`
+intent with supplied columns. It distinguishes a real equal-value pin from an
+unchanged effective echo; null remains an explicit column reset. Frontend writes
+are sparse in both scopes, preserving untouched accepted nulls, blanks,
+whitespace, false and zero under their owning contracts. No schema, setting or
+scope model was added. Safe `systemValues` in the existing GET supplies actual
+runtime defaults when raw System scalar columns are null; current Library
+effective values are never used as the System comparison.
+
+Ownership intent participates in dirty/load/confirmation snapshots and draft
+stamps, including equal-display resets and logo admission. Reset previews remain
+unsaved until Global Save succeeds; existing failed/conflicted/uncertain outcome
+and explicit follow-up refresh ownership are retained. Global Discard replaces
+the whole accepted snapshot. The separately confirmed Global Reset is unchanged.
+
+Initial focused evidence (before independent Pass 1): Release builds are clean;
+the retained Settings frontend selection and new ownership matrix pass. Three
+discovered native cases pass: equal-pin/nullable-blank/future-System SQL matrix,
+production metadata GET/editor/POST, and the populated historical identity and
+uncertain-save recovery witness. Expanded qualification and final receipts are
+recorded after the current focused runs; initial failed receipts are retained
+under the external `463-*` evidence paths. Human visual/screen-reader acceptance
+is not claimed by automated axe, geometry or browser screenshots.
+
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
 Complex implementation uses Sol MAX; focused implementation and Pass 1 use

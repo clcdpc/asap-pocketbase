@@ -107,10 +107,11 @@ async function until(check) {
     assert.deepEqual(selected(), ['2']);
     remove('2');
     assert.deepEqual((await save()).workflow.allowedPatronCodeIds, []);
-    assert.equal(document.getElementById('patron-codes-use-system').checked, false);
-    document.getElementById('patron-codes-use-system').click();
+    assert.match(document.getElementById('patron-codes-inherit-field').textContent, /Library setting/);
+    document.querySelector('#patron-codes-inherit-field .settings-use-system').click();
+    await flush();
     assert.equal((await save()).workflow.allowedPatronCodeIds, null);
-    assert.equal(document.getElementById('patron-codes-use-system').checked, true);
+    assert.match(document.getElementById('patron-codes-inherit-field').textContent, /Using system value/);
     assert.deepEqual(selected(), ['77', '2']);
     await scope('3');
     assert.deepEqual(selected(), [], 'Explicit empty IDs in another library do not inherit');
@@ -143,7 +144,7 @@ async function until(check) {
     await flush(); await flush();
     assert.equal(invalidations, 0, 'Cancelled stale retry cannot invalidate the current session');
     assert.deepEqual(selected(), ['77', '2']);
-    assert.equal(input.disabled, true, 'Late retry cannot enable inherited chips');
+    assert.equal(input.disabled, false, 'A current inherited selection is editable after lookup succeeds');
     assert.equal(controller.isDirty(), false);
     console.log('Patron-code picker controller payload, reload, discard, conflict and stale-retry checks passed');
   } finally {

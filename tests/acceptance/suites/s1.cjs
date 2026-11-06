@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { checkpoint, nativeZoom } = require('../helpers/accessibility.cjs');
 const { providerGeometry, chipGeometry, obscurePicker, pickerGeometry } = require('../helpers/workflow-settings.cjs');
-const { json } = require('../helpers/assertions.cjs');
+const { json, confirm } = require('../helpers/assertions.cjs');
 
 async function openSettings(t, scope = 'system') {
   await t.page.goto(t.origin + '/staff/?stage=settings&settingsScope=' + scope + '#settings-workflow');
@@ -39,13 +39,26 @@ async function unchanged(t, scope, before) {
   assert.deepEqual(after.stored, before.stored, 'Browser drafts preserve all stored Settings');
   assert.equal(t.mutations.length, 0);
 }
+async function discard(t) {
+  if (!await t.page.locator('#settings-save').isEnabled()) return;
+  const decision = confirm(t.page, 'Discard changes'); await t.page.locator('#settings-discard').click(); await decision;
+  await t.page.waitForFunction(() => document.querySelector('#settings-save-title').textContent === 'No changes' && !document.querySelector('#settings-form').inert);
+}
+async function resetCodes(t) {
+  const decision = confirm(t.page, 'Use system value'); await t.page.locator('#patron-codes-inherit-field .settings-use-system').click(); await decision;
+}
 async function providerKeyboard(page) {
   const row = page.locator('.settings-provider-row').first();
   await row.getByLabel('URL template', { exact: true }).focus();
   await page.keyboard.press('Tab');
   assert.equal(await row.getByLabel('Enabled', { exact: true }).evaluate(node => node === document.activeElement), true);
   await page.keyboard.press('Space'); await page.keyboard.press('Space');
-  if (await row.locator('.settings-domain-override-toggle').count()) await page.keyboard.press('Tab');
+  if (await page.locator('#settings-scope').inputValue() !== 'system') {
+    const reset = row.locator('[data-provider-status="isEnabled"] .settings-use-system');
+    await reset.focus();
+    assert.equal(await reset.evaluate(node => node === document.activeElement && getComputedStyle(node).outlineStyle !== 'none'), true);
+    return;
+  }
   for (const name of ['Move down', 'Delete']) {
     await page.keyboard.press('Tab');
     assert.equal(await row.getByRole('button', { name, exact: true }).evaluate(node => {
@@ -62,8 +75,7 @@ async function pickerLayout(t, scope, name) {
   const originalMessage = await message.inputValue();
   // Use ordinary local drafts, never a Settings POST, to activate the footer in
   // both scopes. Native zoom alone did not make the old system scenario dirty.
-  if (scope === '2') await t.page.locator('#patron-codes-use-system').uncheck();
-  else await message.fill(originalMessage + ' Unsaved picker layout draft');
+  await message.fill(originalMessage + ' Unsaved picker layout draft');
   assert.equal(await t.page.locator('#settings-save').isEnabled(), true);
   await obscurePicker(t.page);
   await input.focus();
@@ -96,8 +108,8 @@ async function pickerLayout(t, scope, name) {
   assert.equal(await input.inputValue(), '');
   assert.equal((await pickerGeometry(t.page, { open: false })).scrollY, choosing.scrollY, 'Selection preserves focus and page position');
   await t.page.getByRole('button', { name: 'Remove Branch use card (17)', exact: true }).click();
-  if (scope === '2') await t.page.locator('#patron-codes-use-system').check();
-  else await message.fill(originalMessage);
+  await message.fill(originalMessage);
+  if (scope === '2') await discard(t);
   assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Layout drafts return to baseline');
 }
 
@@ -138,25 +150,26 @@ const scenarios = [
       assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Returning to the original IDs clears the draft');
       await unchanged(t, 'system', before);
     } },
-  { id: 's1-inheritance-draft', requirements: ['#392: inherited chips disabled, explicit empty library draft, reset to system and restored override draft'], writes: false,
+  { id: 's1-inheritance-draft', requirements: ['#392/#463: directly editable inherited chips, explicit empty library draft, pending reset and Discard'], writes: false,
     run: async t => {
       await openSettings(t, '2');
       const before = await json(t.context, t.origin, '/api/asap/staff/settings?orgId=2');
-      const inherit = t.page.locator('#patron-codes-use-system');
-      assert.equal(await inherit.isChecked(), true);
-      assert.equal(await picker(t.page).isDisabled(), true);
-      assert.equal(await t.page.locator('#patron-codes-editor button:enabled').count(), 0);
+      const inherit = t.page.locator('#patron-codes-inherit-field');
+      assert.match(await inherit.innerText(), /Using system value/);
+      assert.equal(await picker(t.page).isDisabled(), false);
+      assert.equal(await t.page.locator('#patron-codes-editor button:enabled').count(), 2);
       assert.deepEqual(await selected(t.page), ['1', '77']);
       await evidence(t, t.id + '-inherited', '#patron-code-eligibility');
-      await inherit.uncheck();
       while (await t.page.locator('#patron-codes-editor button').count()) await t.page.locator('#patron-codes-editor button').first().click();
       assert.equal(await t.page.locator('#patron-code-count').innerText(), '0 patron codes selected.');
-      assert.equal(await inherit.isChecked(), false);
+      assert.match(await inherit.innerText(), /Library setting/);
       assert.equal(await picker(t.page).evaluate(n => n === document.activeElement), true);
-      await inherit.check();
+      await resetCodes(t);
       assert.deepEqual(await selected(t.page), ['1', '77']);
-      await inherit.uncheck();
-      assert.deepEqual(await selected(t.page), [], 'Empty library draft survives an inheritance toggle');
+      assert.match(await inherit.innerText(), /Using system value.*Unsaved/);
+      await discard(t);
+      while (await t.page.locator('#patron-codes-editor button').count()) await t.page.locator('#patron-codes-editor button').first().click();
+      assert.deepEqual(await selected(t.page), [], 'Direct deletion prepares an explicit empty Library set after Discard');
       await addCode(t.page, '17');
       assert.equal(await t.page.locator('#patron-code-count').innerText(), '1 patron code selected.');
       await unchanged(t, '2', before);
@@ -225,12 +238,11 @@ const scenarios = [
         assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Layout creates no draft');
         if (width === 1440) assert.ok(geometry.providers.paneWidth >= (scope === 'system' ? 720 : 820), 'Wide pane exercises single-row layout');
         if (scope === '2') {
-          const override = t.page.locator('.settings-provider-row .settings-domain-override-toggle').first();
-          await override.check();
+          assert.equal(await t.page.locator('.settings-provider-row input[type="url"]').first().isEditable(), true);
           assert.equal(await t.page.locator('.settings-provider-row input[type="url"]').first().isEnabled(), true);
           await evidence(t, t.id + '-' + width + '-override');
           await providerKeyboard(t.page);
-          await override.uncheck();
+          await discard(t);
         } else await providerKeyboard(t.page);
         assert.equal(await t.page.locator('#settings-save').isDisabled(), true, 'Keyboard review returns provider values to baseline');
         await pickerLayout(t, scope, t.id + '-' + width + '-picker');
@@ -242,10 +254,9 @@ const scenarios = [
         await t.page.locator('#external-search-provider-help').evaluate(node => node.scrollIntoView({ block: 'start' }));
         const geometry = await evidence(t, t.id + '-native-200-providers');
         assert.equal(geometry.metrics.visualViewport.zoom, 2);
-        const override = t.page.locator('.settings-provider-row .settings-domain-override-toggle').first();
-        if (scope === '2') await override.check();
+        assert.equal(await t.page.locator('.settings-provider-row input[type="url"]').first().isEditable(), true);
         await providerKeyboard(t.page);
-        if (scope === '2') await override.uncheck();
+        if (scope === '2') await discard(t);
       } // Zoom is per-tab; the runner closes this page after the scenario.
       await unchanged(t, scope, before);
     } }))

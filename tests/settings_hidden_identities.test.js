@@ -94,10 +94,12 @@ const { JSDOM } = require('jsdom');
     assert.notEqual(optionRows().at(-1).dataset.optionId, optionKey);
     assert.deepEqual(editors.collect().values.rules[0].customFields[field.key], { mode: 'required', labelOverride: 'Saved rule' });
 
-    click('publication-options-use-system');
+    root.querySelector('#publication-options-inherit-field .settings-use-system').click();
+    await Promise.resolve();
     assert.equal(editors.collect().values.publicationUseSystem, true);
     assert.equal(editors.collect().values.publication[0].id, config.publicationOptions.values[0].id);
-    click('publication-options-use-system');
+    root.querySelector('#add-publication-option').click();
+    assert.equal(editors.collect().values.publicationUseSystem, false);
     assert.equal(editors.collect().values.publication[0].id, config.publicationOptions.values[0].id);
     editors.populate(data, false); // Global Discard/reload uses the accepted snapshot.
     assert.equal(editors.collect().changed, false);

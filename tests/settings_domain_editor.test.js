@@ -116,22 +116,22 @@ const axe = require('axe-core');
     const rule = document.querySelector('#format-rules-editor [data-rule-code="book"]');
     const behavior = rule.querySelector('[data-rule-property="messageBehavior"]');
     const message = rule.querySelector('[data-rule-property="message"]');
-    assert.strictEqual(message.closest('label').hidden, true);
+    assert.strictEqual(message.closest('.settings-inheritance-field').hidden, true);
     assert.strictEqual(message.disabled, true);
     assert.strictEqual(message.required, false);
     behavior.value = 'message';
     behavior.dispatchEvent(new window.Event('change', { bubbles: true }));
-    assert.strictEqual(message.closest('label').hidden, false);
+    assert.strictEqual(message.closest('.settings-inheritance-field').hidden, false);
     assert.strictEqual(message.disabled, false);
     message.value = 'Draft & é retained';
     behavior.value = 'none';
     behavior.dispatchEvent(new window.Event('change', { bubbles: true }));
-    assert.strictEqual(message.closest('label').hidden, true);
+    assert.strictEqual((message.closest('.settings-inheritance-field') || message.closest('label')).hidden, true);
     assert.strictEqual(editors.collect().values.rules.find(item => item.code === 'book').message, 'Draft & é retained');
     behavior.value = 'ebookMessage';
     behavior.dispatchEvent(new window.Event('change', { bubbles: true }));
     assert.strictEqual(message.value, 'Draft & é retained');
-    assert.strictEqual(message.closest('label').hidden, false);
+    assert.strictEqual((message.closest('.settings-inheritance-field') || message.closest('label')).hidden, false);
     // Restore the fixture draft before the existing persistence assertions.
     behavior.value = 'none';
     behavior.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -139,21 +139,18 @@ const axe = require('axe-core');
 
     assert.strictEqual(root.querySelectorAll('textarea[data-settings-json]').length, 0);
     assert.strictEqual(root.querySelector('[data-setting-key="postmarkToken"]').dataset.systemOnly, 'true');
-    assert.strictEqual(document.getElementById('publication-options-use-system').checked, false);
+    assert.match(document.getElementById('publication-options-inherit-field').textContent, /Library setting/);
     assert.strictEqual(document.querySelectorAll('#publication-options-editor [data-domain-row]').length, 2);
     assert.strictEqual(document.getElementById('add-publication-option').disabled, false);
     assert.strictEqual(document.querySelector('#publication-options-editor [data-domain-editable]').disabled, false);
 
-    const publicationUseSystem = document.getElementById('publication-options-use-system');
-    publicationUseSystem.checked = true;
-    publicationUseSystem.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    document.querySelector('#publication-options-inherit-field .settings-use-system').click();
+    await Promise.resolve();
     assert.strictEqual(document.querySelector('#publication-options-editor [data-domain-row]').dataset.optionId, 'stable-a');
-    assert.strictEqual(document.getElementById('add-publication-option').disabled, true);
-    assert.strictEqual(document.querySelector('#publication-options-editor [data-domain-editable]').disabled, true);
-    assert.ok([...document.querySelectorAll('#publication-options-editor .settings-row-actions button')].every(button => button.disabled));
-
-    publicationUseSystem.checked = false;
-    publicationUseSystem.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.strictEqual(document.getElementById('add-publication-option').disabled, false);
+    assert.strictEqual(document.querySelector('#publication-options-editor [data-domain-editable]').disabled, false);
+    assert.equal(editors.collect().values.publicationUseSystem, true);
+    editors.populate(data, false); // Discard restores the accepted library list.
     assert.strictEqual(document.querySelector('#publication-options-editor [data-domain-row]').dataset.optionId, 'library-a');
     assert.strictEqual(document.getElementById('add-publication-option').disabled, false);
     assert.strictEqual(document.querySelector('#publication-options-editor [data-domain-editable]').disabled, false);
@@ -171,24 +168,19 @@ const axe = require('axe-core');
     assert.strictEqual(document.querySelectorAll('#publication-options-editor [data-domain-row]').length, 2);
 
     for (const [toggleId, editorId, addId] of [
-      ['common-creators-use-system', 'common-creators-editor', 'add-common-creator']
+      ['common-creators-inherit-field', 'common-creators-editor', 'add-common-creator']
     ]) {
       const toggle = document.getElementById(toggleId);
-      assert.strictEqual(toggle.checked, true);
-      assert.strictEqual(document.getElementById(addId).disabled, true);
-      assert.ok([...document.querySelectorAll(`#${editorId} [data-domain-editable]`)].every(control => control.disabled));
-      toggle.checked = false;
-      toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      assert.match(toggle.textContent, /Using system value/);
+      assert.equal(editors.collect().values.creatorsUseSystem, true);
       assert.strictEqual(document.getElementById(addId).disabled, false);
       assert.ok([...document.querySelectorAll(`#${editorId} [data-domain-editable]`)].some(control => !control.disabled));
     }
 
-    const codesToggle = document.getElementById('patron-codes-use-system');
-    assert.strictEqual(document.getElementById('patron-code-picker').disabled, true);
-    assert.ok([...document.querySelectorAll('#patron-codes-editor button')].every(button => button.disabled));
-    codesToggle.click();
+    assert.match(document.getElementById('patron-codes-inherit-field').textContent, /Using system value/);
+    assert.ok([...document.querySelectorAll('#patron-codes-editor button')].every(button => !button.disabled));
     assert.strictEqual(document.getElementById('patron-code-picker').disabled, false);
-    assert.ok(changes.length >= 5);
+    assert.ok(changes.length >= 3);
 
     const codeEditor = document.getElementById('patron-codes-editor');
     assert.strictEqual(codeEditor.querySelector('[data-code-id]').dataset.codeId, '2');
@@ -247,7 +239,7 @@ const axe = require('axe-core');
     editors.populate({ ...data, autoClaimStaff: [] }, false);
     document.getElementById('add-format-rule').click();
     const newRuleMessage = [...document.querySelectorAll('#format-rules-editor [data-rule-property="message"]')].at(-1);
-    assert.strictEqual(newRuleMessage.closest('label').hidden, true, 'New no-message rules use the same conditional visibility.');
+    assert.strictEqual((newRuleMessage.closest('.settings-inheritance-field') || newRuleMessage.closest('label')).hidden, true, 'New no-message rules use the same conditional visibility.');
     assert.strictEqual(newRuleMessage.disabled, true);
     editors.populate({ ...data, autoClaimStaff: [] }, false);
     document.getElementById('add-auto-claim-rule').click();
@@ -441,12 +433,10 @@ const axe = require('axe-core');
       assertActionNames('digital', 'Book');
       const formatRows = [...root.querySelectorAll('#material-formats-editor [data-domain-row]')];
       const formatLabel = index => formatRows[index].querySelector('[data-material-field="label"]');
-      if (!system) {
-        for (const row of formatRows) row.querySelector('.settings-domain-override-toggle').click();
-      }
+      assert.ok(formatRows.every(row => !row.querySelector('[data-material-field="label"]').disabled));
       const rulesBeforeRename = names.collect().values.rules;
       const originalCards = rows();
-      const controls = originalCards.map(row => [...row.querySelectorAll('input, select, textarea, button')]);
+      const controls = originalCards.map(row => [...row.querySelectorAll('input, select, textarea, button:not(.settings-use-system)')]);
       toggle('book').click();
       const focusedLabel = formatLabel(0);
       focusedLabel.focus();
@@ -470,7 +460,7 @@ const axe = require('axe-core');
       assert.strictEqual(panel('book').hidden, false);
       for (const [index, row] of rows().entries()) {
         assert.strictEqual(row, originalCards[index]);
-        assert.deepStrictEqual([...row.querySelectorAll('input, select, textarea, button')], controls[index]);
+        assert.deepStrictEqual([...row.querySelectorAll('input, select, textarea, button:not(.settings-use-system)')], controls[index]);
       }
       for (const code of ['book', 'digital', unusualCode]) {
         const label = code === unusualCode ? 'Unresolved material format' : 'Book renamed <draft>';
@@ -509,7 +499,7 @@ const axe = require('axe-core');
       names.populate(renameData, system);
       assert.strictEqual(names.collect().changed, false, 'Discard/reload restores the accepted snapshot.');
       assert.ok(rows().every(row => panel(row.dataset.ruleCode).hidden));
-      if (!system) assert.ok([...root.querySelectorAll('#material-formats-editor input[type="text"]')].every(input => input.disabled));
+      if (!system) assert.ok([...root.querySelectorAll('#material-formats-editor input[type="text"]')].every(input => !input.disabled));
       names.dispose();
     }
 
@@ -711,17 +701,17 @@ const axe = require('axe-core');
     assert.strictEqual(codeEditors.collect().changed, false);
     assert.throws(() => codeEditors.setCodeChoices([{ id: 2147483648, description: 'Invalid' }]), /invalid choices/);
     codeEditors.populate(codeData, false);
-    assert.strictEqual(picker.disabled, true);
+    assert.strictEqual(picker.disabled, false);
     assert.deepStrictEqual(selected(), ['2', '77']);
-    root.querySelector('#patron-codes-use-system').click();
     while (root.querySelector('#patron-codes-editor button')) root.querySelector('#patron-codes-editor button').click();
     assert.deepStrictEqual(selected(), []);
     assert.strictEqual(codeEditors.collect().values.codesUseSystem, false, 'An explicit empty override remains an override.');
-    root.querySelector('#patron-codes-use-system').click();
+    root.querySelector('#patron-codes-inherit-field .settings-use-system').click();
+    await Promise.resolve();
     assert.deepStrictEqual(selected(), ['2', '77']);
     assert.strictEqual(codeEditors.collect().values.codesUseSystem, true);
-    root.querySelector('#patron-codes-use-system').click();
-    assert.deepStrictEqual(selected(), [], 'Toggling inheritance restores the library draft, including an empty one.');
+    while (root.querySelector('#patron-codes-editor button')) root.querySelector('#patron-codes-editor button').click();
+    assert.deepStrictEqual(selected(), [], 'A direct deletion prepares an explicit empty library set.');
     codeEditors.populate({ ...codeData, orgId: '3', stored: { ...codeData.stored, libraryOverride: {
       ...codeData.stored.libraryOverride, allowedPatronCodeIds: { exists: true, values: [4] }
     } } }, false);
@@ -978,14 +968,14 @@ const axe = require('axe-core');
     providerData.effective.externalSearchProviders = providers;
     providerEditors.populate(providerData, false);
     assert.equal(root.querySelector('#add-provider').hidden, true);
-    assert.equal(providerRows()[0].querySelector('input[type="text"]').disabled, true);
-    providerRows()[0].querySelector('.settings-domain-override-toggle').click();
+    assert.equal(providerRows()[0].querySelector('input[type="text"]').disabled, false);
     providerRows()[0].querySelector('input[type="text"]').value = 'Library one';
+    providerRows()[0].querySelector('input[type="text"]').dispatchEvent(new window.Event('input', { bubbles: true }));
     savedProviders = providerEditors.collect().values.providers;
     assert.equal(savedProviders[0].key, 'external_search_1');
     assert.equal(savedProviders[0].overridden, true);
     assert.equal(savedProviders[0].label, 'Library one');
-    providerRows()[0].querySelector('.settings-domain-override-toggle').click();
+    providerRows()[0].querySelector(':scope > .settings-inheritance .settings-use-system').click();
     assert.equal(providerEditors.collect().values.providers[0].reset, true);
     providerEditors.dispose();
 

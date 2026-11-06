@@ -208,6 +208,10 @@ public sealed partial class AdministrationService(
 
         var effectiveDto = ToEffectiveConfiguration(effective, systemWorkflow, libraryWorkflow,
             overriddenProviderIds, formatMetadata);
+        var inherited = organizationId == LibraryScope.SystemOrganizationId
+            ? effective
+            : await patronConfiguration.GetAsync(context, LibraryScope.SystemOrganizationId, cancellationToken)
+                ?? throw new InvalidOperationException("System configuration is unavailable.");
         var result = new AdministrationResult(
             "ok",
             new
@@ -226,6 +230,16 @@ public sealed partial class AdministrationService(
                 version,
                 stored,
                 effective = effectiveDto,
+                // Safe inherited values include runtime defaults when raw System columns are null.
+                // Credentials and other System-only configuration are deliberately excluded.
+                systemValues = new
+                {
+                    workflow = ToEffectiveWorkflow(systemWorkflow, null),
+                    workflowDefaults = ToWorkflow(inherited, system: true),
+                    patron = ToEffectivePatronText(inherited),
+                    email = new { inherited.Email.FromAddress, inherited.Email.FromName },
+                    branding = new { altText = inherited.LogoAltText }
+                },
                 // These aliases preserve the shape used by the existing vanilla settings workflow.
                 workflow = ToWorkflow(effective, system: libraryWorkflow is null || organizationId == LibraryScope.SystemOrganizationId),
                 ui_text = ToEffectivePatronText(effective),

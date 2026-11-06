@@ -124,8 +124,7 @@ async function main() {
   async function overrideScalar(page, selector, value) {
     const input = page.locator(selector);
     const field = input.locator('xpath=..');
-    const override = field.locator('.settings-override-toggle');
-    if (await override.count()) await override.check();
+
     await input.fill(value);
   }
 
@@ -182,7 +181,7 @@ async function main() {
     await admin.locator('#settings-nav-patron').click();
     await admin.locator('#format-rules-editor [data-rule-code="book"] [data-rule-toggle]').click();
     await admin.locator('#format-rules-editor [data-rule-code="book"] [data-format-field="publication"]').selectOption('optional');
-    await admin.locator('#publication-options-use-system').uncheck();
+
     const publications = admin.locator('#publication-options-editor [data-domain-row]');
     // Keep inherited choices and add one library choice through the real editor.
     await admin.locator('#add-publication-option').click();
