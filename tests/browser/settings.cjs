@@ -1169,6 +1169,16 @@ async function runLibraryFormatRuleDrafts(page, args, report, ready) {
   await existing.locator('[data-rule-toggle]').click();
   await existing.locator('[data-format-label="title"]').fill('Existing title draft preserved');
   const existingControl = await existing.locator('[data-custom-rule-property="mode"]').elementHandle();
+  const historicalFormat = page.locator('#material-formats-editor [data-format-code="' + args.formatCode + '"]');
+  await historicalFormat.locator('[data-material-field="label"]').fill('Renamed historical format');
+  const historicalField = page.locator('#additional-fields-editor [data-field-key="' + savedKey + '"]');
+  await historicalField.locator('[data-custom-field="label"]').fill('Renamed historical field');
+  await historicalField.locator('[data-custom-field="enabled"]').uncheck();
+  await historicalField.locator('[data-option-id="selected-choice"] [data-option-field="label"]').fill('Renamed historical selection');
+  await historicalField.locator('[data-option-id="selected-choice"] [data-option-field="enabled"]').uncheck();
+  const sharedFormat = page.locator('#material-formats-editor [data-format-code="book"]');
+  await sharedFormat.locator('.settings-domain-override-toggle').check();
+  await sharedFormat.locator('[data-material-field="label"]').fill('Historical witness library book');
 
   await page.locator('#add-material-format').click();
   const material = page.locator('#material-formats-editor [data-domain-row]').last();
@@ -1182,8 +1192,8 @@ async function runLibraryFormatRuleDrafts(page, args, report, ready) {
   assert.equal(await addedRule.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true');
 
   await page.locator('#add-custom-field').click();
-  const definition = page.locator('#additional-fields-editor [data-domain-row]').last();
-  const generatedKey = await definition.getAttribute('data-field-key');
+  const generatedKey = await page.locator('#additional-fields-editor [data-domain-row]').last().getAttribute('data-field-key');
+  const definition = page.locator('#additional-fields-editor [data-field-key="' + generatedKey + '"]');
   assert.notEqual(generatedKey.toLowerCase(), savedKey.toLowerCase());
   await definition.locator('input[type="checkbox"]').uncheck();
   assert.equal(await addedRule.locator(`[data-custom-rule-key="${generatedKey}"] .settings-custom-rule-status`).innerText(),
@@ -1203,10 +1213,16 @@ async function runLibraryFormatRuleDrafts(page, args, report, ready) {
   await definition.locator('[data-option-field="label"]').last().fill('Same selection');
   const optionIds = await definition.locator('[data-option-row]').evaluateAll(rows => rows.map(row => row.dataset.optionId));
   assert.equal(new Set(optionIds).size, 2, 'Identical selection labels retain distinct values.');
+  await historicalField.locator('[data-row-action="down"]').click();
+  assert.equal(await historicalField.getAttribute('data-field-key'), savedKey, 'Reordering a renamed disabled definition retains its stored selection key.');
 
   await page.locator('#publication-options-use-system').uncheck();
   const publication = page.locator('#publication-options-editor [data-domain-row]');
-  const inheritedPublicationIds = await publication.evaluateAll(rows => rows.map(row => row.dataset.optionId));
+  const existingPublicationIds = await publication.evaluateAll(rows => rows.map(row => row.dataset.optionId));
+  const historicalPublication = page.locator('#publication-options-editor [data-option-id="historical-publication"]');
+  await historicalPublication.locator('[data-publication-field="label"]').fill('Renamed historical publication');
+  await historicalPublication.locator('[data-publication-field="enabled"]').uncheck();
+  await historicalPublication.locator('[data-row-action="down"]').click();
   await page.locator('#add-publication-option').click();
   const publicationKey = await publication.last().getAttribute('data-option-id');
   await publication.last().locator('[data-publication-field="label"]').fill('Draft publication timing');
@@ -1214,7 +1230,7 @@ async function runLibraryFormatRuleDrafts(page, args, report, ready) {
   await publication.last().locator('[data-row-action="up"]').press('Enter');
   assert.equal(await page.evaluate(() => document.activeElement.closest('[data-domain-row]')?.dataset.optionId), publicationKey);
   const publicationIds = await publication.evaluateAll(rows => rows.map(row => row.dataset.optionId));
-  assert.ok(inheritedPublicationIds.every(key => publicationIds.includes(key)));
+  assert.ok(existingPublicationIds.every(key => publicationIds.includes(key)));
 
   await page.locator('#settings-nav-templates').click();
   await page.locator('#add-email-template').click();
@@ -1351,6 +1367,13 @@ async function runLibraryFormatRuleDrafts(page, args, report, ready) {
   assert.equal(await page.locator('#material-formats-editor [data-format-code="' + newCode + '"]').count(), 1);
   assert.equal(await page.locator('#additional-fields-editor [data-field-key="' + newKey + '"]').count(), 1);
   assert.equal(await addedRule.locator('.settings-rule-identity strong').textContent(), 'New draft format');
+  assert.equal(saved.stored.customFields.find(field => field.key === savedKey).label, 'Renamed historical field');
+  assert.equal(saved.stored.customFields.find(field => field.key === savedKey).enabled, false);
+  assert.equal(saved.stored.customFields.find(field => field.key === savedKey).options.find(option => option.id === 'selected-choice').enabled, false);
+  assert.equal(saved.stored.libraryOverride.publicationOptions.values.find(option => option.id === 'historical-publication').label,
+    'Renamed historical publication');
+  assert.equal(saved.stored.libraryOverride.publicationOptions.values.find(option => option.id === 'historical-publication').enabled, false);
+  assert.equal(saved.effective.formats.find(format => format.code === 'book').label, 'Historical witness library book');
   report.formatRuleDrafts = { newCode, newKey, savedKey, optionIds, publicationKey, templateKey, roundTrip: true };
 }
 

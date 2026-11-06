@@ -54,7 +54,9 @@ test('format cards retain complete drafts and use the actual container width at 
       publication: { mode: 'hidden', label: 'Publication' },
       customFields: { note: { mode: 'required', labelOverride: 'Draft label' }, retired: { mode: 'required', labelOverride: 'Historical label' } } }));
     const fields = [true, false].map((enabled, index) => ({ id: String(index + 1), key: index ? 'retired' : 'note',
-      type: 'text', label: index ? 'Retired description' : 'Custom label ' + 'long'.repeat(20), enabled, options: [] }));
+      type: index ? 'text' : 'select', label: index ? 'Retired description' : 'Custom label ' + 'long'.repeat(20), enabled,
+      options: index ? [] : [{ id: 'selected-option', label: 'Selected option', enabled: true },
+        { id: 'disabled-option', label: 'Disabled option', enabled: false }] }));
     const config = { publicationOptions: { exists: true, values: [
       { id: 'published', label: 'Published', enabled: true },
       { id: 'forthcoming', label: 'Forthcoming', enabled: true },
@@ -136,6 +138,7 @@ test('format cards retain complete drafts and use the actual container width at 
     await nativeZoom(context, page, zoom);
     await page.locator('#format-rules-editor').evaluate((node, narrow) => { node.style.maxWidth = narrow ? '540px' : ''; }, narrow);
     await publication.evaluate((node, narrow) => { node.style.maxWidth = narrow ? '360px' : ''; }, narrow);
+    await page.locator('#additional-fields-editor').evaluate((node, narrow) => { node.style.maxWidth = narrow ? '360px' : ''; }, narrow);
     const geometry = await formatRuleGeometry(page, columns);
     geometry.publication = await publication.evaluate(node => {
       const bounds = element => {
@@ -169,6 +172,33 @@ test('format cards retain complete drafts and use the actual container width at 
       assert.ok(p.enabled.top >= p.label.bottom && p.actions.top >= p.enabled.bottom,
         name + ': publication wraps intentionally in a narrow container');
     }
+    geometry.customOptions = await page.locator('#additional-fields-editor [data-option-row]').evaluateAll(rows => rows.map(row => {
+      const bounds = element => {
+        const r = element.getBoundingClientRect();
+        return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+      };
+      const text = document.createRange();
+      text.selectNodeContents(row.querySelector('.settings-domain-check span'));
+      return { row: bounds(row), input: bounds(row.querySelector('[data-option-field="label"]')),
+        checkbox: bounds(row.querySelector('[data-option-field="enabled"]')),
+        enabled: bounds(row.querySelector('.settings-domain-check')), text: bounds(text),
+        remove: bounds(row.querySelector('button')), viewport: innerWidth };
+    }));
+    assert.equal(geometry.customOptions.length, 2, name + ': visible Select options are measured');
+    const fits = (inside, outside) => inside.left >= outside.left - 1 && inside.right <= outside.right + 1 &&
+      inside.top >= outside.top - 1 && inside.bottom <= outside.bottom + 1;
+    const overlaps = (left, right) => left.left < right.right - 1 && left.right > right.left + 1 &&
+      left.top < right.bottom - 1 && left.bottom > right.top + 1;
+    for (const option of geometry.customOptions) {
+      assert.equal(option.checkbox.width, 18, name + ': option Enabled checkbox retains its intended width');
+      assert.equal(option.checkbox.height, 18, name + ': option Enabled checkbox retains its intended height');
+      for (const part of [option.input, option.checkbox, option.text, option.remove]) {
+        assert.ok(part.width > 0 && part.height > 0 && fits(part, option.row) &&
+          part.left >= 0 && part.right <= option.viewport, name + ': option controls and actual Enabled text fit their row and viewport');
+      }
+      assert.ok(fits(option.text, option.enabled) && !overlaps(option.text, option.remove) &&
+        !overlaps(option.text, option.checkbox), name + ': Enabled text stays visible without overlapping checkbox or Delete');
+    }
     await page.evaluate(axe);
     assert.deepEqual(await page.evaluate(async () => (await axe.run()).violations
       .filter(item => ['serious', 'critical'].includes(item.impact)).map(item => item.id)), [], name + ': axe');
@@ -187,6 +217,9 @@ test('format cards retain complete drafts and use the actual container width at 
     try {
       const capture = await publicationCdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
       await fs.writeFile(path.join(directory, 'publication-' + name + '.png'), Buffer.from(capture.data, 'base64'));
+      await page.locator('#additional-fields-editor [data-option-row]').first().evaluate(node => node.scrollIntoView({ block: 'center' }));
+      const optionCapture = await publicationCdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      await fs.writeFile(path.join(directory, 'custom-option-' + name + '.png'), Buffer.from(optionCapture.data, 'base64'));
     } finally { await publicationCdp.detach(); }
     await first.evaluate(node => node.scrollIntoView({ block: 'start' }));
     const cdp = await context.newCDPSession(page);

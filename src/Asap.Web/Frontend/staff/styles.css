@@ -514,7 +514,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-custom-options { display: grid; gap: 7px; padding-top: 3px; }
 .settings-custom-options > strong, .settings-rule-custom-fields > strong { color: var(--ink); font-size: .84rem; }
 .settings-option-subrow { display: grid; grid-template-columns: minmax(150px, 1fr) auto 40px; align-items: center; gap: 8px; min-width: 0; }
-.settings-option-subrow input { width: 100%; min-width: 0; }
+.settings-option-subrow input[type="text"] { width: 100%; min-width: 0; }
 .settings-option-subrow > button { width: 40px; min-height: 40px; padding: 0; }
 #format-rules-editor { container-type: inline-size; }
 #format-rules-editor .settings-rule-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
