@@ -60,7 +60,7 @@ reruns and final receipt reconciliation do not add review passes.
 | --- | --- | --- | --- | --- | --- |
 | #461 Hidden identities/readable labels | `7be87eb`, `583de79`, `2990e78` | Luna MAX: 3 findings fixed | Astra HIGH + Terra MAX: clipping and history-witness gap fixed | Retained editor/collision tests; real SQL/browser save/recovery/history; desktop/mobile/native200 | Technically qualified; final integration pending |
 | #462 Add rule feedback | `423c352`, `7b2cd22` | Luna MAX: 1 test gap fixed | Luna MAX: independent browser matrix, no findings | Retained domain/browser matrix and real-SQL Add/save/reload pass | Technically qualified; final integration pending |
-| #465 Common creator rows | Pending | Pending | Pending | Pending | Pending |
+| #465 Common creator rows | `a2501ad`, `49b3951`, `8fbe412` | Luna MAX: Move down test gap fixed | Terra MAX: narrow native-200 focus reveal fixed | Five rendered sizes; owning SQL/browser 1/1 pass | Technically qualified; final integration pending |
 | #463 Direct edit/inheritance | Pending | Pending | Pending | Pending | Pending |
 | #466 Blocking draft navigation | Pending | Pending | Pending | Pending | Pending |
 
@@ -126,6 +126,55 @@ critical axe finding, page error, external request or implicit POST; mobile
 scroll width matches viewport. No tracked instrumentation. SQL save/reload was
 separate initial evidence, not claimed by this static probe. Human AT remains
 separate. Receipts: `462-*` and `462-pass2/report.md` / matrix JSON / PNGs.
+
+### #465 evidence
+
+Creator-specific rows place the flexible input and actions together where space
+permits and wrap at narrow widths. Add/move/delete retain useful focus; a
+creator-only disabled-state refresh preserves first/last restrictions under the
+existing whole-list inheritance gate. Shared publication/format/rule styles and
+the persistence contract remain intact. Initial source qualification caught the
+old boundary re-enable bug; owning fixture corrections preserved trimming,
+accepted reload waits, cleanup, temporary System seed ordering and all original
+screenshot identities (three desktop states added, 14 -> 17).
+
+Pass 1 (fresh Luna MAX) found no source/CSS defect and one gap: Move down was
+reachable but never activated. The added interior move/order/focus test and its
+restoration passed the actual SQL/browser case. Pass 2 (Terra MAX) independently
+measured desktop row height 139.09 -> 88.09px versus the prior baseline, with
+publication geometry unchanged, and executed long-list keyboard/scope/zoom
+pressure. One narrow native-200 fallback put the focused input at the viewport
+edge, hiding its label and top focus ring. Final remediation reveals only the
+creator input fallback's row within measured visual-viewport/outline/save-bar
+margins. It preserves the focus target and action order.
+
+Final source fixture passes desktop, mobile, wider native-200, new 1000x900
+native-200 (492x402 CSS pixels), and retained native-400 configurations. The new
+boundary Move-to-first and Delete-last regressions prove label/full-ring
+containment, exact row/value/order, no overflow and zero serious/critical axe.
+Fresh Release build has zero warnings/errors; owning SQL/browser case passes
+1/1 with Save/Discard and System/library round-trips. Initial failed receipts
+and independent findings remain outside Git. Final receipts:
+`465-pass2-final-source*`, `465-pass2-build.log`, `465-pass2-final-sql*`;
+independent comparison at `465-pass2/report.md`. Static/mocked visual checks do
+not claim SQL or human AT; separate actual SQL receipts support persistence.
+
+### Inventory clarifications before #463 implementation
+
+Runtime resolution in `PatronConfigurationService` confirms that provider and
+format nullable override columns use null fallback, while scalar text has its
+own blank/whitespace normalizers. Preserve accepted raw values on unchanged
+fields rather than writing back display normalization. Compare against the
+actual inherited/effective System default when raw System values are null;
+the current library effective value is not that default. Meaningful raw blanks,
+false and zero must follow their owning contract, never generic truthiness.
+Built-in format-rule properties share the format override row; a reset must
+coordinate both editors and preserve library-owned custom-field rules.
+
+Profile's Weekly summary email override is a per-account preference managed by
+`profile-controller.js`, outside System/library Settings inheritance. It remains
+an intentional non-inheritance control, like library-owned custom-field label
+rules, genuine feature switches and global staff records.
 
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
