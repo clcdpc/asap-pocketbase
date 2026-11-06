@@ -8,9 +8,9 @@ Run from this tooling checkout against an immutable application commit:
 .\scripts\review\Invoke-AsapReview.ps1 -Commit <full-application-sha> -Suite i471
 ```
 
-Its ten independent scenarios, lower-level evidence, injected empty-catalog boundary,
+Its eleven independent scenarios, lower-level evidence, injected empty-catalog boundary,
 human checks and integration instructions are mapped in [i471-evidence.md](i471-evidence.md).
-`-ReadOnly` runs only the empty-catalog scenario and reports nine required write
+`-ReadOnly` runs only the empty-catalog scenario and reports ten required write
 scenarios NOT RUN (exit 2). Normal runs need no endpoint/record/scope permissions.
 
 

@@ -100,7 +100,7 @@ async function ruleAvailability(t, scope) {
 
 async function compactRows(t, scope) {
   const before = await open(t, scope, 'workflow'), original = before.stored.configuredSystem;
-  const creators = ['First synthetic creator', 'Long synthetic creator '.repeat(8)];
+  const creators = ['First synthetic creator', 'Long synthetic creator '.repeat(8).trimEnd()];
   await post(t, scope, { workflow: { commonAuthorsEnabled: true, commonAuthorsList: creators },
     patron: { publicationOptions: [{ id: 'i471_first', label: 'First synthetic publication', enabled: true },
       { id: 'i471_long', label: 'Long synthetic publication '.repeat(7), enabled: true }] } });
@@ -203,7 +203,8 @@ const scenarios = [
     const owned = { formats: initial.stored.libraryOverride.formats, fields: initial.stored.customFields,
       templates: initial.stored.templates.filter(row => row.isCustom) };
     const raw = '  Meaningful library blank follows: \r\n  ';
-    await post(t, scope, { workflow: { suggestionLimit: inheritedLimit, commonAuthorsEnabled: false, commonAuthorsList: [], allowedPatronCodeIds: [] },
+    await post(t, scope, { workflow: { suggestionLimit: inheritedLimit, commonAuthorsEnabled: false,
+      commonAuthorsList: ['Owned synthetic creator'], allowedPatronCodeIds: [] },
       patron: { successMessage: raw, publicationOptions: [] },
       formats: [{ id: book.id, version: book.version, pinOverrides: true, sortOrder: 0, isEnabled: false, message: '' }],
       templates: [{ templateKey: 'suggestion_submitted', subject: 'Pinned subject', body: raw }] });
@@ -213,7 +214,9 @@ const scenarios = [
       const format = library.formats.find(row => row.materialFormatId === book.id);
       assert.equal(format.sortOrder, 0); assert.equal(format.isEnabled, false); assert.equal(format.message, '');
       assert.equal(library.patron.successMessage, raw);
-      for (const name of ['commonCreators', 'publicationOptions', 'allowedPatronCodeIds']) {
+      assert.equal(library.commonCreators.exists, true);
+      assert.deepEqual(library.commonCreators.values.map(row => row.value), ['Owned synthetic creator']);
+      for (const name of ['publicationOptions', 'allowedPatronCodeIds']) {
         assert.equal(library[name].exists, true); assert.deepEqual(library[name].values, []);
       }
       const limit = t.page.locator('#suggestion-limit'), field = t.page.locator('[data-setting-key="suggestionLimit"]');
@@ -251,6 +254,22 @@ const scenarios = [
         ownedIdsPreserved: true, templateBodyResetSubjectRetained: true, sql: await sql(t, scope) });
     } finally { await post(t, 'system', { workflow: { suggestionLimit: originalLimit } }); }
   } },
+  { id: 'i471-empty-creator-reset', writes: true, requirements: ['#463: a saved empty list retains visible ownership and an explicit Use system value reset'], run: async t => {
+    const scope = '47108'; await open(t, scope, 'workflow');
+    await post(t, scope, { workflow: { commonAuthorsEnabled: true, commonAuthorsList: [] } });
+    await open(t, scope, 'workflow'); const accepted = await read(t, scope);
+    assert.equal(accepted.stored.libraryOverride.commonCreators.exists, true);
+    assert.deepEqual(accepted.stored.libraryOverride.commonCreators.values, []);
+    assert.equal(await t.page.locator('#common-authors-enabled').isChecked(), true);
+    await t.page.locator('#common-creators-editor').scrollIntoViewIfNeeded();
+    await checkpoint(t.page, t.directory, t.id + '-accepted');
+    const reset = t.page.locator('#common-creators-inherit-field .settings-use-system');
+    assert.equal(await reset.count(), 1, 'Empty owned creator list exposes Use system value');
+    const writes = t.mutations.length;
+    await decideConfirmation(t.page, () => reset.press('Enter'), dialog => dialog.accept());
+    assert.equal(t.mutations.length, writes, 'Reset remains an unsaved draft until Save');
+    await save(t); assert.equal((await read(t, scope)).stored.libraryOverride.commonCreators.exists, false);
+  } },
   { id: 'i471-inheritance-interactions', writes: true, requirements: ['#463: expanded scalar/template comparisons stay open, direct tools/reset focus, mobile Cancel/Discard with no library writes'], run: async t => {
     await open(t, '47107'); const report = {};
     await verifyInheritanceInteractions(t.page, { scopeId: '47107', formatCode: 'i471' }, report,
@@ -269,9 +288,13 @@ const scenarios = [
         for (const width of [1280, 1000]) {
           await t.page.setViewportSize({ width, height: 900 }); await nativeZoom(t.context, t.page, 2);
           try {
-            await open(t, '47103', 'staff');
+            // Keep the mounted owners from the shared journey. A document
+            // reload here would invoke beforeunload for its retained drafts.
+            await t.page.locator('#settings-nav-staff').click();
             const row = t.page.locator(`.settings-staff-row[data-staff-id="${staffId}"]`);
-            await row.locator('.settings-staff-summary').click(); await row.getByLabel(/^Display name/).fill('Synthetic native draft');
+            const summary = row.locator('.settings-staff-summary');
+            if (await summary.getAttribute('aria-expanded') === 'false') await summary.click();
+            await row.getByLabel(/^Display name/).fill('Synthetic native draft');
             await row.getByLabel(/^Display name/).press('Escape'); await t.page.locator('#settings-nav-workflow').click();
             await t.page.locator('#suggestion-limit-message').fill('Synthetic native Workflow'); await t.page.locator('#settings-save').click();
             const link = t.page.locator('#settings-draft-blockers button'); await link.waitFor(); const count = t.mutations.length;
@@ -279,7 +302,7 @@ const scenarios = [
             assert.equal(await email.evaluate(node => node === document.activeElement), true); await visibleEvidence(email);
             assert.equal(t.mutations.length, count); await checkpoint(t.page, t.directory, `${t.id}-native200-${width}`, { nativeViewport: true });
             witness.native200.push({ width, exactEmailFocus: true, noNavigationWrites: true });
-            await row.getByRole('button', { name: 'Cancel', exact: true }).click();
+            await row.getByRole('button', { name: 'Cancel', exact: true }).press('Enter');
             await t.page.locator('#settings-nav-workflow').click();
             await discard(t);
           } finally { await nativeZoom(t.context, t.page, 1); }

@@ -137,11 +137,15 @@ async function runScenarios({ suite, options, environment, browser, report, dire
         failure.startedUtc = startedUtc;
         failure.finishedUtc = new Date().toISOString();
         failure.assertion = assertionDetails(error);
+        // Keep a code location for timeouts too, without exporting arbitrary
+        // exception messages, Playwright call logs, values or network state.
+        failure.source = String(error.stack || '').replaceAll('\\', '/')
+          .match(/tests\/(?:acceptance|browser)\/[a-zA-Z0-9_./-]+\.(?:cjs|js):\d+:\d+/)?.[0];
         failure.browserGuards = guards.errors.slice(failuresBefore);
         failure.diagnostics = scenario.id + '-failure-trace.json';
         report.scenarios.push(failure);
         events.push({ event: 'scenario-' + status.toLowerCase(), utc: failure.finishedUtc,
-          assertion: failure.assertion, browserGuards: failure.browserGuards });
+          assertion: failure.assertion, source: failure.source, browserGuards: failure.browserGuards });
         // Deliberately network-free step traces: native Playwright archives contain
         // Cookie/Set-Cookie/antiforgery/session responses even after sign-in.
         await fs.writeFile(path.join(directory, failure.diagnostics), JSON.stringify({ schemaVersion: 1,

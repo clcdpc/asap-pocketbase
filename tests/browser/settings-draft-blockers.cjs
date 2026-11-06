@@ -35,7 +35,7 @@ exports.verifySettingsDraftBlockers = async (page, args, report, ready, scan) =>
   const second = (await api('post', '/api/asap/staff/users', {
     email: `draft-b-${args.formatCode}@example.org`, role: 'staff', organizationId: Number(args.scopeId)
   }, 201)).user;
-  let displacedSecond = null;
+  let displacedSecond = null, completed = false;
   const moveSecond = async (organizationId, version) => api('put', `/api/asap/staff/users/${second.id}`, {
     version, email: second.userPrincipalName, displayName: second.displayName, role: second.role, organizationId
   });
@@ -289,13 +289,17 @@ exports.verifySettingsDraftBlockers = async (page, args, report, ready, scan) =>
     await (args.verifyNative200 || verifyNative200)(args, first.id, witness);
     assert.equal(witness.native200.length, 2);
     witness.noNavigationWrites = true;
+    completed = true;
   } finally {
     page.off('request', record);
     witness.writes = writes;
     if (displacedSecond) await moveSecond(Number(args.scopeId), displacedSecond.user.version);
     await post({ workflow: { suggestionLimitMessage: original.stored.libraryOverride.workflow?.suggestionLimitMessage ?? null,
       suggestionLimit: original.stored.libraryOverride.workflow?.suggestionLimit ?? null } });
-    await reload(); await page.setViewportSize({ width: 1280, height: 900 });
+    // Keep the primary failed checkpoint mounted for the executor's diagnostic
+    // capture. Reloading dirty drafts here can mask it with beforeunload.
+    if (completed) await reload();
+    await page.setViewportSize({ width: 1280, height: 900 });
   }
 };
 

@@ -5,7 +5,8 @@ BEGIN TRANSACTION;
 INSERT INTO asap.Organization (Id, DisplayName, Abbreviation, OrganizationCodeId, ParentOrganizationId, IsActive)
 SELECT Id, N'I471 synthetic ' + Name, N'I471', 2, 1, 1
 FROM (VALUES (47101, N'identities'), (47102, N'inheritance'), (47103, N'blockers'),
-             (47104, N'conflicts'), (47105, N'compact rows'), (47106, N'rules'), (47107, N'comparison tools')) f(Id, Name);
+             (47104, N'conflicts'), (47105, N'compact rows'), (47106, N'rules'), (47107, N'comparison tools'),
+             (47108, N'empty creator reset')) f(Id, Name);
 DECLARE @code nvarchar(100) = N'custom_' + CONVERT(nvarchar(10), (SELECT COUNT(*) + 2 FROM asap.MaterialFormat WHERE OwnerOrganizationId = 1));
 INSERT INTO asap.MaterialFormat (OwnerOrganizationId, Code, Label, SortOrder, IsEnabled, CreatedUtc, UpdatedUtc)
 VALUES (47101, @code, N'Saved collision format', 9870, 1, '2026-01-01', '2026-01-01');

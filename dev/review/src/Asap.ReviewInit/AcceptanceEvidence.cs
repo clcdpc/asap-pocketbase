@@ -92,7 +92,7 @@ internal static class AcceptanceEvidence
                         SELECT c.* FROM asap.FormatAutoClaimRule c WHERE c.LibraryOrganizationId = org.Id ORDER BY c.Id FOR JSON PATH, INCLUDE_NULL_VALUES), N'[]')), 2),
                     (SELECT COUNT(*) FROM asap.TitleRequest r WHERE r.LibraryOrganizationId = org.Id),
                     (SELECT COUNT(*) FROM asap.TitleRequestEvent e JOIN asap.TitleRequest r ON r.Id = e.TitleRequestId WHERE r.LibraryOrganizationId = org.Id)
-                FROM asap.Organization org WHERE org.Id BETWEEN 47101 AND 47107 ORDER BY org.Id;
+                FROM asap.Organization org WHERE org.Id BETWEEN 47101 AND 47108 ORDER BY org.Id;
                 """;
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);

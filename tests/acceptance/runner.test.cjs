@@ -18,6 +18,15 @@ test('confirmation failure is observed while its trigger is still pending', asyn
   await assert.rejects(decideConfirmation(page, () => action, () => {}), /Synthetic confirmation unavailable/);
   await action;
 });
+test('non-assertion failures retain a code location without exporting error values', async t => {
+  const root = await temporary(t), directory = path.join(root, 'timeout-source'); await fs.mkdir(directory);
+  const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios: [] };
+  await runScenarios({ suite: { scenarios: [{ id: 'timeout', requirements: ['Sanitized diagnostics'], run: async () => {
+    const error = new Error('Cookie=private-error-canary'); error.name = 'TimeoutError'; throw error;
+  } }] }, options: {}, environment: environment(root), browser: fakeBrowser(), report, directory, verify: async () => environment(root) });
+  assert.match(report.scenarios[0].source, /^tests\/acceptance\/runner.test.cjs:\d+:\d+$/);
+  assert.doesNotMatch(await fs.readFile(path.join(directory, 'timeout-failure-trace.json'), 'utf8'), /private-error-canary|Cookie=/);
+});
 const clone = value => JSON.parse(JSON.stringify(value));
 function state() {
   return { Sha: appSha, Auth: 'Local', ToolingVersion: '0.4.0', ToolingSha: toolSha };
@@ -414,15 +423,15 @@ test('D1 registers read-only coverage independently of its explicitly authorized
 test('i471 read-only selection reports every required write scenario NOT RUN without executing setup', async t => {
   const root = await temporary(t), directory = path.join(root, 'i471-read-only'); await fs.mkdir(directory);
   const suite = require('./suites/i471.cjs'), executed = [];
-  assert.equal(suite.scenarios.length, 10);
-  assert.equal(suite.scenarios.filter(row => row.writes).length, 9);
+  assert.equal(suite.scenarios.length, 11);
+  assert.equal(suite.scenarios.filter(row => row.writes).length, 10);
   const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' },
     requiredScenarioIds: suite.scenarios.map(row => row.id), scenarios: [] };
   await runScenarios({ suite: { ...suite, scenarios: suite.scenarios.map(row => ({ ...row,
     run: async () => { assert.equal(row.writes, false); executed.push(row.id); } })) }, options: { readOnly: true },
     environment: environment(root), browser: fakeBrowser(), report, directory, verify: async () => environment(root) });
   assert.deepEqual(executed, ['i471-empty-format-prerequisite']);
-  assert.equal(report.scenarios.filter(row => row.status === 'NOT RUN').length, 9);
+  assert.equal(report.scenarios.filter(row => row.status === 'NOT RUN').length, 10);
   assert.equal(exitCode(report), 2);
   assert.equal(JSON.parse(await fs.readFile(path.join(directory, 'results.json'), 'utf8')).automatedFunctionalAcceptance, 'INCOMPLETE');
 });

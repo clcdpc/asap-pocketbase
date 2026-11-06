@@ -7,7 +7,7 @@ commits. Source `src/` and `database/` are unchanged.
 
 ## Criterion to evidence
 
-The suite has **10 required scenarios**: nine write scenarios and one read-only
+The suite has **11 required scenarios**: ten write scenarios and one read-only
 empty-catalog probe. Scenario results, failed receipts and actual revisions are
 recorded by the runner, not inferred from this map. Existing tests listed here
 are complementary evidence; their presence does not claim they ran in a receipt.
@@ -45,7 +45,7 @@ origin; provider credentials/data are synthetic and Polaris is deterministic.
 Other container processes retain outbound capability. This is trusted-code
 acceptance tooling, not a hostile-code sandbox or new firewall project.
 
-I471-only SQL fixtures create seven small independent libraries. The read-only
+I471-only SQL fixtures create eight small independent libraries. The read-only
 evidence endpoint adds fixed counts and SHA-256 digests for those libraries;
 it exports no Settings document, credentials, raw history or email body. Shared
 native helpers may retain payloads in memory for assertions; the suite exports
@@ -60,7 +60,7 @@ From this tooling worktree, run against a full immutable application SHA:
 .\scripts\review\Invoke-AsapReview.ps1 -Commit 854b51270fc4f97335a82f8f3dabf24723465065 -Suite i471
 ```
 
-`-ReadOnly` runs the empty-catalog probe and reports the nine write scenarios
+`-ReadOnly` runs the empty-catalog probe and reports the ten write scenarios
 NOT RUN, so acceptance is incomplete (exit 2). No extra allow-write flag is needed.
 Each launcher invocation records application/tooling SHAs and tooling digest,
 with per-scenario JSON, screenshots and sanitized failures under
@@ -73,3 +73,15 @@ the existing full frontend/.NET/SQL/browser CI gate for final qualification;
 this branch neither changes workflow policy nor starts CI. Older receipts do
 not qualify the final combined commit. Do not merge, deploy, tag or close issues
 as part of integrating this tooling.
+
+## Product gap retained as a failing criterion
+
+`i471-empty-creator-reset` independently seeds a saved explicit empty creator list
+with Show common creators enabled. It requires the list's **Use system value**
+control and then checks a draft-only reset followed by Save. The pinned #477
+application omits that control: `renderSetRows()` returns from its empty branch
+before refreshing the group ownership controls. The SQL override exists, so
+this is distinct from inheritance and from hiding a disabled feature. Keep this
+assertion; the #477 owner must repair and qualify the application path. The
+broader inheritance journey uses a nonempty creator list so this known failure
+does not prevent the other scalar, template, set and item checks from executing.
