@@ -59,8 +59,9 @@ def write_json(path, value):
     path.write_bytes(fp.canonical(value) + b"\n")
 
 
-def artifact_name(config, suite, run, attempt):
-    return f"asap-test-evidence-v{config['schema']}-{suite}-{run}-{attempt}"
+def artifact_name(config, suite, fingerprint):
+    require(suite in fp.SUITES and re.fullmatch(r"[0-9a-f]{64}", fingerprint), "Invalid evidence lookup identity")
+    return f"asap-test-evidence-v{config['schema']}-{suite}-{fingerprint}"
 
 
 def require(condition, message):
@@ -190,29 +191,49 @@ class Validator:
         require(self.workflow["path"] == config["workflow"] and integer(self.workflow["id"]),
                 "Unexpected workflow identity")
 
-    def context(self, run):
+    def context(self, run, attempt):
         config = self.config
-        run_id, attempt = run["id"], run["run_attempt"]
-        require(integer(run_id) and integer(attempt), "Invalid run/attempt")
+        run_id, latest = run["id"], run["run_attempt"]
+        require(integer(run_id) and integer(attempt) and integer(latest)
+                and attempt <= latest <= attempt + 10, "Invalid or excessive originating attempts")
         job_name = config["job"]
-        key = run_id, attempt
+        require(run["workflow_id"] == self.workflow["id"] and run["path"] == config["workflow"],
+                "Wrong originating workflow")
+        key = run_id, attempt, latest
         if key in self.contexts:
             return self.contexts[key]
-        require(successful(run) and run["workflow_id"] == self.workflow["id"]
-                and run["path"] == config["workflow"], "Run/workflow did not complete successfully")
         for repository in (run["repository"], run["head_repository"]):
             require(repository["id"] == config["repository_id"]
                     and repository["full_name"] == config["repository"], "Wrong repository or external fork")
         require(isinstance(run.get("event"), str) and bool(run["event"]), "Missing workflow event identity")
-        require(self.now - timedelta(days=config["lifetime_days"]) <= timestamp(run["created_at"]) <= self.now,
-                "Originating run is outside the evidence lifetime")
+        # A new attempt may execute long after the run was first created. Age is
+        # enforced below against the job-bound execution time, not run creation.
+        require(timestamp(run["created_at"]) <= self.now, "Originating run has a future creation time")
         original = self.api.get(f"/actions/runs/{run_id}/attempts/{attempt}")
-        require(successful(original) and original["head_sha"] == run["head_sha"]
+        require(original["head_sha"] == run["head_sha"]
                 and original["run_attempt"] == attempt and original["id"] == run_id,
                 "Unsuccessful or mismatched originating attempt")
         jobs = list(self.api.pages(f"/actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs"))
         matching = [job for job in jobs if job["name"] == job_name]
         require(len(matching) == 1 and successful(matching[0]), "Required job was not successful")
+        gates = [job for job in jobs if job["name"] == "Build, test and package"]
+        require(len(gates) == 1 and successful(gates[0]) and gates[0]["run_id"] == run_id
+                and gates[0]["head_sha"] == run["head_sha"], "Required reporting gate was not successful")
+        # A deployment-only retry increments run_attempt without rerunning Full
+        # CI. Preserve its original qualification, but never ignore a subsequent
+        # failed executor/gate. Inspect every intervening attempt within bounds.
+        for later in range(attempt + 1, latest + 1):
+            later_jobs = list(self.api.pages(f"/actions/runs/{run_id}/attempts/{later}/jobs", "jobs"))
+            relevant = [job for job in later_jobs if job["name"] in (job_name, "Build, test and package")]
+            deployment_only = bool(later_jobs) and all(job["name"] == "Deploy exact artifact to test IIS"
+                                                     for job in later_jobs)
+            later_gates = [job for job in later_jobs if job["name"] == "Build, test and package"]
+            require(deployment_only or (len(later_gates) == 1 and successful(later_gates[0])),
+                    "Later attempt has no completed qualification or scheduled deployment-only retry")
+            require(all(job["run_id"] == run_id and job["head_sha"] == run["head_sha"] for job in later_jobs),
+                    "Later attempt job identity changed")
+            require(all(successful(job) and job["run_id"] == run_id and job["head_sha"] == run["head_sha"]
+                        for job in relevant), "A later qualification attempt did not succeed")
         job = matching[0]
         require(job["run_id"] == run_id and job["head_sha"] == run["head_sha"]
                 and job["runner_group_name"] == config["runner_group"]
@@ -225,7 +246,8 @@ class Validator:
         source = self.api.get(f"/git/commits/{commit}")
         require(source["sha"] == commit, "Wrong Git source commit")
         if run["event"] == "pull_request":
-            require(len(source["parents"]) == 2 and source["parents"][1]["sha"] == run["head_sha"],
+            require(commit == run["head_sha"] or (len(source["parents"]) == 2
+                    and source["parents"][1]["sha"] == run["head_sha"]),
                     "Synthetic merge does not match the tested PR head")
             prs = list(self.api.pages(f"/commits/{run['head_sha']}/pulls", None))
             # The commit-specific endpoint verifies historical association too: a PR
@@ -242,7 +264,7 @@ class Validator:
         require(remote["sha"] == tree and remote.get("truncated") is False, "Incomplete source tree")
         entries = [[entry["path"], entry["mode"], entry["type"], entry["sha"]]
                    for entry in remote["tree"] if entry["type"] != "tree"]
-        context = {"run": run, "job": job, "commit": commit, "tree": tree, "entries": entries}
+        context = {"run": run, "attempt": attempt, "job": job, "commit": commit, "tree": tree, "entries": entries}
         self.contexts[key] = context
         return context
 
@@ -267,8 +289,7 @@ class Validator:
     def validate(self, run, artifact, suite):
         config, current = self.config, self.current["suites"][suite]
         require(not current["unavailable"], "Current environment identity is unavailable")
-        context = self.context(run)
-        require(integer(artifact["id"]) and artifact["name"] == artifact_name(config, suite, run["id"], run["run_attempt"])
+        require(integer(artifact["id"]) and artifact["name"] == artifact_name(config, suite, current["fingerprint"])
                 and artifact["expired"] is False and timestamp(artifact["expires_at"]) > self.now,
                 "Artifact is missing, expired or from another attempt")
         origin = artifact["workflow_run"]
@@ -291,9 +312,13 @@ class Validator:
         require(manifest["schema"] == config["schema"] and manifest["kind"] == "executed"
                 and manifest["outcome"] == "passed" and manifest["suite"] == suite,
                 "Wrong schema/suite or reused-only evidence")
+        # Reject a different input key before fetching potentially large job logs
+        # and Git trees. This is only a filter; every HIT still proves provenance.
+        require(manifest["fingerprint"] == current["fingerprint"], "Different effective test inputs")
+        context = self.context(run, manifest["run_attempt"])
         require(manifest["repository"] == config["repository"] and manifest["repository_id"] == config["repository_id"]
                 and manifest["workflow"] == config["workflow"] and manifest["job"] == config["job"]
-                and manifest["run_id"] == run["id"] and manifest["run_attempt"] == run["run_attempt"]
+                and manifest["run_id"] == run["id"] and manifest["run_attempt"] == context["attempt"]
                 and manifest["source_commit"] == context["commit"] and manifest["source_tree"] == context["tree"],
                 "Forged or incomplete manifest provenance")
         require(manifest["environment_fingerprint"] == current["environment"]
@@ -323,7 +348,7 @@ class Validator:
         step = next(step for step in steps if step["name"] == STEPS[suite])
         seconds = (timestamp(step["completed_at"]) - timestamp(step["started_at"])).total_seconds()
         require(seconds >= 0, "Invalid original test timing")
-        return {"run_id": run["id"], "attempt": run["run_attempt"], "artifact_id": artifact["id"],
+        return {"run_id": run["id"], "attempt": context["attempt"], "artifact_id": artifact["id"],
                 "artifact_digest": artifact["digest"], "url": f"https://github.com/{config['repository']}/actions/runs/{run['id']}",
                 "age_seconds": (self.now - executed).total_seconds(), "saved_seconds": seconds}
 
@@ -344,26 +369,27 @@ def lookup(api, config, current, forced=False):
         return decisions
     try:
         validator = Validator(api, config, current)
-        runs = api.pages("/actions/workflows/dotnet.yml/runs?status=success", "workflow_runs")
-        for candidate in runs:
-            pending = [s for s in fp.SUITES if not decisions[s]["reuse"] and not current["suites"][s]["unavailable"]]
-            if not pending:
-                break
-            # Never consider the active run or a run whose latest attempt failed.
-            if str(candidate.get("id")) == os.environ.get("GITHUB_RUN_ID") or not successful(candidate):
+        runs = {}
+        for suite in fp.SUITES:
+            if current["suites"][suite]["unavailable"]:
                 continue
-            artifacts = list(api.pages(f"/actions/runs/{candidate['id']}/artifacts", "artifacts"))
-            matches = {s: [a for a in artifacts if a.get("name") == artifact_name(config, s, candidate["id"], candidate["run_attempt"])]
-                       for s in pending}
-            if not any(matches.values()):
-                continue
-            run = api.get(f"/actions/runs/{candidate['id']}")
-            for suite in pending:
-                if len(matches[suite]) != 1:
+            # Content-addressed names let the API search all retained matching
+            # originals. Drafts, reuse-only runs and unrelated inputs consume no
+            # lookup slots. All returned provenance is still independently checked.
+            name = artifact_name(config, suite, current["suites"][suite]["fingerprint"])
+            artifacts = list(api.pages("/actions/artifacts?name=" + name, "artifacts", size=100))
+            for artifact in artifacts:
+                run_id = artifact.get("workflow_run", {}).get("id")
+                if not integer(run_id) or str(run_id) == os.environ.get("GITHUB_RUN_ID"):
+                    continue
+                if sum(a.get("workflow_run", {}).get("id") == run_id for a in artifacts) != 1:
                     continue
                 try:
-                    source = validator.validate(run, matches[suite][0], suite)
+                    if run_id not in runs:
+                        runs[run_id] = api.get(f"/actions/runs/{run_id}")
+                    source = validator.validate(runs[run_id], artifact, suite)
                     decisions[suite] = {"reuse": True, "reason": "Verified successful original execution", "source": source}
+                    break
                 except (urllib.error.URLError, TimeoutError, ConnectionError):
                     # A transport outage can affect the gate's later revalidation too.
                     # Restore execution globally instead of preserving a partial HIT.
@@ -400,15 +426,23 @@ def plan(directory=DIRECTORY):
     try:
         current = fp.calculate(os.environ["GITHUB_SHA"], config)
         write_json(directory / "current.json", current)
-        decisions = lookup(None, config, current, True) if forced_full() else lookup(api_client(config), config, current)
+        if forced_full():
+            decisions = lookup(None, config, current, True)
+            if os.environ.get("ASAP_FORCE_FULL_CI") != "true":
+                reason = test_selection.load()["decision"]["reason"]
+                for decision in decisions.values():
+                    decision["reason"] = "Selection requires fresh execution: " + reason
+        else:
+            decisions = lookup(api_client(config), config, current)
     except Exception as error:
         # Deliberately omit exception messages: subprocess/API errors can contain sensitive data.
         print(f"::notice::Test reuse unavailable ({type(error).__name__}); normal tests required.")
     write_json(directory / "plan.json", {"run_id": os.environ["GITHUB_RUN_ID"],
                "attempt": os.environ["GITHUB_RUN_ATTEMPT"], "decisions": decisions})
     outputs = {s: str(decisions[s]["reuse"]).lower() for s in fp.SUITES}
+    if current:
+        outputs.update({s + "_fingerprint": current["suites"][s]["fingerprint"] for s in fp.SUITES})
     outputs["schema"] = config["schema"]
-    outputs["sql_image"] = current["sql_image"] if current else fp.SQL_TAG
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         for key, value in outputs.items():
             output.write(f"{key}={value}\n")
@@ -447,12 +481,12 @@ def summary(rows, current):
         lines.append(f"| {LABELS[suite]} | {row['status']} | " + (f"[Original run]({source})" if source else "Current run") + " |")
     lines.append("")
     selection = current["suites"]["dotnet"]["selection"] if current else {}
-    if "partition_counts" in selection:
+    if current:
         lines.extend(["| .NET category | Discovered | Coverage |", "| --- | ---: | --- |"])
-        for category, count in selection["partition_counts"].items():
-            if ('browser' if category == 'browser' else 'dotnet') not in rows:
+        for category, suite in (("core", "dotnet"), ("browser", "browser")):
+            if suite not in rows:
                 continue
-            suite = "browser" if category == "browser" else "dotnet"
+            count = current["suites"][suite]["selection"]["expected"]
             status = rows[suite]["status"]
             lines.append(f"| {category} | {count} | {status} |")
         lines.extend(["", f"Selected non-browser population: {selection['expected']}; native test identities must match exactly.", ""])
@@ -487,6 +521,7 @@ def verify(directory=DIRECTORY):
         entries = fp.tracked_entries()
         contract = fp.full_ci_execution_contract((fp.ROOT / config["workflow"]).read_text(encoding="utf-8"))
         if current:
+            environments, problems, _ = fp.environment(config, observe=False)
             require(current["commit"] == commit and current["tree"] == tree
                     and current.get("full_ci_execution_contract") == contract,
                     "Current source identity or executor contract changed")
@@ -497,8 +532,13 @@ def verify(directory=DIRECTORY):
                         and identity["schema"] == config["schema"] and identity["suite"] == suite
                         and identity["source"] == fp.source_fingerprint(entries, suite, config, contract)
                         and identity["environment"] == fp.environment_fingerprint(identity["environment_inputs"])
+                        and identity["environment"] == fp.environment_fingerprint(environments[suite])
+                        and (identity["unavailable"] or not problems.get(suite))
                         and identity["selection"] == selected[suite],
                         "Current fingerprint inputs changed")
+                # Fresh SQL bootstrap records the selected digest after planning.
+                if suite in ("dotnet", "browser") and os.environ.get("ASAP_CI_SQL_IMAGE"):
+                    identity["environment_inputs"]["sql_image"] = os.environ["ASAP_CI_SQL_IMAGE"]
         checkout_valid = True
     except Exception:
         pass
@@ -544,11 +584,13 @@ def verify(directory=DIRECTORY):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("checkout", "plan", "verify"))
+    parser.add_argument("operation", choices=("checkout", "plan", "verify", "sql-image"))
     args = parser.parse_args()
     if args.operation == "checkout":
         commit, tree = fp.checkout(os.environ["GITHUB_SHA"])
         print(f"Verified exact workflow source {commit}, tree {tree}")
+    elif args.operation == "sql-image":
+        print(fp.sql_image())
     elif args.operation == "plan":
         validate_executor()
         plan()

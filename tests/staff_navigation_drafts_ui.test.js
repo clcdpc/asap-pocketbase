@@ -2315,9 +2315,9 @@ for (const kind of ['Title', 'Additional Copy']) {
       [...ui.get('.settings-staff-row').querySelectorAll('button')].find(button => button.textContent === 'Save changes').click();
       await until(() => saved && /Staff changes saved/.test(ui.get('#staff-access-status').textContent) && !ui.get('#settings-form').inert, 'metadata committed and authoritative session/roster accepted');
       assert.equal(ui.get('#workspace').hidden, false); assert.equal(ui.get('#staff-identity').textContent, 'New authoritative name');
-      assert.equal(ui.get('#notification-email').value, 'admin@example.org', 'explicit save synchronizes the primary email without changing sign-in identity');
+      assert.equal(ui.get('#notification-email').textContent, 'admin@example.org', 'explicit save synchronizes the primary email without changing sign-in identity');
       ui.get('[data-view="profile"]').click(); await settle();
-      assert.equal(ui.get('#notification-email').value, 'admin@example.org');
+      assert.equal(ui.get('#notification-email').textContent, 'admin@example.org');
       ui.get('[data-view="queue"]').click(); await settle(); await ui.open();
       assert.equal(configurationReads, 1, 'staff roster mutation preserves the Title configuration cache');
       if (kind === 'Additional Copy') {
@@ -2351,7 +2351,7 @@ for (const kind of ['Title', 'Additional Copy']) {
       remove();
       await until(() => /Actor changed since preview/.test(ui.get('#app-status').textContent), 'authoritative conflict reviewed');
       assert.deepEqual(versions, ['actor-v1'], 'no destructive replay after accepting a new preference revision');
-      assert.equal(ui.get('#staff-identity').textContent, 'External metadata'); assert.equal(ui.get('#notification-email').value, 'external@example.org');
+      assert.equal(ui.get('#staff-identity').textContent, 'External metadata'); assert.equal(ui.get('#notification-email').textContent, 'external@example.org');
       remove(); await until(() => versions.length === 2 && !ui.get('#request-dialog').open, 'deliberate retry');
       assert.deepEqual(versions, ['actor-v1', 'external-v2']);
     }, { staff: { tenantId: 'external-revision', authenticationEmail: 'admin@example.org' }, status: 'closed',

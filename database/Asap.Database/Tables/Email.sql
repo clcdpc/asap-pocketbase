@@ -92,7 +92,7 @@ CREATE TABLE [asap].[EmailOutbox]
          NULLIF(LTRIM(RTRIM([RecipientAuthenticationEmail])), N'') IS NOT NULL AND
          [AuthorizationOrganizationId] IS NOT NULL AND
          [RecipientAddressKind] IS NOT NULL AND
-         [RecipientAddressKind] IN (N'notification_email', N'weekly_summary')) OR
+         [RecipientAddressKind] IN (N'notification_email', N'weekly_summary', N'weekly_summary_primary', N'weekly_summary_additional')) OR
         ([DeliveryClass] <> N'staff_authorization_sensitive' AND
          [RecipientStaffUserId] IS NULL AND
          [RecipientAuthenticationEmail] IS NULL AND

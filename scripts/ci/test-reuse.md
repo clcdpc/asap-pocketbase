@@ -1,16 +1,33 @@
 # Reuse of current test evidence
 
 See [test selection and qualification](test-selection.md) for the current DAG
-and dependency audit. Schema 4 is the only supported evidence schema; earlier
+and dependency audit. Schema 5 is the only supported evidence schema; earlier
 populations and the former two-executor workflow cannot qualify current tests.
 
 Reuse is per suite (dotnet, browser, frontend), never a reduced passing count.
-A successful original run must belong to the trusted repository/workflow,
+An original qualification must belong to the trusted repository/workflow,
 correct execution job and runner group. Checkout logs, Git commit/tree/blob
 identity, source and resolved test-dependency fingerprints, exact native test identities,
 outcomes, SHA-256 artifact digest and the 14-day lifetime are revalidated.
 Skipped or failed source steps, corrupt archives, altered population,
-ambiguous PR metadata and unavailable lookup all fail closed.
+untrusted PR metadata and unavailable lookup all fail closed. Successful Full CI
+execution (including packaging) and the required reporting gate are mandatory;
+a later independent IIS deployment status does not invalidate their results.
+Qualification can be reused while deployment is queued/running or after it
+fails. The successful executor and reporting gate authorize reuse; the overall
+workflow's deployment-dependent status does not.
+
+Original artifacts are named by schema, suite and the complete fingerprint.
+The repository artifacts API queries that exact name, with at most three pages
+of 100 matching originals and the existing time/size bounds. Unrelated, draft
+and reuse-only runs cannot hide a baseline in a latest-run search window.
+On rerun, upload-artifact overwrites only the same name within that run; the
+manifest and API still bind the original run attempt. A deployment-only retry
+preserves that successful qualification. Every later attempt (at most ten) is
+checked for failed qualification. A retry must show an explicitly scheduled
+deployment-only job or a successful reporting gate; empty or still-active
+qualification cannot pass. Missing evidence fails closed. Evidence age
+uses the job-bound execution timestamp, not the run's original creation date.
 
 Selecting the complete required population is separate from requiring fresh
 execution. A valid PR diff containing documentation, CI/build tooling or unknown
@@ -21,15 +38,21 @@ An identical literal commit or proven-equivalent input tree is not forced fresh
 because the event changed. Included source, CI/test tooling, the complete workflow execution
 contract, repository policy and discovered populations must still match. A new
 CI implementation needs a fresh baseline; evidence from the earlier logic cannot
-qualify it. No run numbers or commit ancestry are special-cased.
+qualify it. No run numbers or commit ancestry are special-cased. Native suite
+keys contain only that suite's discovered UIDs/methods; every prepare/verify
+still checks the complete catalog's disjoint union and reviewed classification.
 
 Throwaway environment differences (VM/kernel/native packages, installed runtime
 versions, locale, Docker and the mutable SQL image) remain provenance rather than
 reuse keys. The environment key retains the configured policy epoch, resolved
 NuGet package contents and Playwright/browser definitions. Tool manifests and
-lock files remain included source inputs. Unknown runners, unavailable identity
+lock files remain included source inputs. Unknown runners, unavailable dependency identity
 and ambient runtime extensions still disable reuse. Fresh tests resolve and use
-the current SQL image digest.
+the current SQL image digest. Observational tool probes are best-effort; reuse
+does not contact the SQL registry, require Docker, or install Chromium/native
+browser packages. These dependencies are prepared only for fresh execution.
+The final verifier re-reads resolved NuGet and Playwright identities and ambient
+extension guards after lookup.
 
 Full CI execution plans and verifies dotnet, browser and frontend independently
 in one job on one clc-linux runner. The verifier always evaluates all three
@@ -50,7 +73,12 @@ build, safety checks, native discovery, evidence revalidation and packaging.
 
 Current-commit build, publication, frontend verification, DACPAC/package content,
 manifest/digest checks and ValidateOnly always execute. Only explicit force-full
-or invalid/missing selection metadata demands fresh suites. Tags are verified
+or invalid/missing selection metadata demands fresh suites. PR selection binds
+the actual synthetic merge's second parent to the event/current head and proves
+its first parent belongs to fetched trusted main history. Advertised base SHAs
+are metadata and may lag or advance to a commit not present on the runner.
+They cannot change the authorization of an unchanged tested merge. A changed
+head, untrusted state or wrong actual parent still fails closed. Tags are verified
 against their peeled commit, including annotated tags; release and deployment
 metadata must identify that same tested source. Deployment remains
 separately gated and is outside ordinary implementation.
@@ -65,10 +93,27 @@ Use `force_full_ci=true` when fresh testing is wanted explicitly.
 The planner and final verifier both honor metadata fallbacks and explicit fresh
 requirements; a saved plan alone never authorizes skipped tests.
 
-The exact JS/CSS backend exclusions are reviewed in test-reuse.json. Unknown
-files default to included. Browser consumers and asset/cache/publication
-contracts live in Browser; the complete frontend suite remains required.
-Never extend exclusions based only on directory names or unchanged test counts.
+The short directory/file ownership policy lives in `source_inputs` in
+test-reuse.json; the first matching rule wins. Directory paths cover descendants
+and filename globs match one directory level. Application/database/build/CI
+inputs, native tests and shared fixtures are common. Browser runtime directories
+belong to Browser; root Node contracts and their helpers belong to Frontend.
+The test runner, browser entrypoint and both mandatory CI safety contracts remain
+common execution inputs. Native keys use the independently validated projected
+classification rather than another suite's population.
+
+Authored frontend JS/CSS belongs to Browser/Frontend. Vendor assets, HTML,
+manifests and unknown file types stay conservative. This ownership follows the
+reviewed Browser classification of every asset/publication/cache and Chromium
+consumer. A consumer guard rejects direct native/browser imports of frontend
+test files or their root runner. New/unclassified roots remain included in every
+suite until deliberately classified; they cannot silently evade qualification.
+
+Narrative `docs/`, root Markdown and declared operator-documentation locations
+are ignored. Required deployment tests exercise actual scripts, generated
+configuration and structured fixtures, rather than substrings in prose.
+There is no global README/Markdown/text exclusion: packaged vendor license files
+and runtime/test fixtures remain inputs, regardless of their extension.
 
 Historical receipts and superseded selection designs remain in Git history.
 Current sequential-runner measurements and review findings are recorded in

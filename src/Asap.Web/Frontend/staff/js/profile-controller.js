@@ -38,7 +38,6 @@ export function createProfileController({ root, sessionIdentity, announce,
 
   function profileValues() {
     return {
-      notificationEmail: dom.notificationEmail.value,
       weeklyActionSummaryEmail: dom.weeklyEmail.value,
       weeklyActionSummaryEnabled: dom.weeklyEnabled.checked,
       purchaseReminderDefault: dom.purchaseDefault.checked,
@@ -55,7 +54,6 @@ export function createProfileController({ root, sessionIdentity, announce,
 
   function populateProfile(staff) {
     if (disposed) return;
-    dom.notificationEmail.value = staff?.notificationEmail || '';
     dom.weeklyEmail.value = staff?.weeklyActionSummaryEmail || '';
     dom.weeklyEnabled.checked = Boolean(staff?.weeklyActionSummaryEnabled);
     dom.purchaseDefault.checked = Boolean(staff?.purchaseReminderDefault);
@@ -63,6 +61,26 @@ export function createProfileController({ root, sessionIdentity, announce,
     dom.mineDefault.checked = Boolean(staff?.defaultMineUnclaimedFilter);
     state.profileBaseline = staff ? profileValues() : null;
     updateProfileControls();
+  }
+
+  function isCurrentAuthoritativePreferences(staff) {
+    return Boolean(staff && sessionIdentity.isCurrent(staff) && sessionIdentity.preferences() === staff);
+  }
+
+  function updatePrimaryEmail(staff) {
+    const email = typeof staff?.notificationEmail === 'string' ? staff.notificationEmail.trim() : '';
+    dom.notificationEmail.textContent = email || 'No primary notification email is set.';
+  }
+
+  function setStaff(staff) {
+    if (!staff) {
+      updatePrimaryEmail(null);
+      populateProfile(null);
+      return;
+    }
+    if (!isCurrentAuthoritativePreferences(staff)) return;
+    updatePrimaryEmail(staff);
+    populateProfile(staff);
   }
 
   function updateProfileControls() {
@@ -97,7 +115,9 @@ export function createProfileController({ root, sessionIdentity, announce,
       if (session.accessAllowed === false) { onAccessUnavailable(); return; }
       if (!onPreferences(session.staff, mutation.owner)) return;
       state.profileMutation = null;
-      populateProfile(session.staff);
+      const current = sessionIdentity.preferences();
+      updatePrimaryEmail(current);
+      populateProfile(current);
       announce('Current Profile loaded. Review the saved preferences before making another change.', 'warning');
     } catch (error) {
       if (isPresentationCurrent(mutation.owner) && state.profileMutation === mutation && error.status !== 401) {
@@ -153,7 +173,9 @@ export function createProfileController({ root, sessionIdentity, announce,
       // The session read supplies the latest rowversion and preferences, including concurrent changes.
       if (!onPreferences(session.staff, owner)) return;
       clearReceipt(mutation);
-      populateProfile(sessionIdentity.preferences());
+      const current = sessionIdentity.preferences();
+      updatePrimaryEmail(current);
+      populateProfile(current);
       announce('Profile saved.', 'success');
     } catch (error) {
       if (mutation.outcome === 'committed') {
@@ -187,7 +209,9 @@ export function createProfileController({ root, sessionIdentity, announce,
         }
         if (!onPreferences(session.staff, owner)) return;
         clearReceipt(mutation);
-        populateProfile(session.staff);
+        const current = sessionIdentity.preferences();
+        updatePrimaryEmail(current);
+        populateProfile(current);
       }
       if (unconfirmed) {
         mutation.outcomeUnconfirmed = true;
@@ -210,8 +234,12 @@ export function createProfileController({ root, sessionIdentity, announce,
   return {
     activate() { viewGeneration++; updateProfileControls(); },
     deactivate() { viewGeneration++; },
-    setStaff: populateProfile,
-    preferencesChanged(staff) { if (sessionIdentity.isCurrent(staff) && !state.profileMutation && !hasProfileDraft()) populateProfile(staff); },
+    setStaff,
+    preferencesChanged(staff) {
+      if (disposed || !isCurrentAuthoritativePreferences(staff)) return;
+      updatePrimaryEmail(staff);
+      if (!state.profileMutation && !hasProfileDraft()) populateProfile(staff);
+    },
     isDirty: hasProfileDraft,
     hasPendingMutation: () => Boolean(state.profileMutation),
     inspectDeparture() {
@@ -223,7 +251,7 @@ export function createProfileController({ root, sessionIdentity, announce,
           : 'Wait for the Profile save to finish before navigating away.' };
     },
     discardDraft() { populateProfile(sessionIdentity.preferences()); },
-    signedOut() { reads.begin('session').abort(); state.profileMutation = null; populateProfile(null); },
+    signedOut() { reads.begin('session').abort(); state.profileMutation = null; updatePrimaryEmail(null); populateProfile(null); },
     save: saveProfile,
     review: refreshUnconfirmedProfile,
     dispose() { disposed = true; events.abort(); reads.begin('session').abort(); drafts.dispose(); state.profileBaseline = null; }

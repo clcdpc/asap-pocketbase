@@ -1,6 +1,7 @@
 """Content and observed toolchain identity. No secrets or machine names are inputs."""
 
 import hashlib
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -17,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SUITES = ("dotnet", "browser", "frontend")
 SQL_TAG = "mcr.microsoft.com/mssql/server:2022-latest"
 CONFIG = ROOT / "scripts/ci/test-reuse.json"
-SOURCE_ALGORITHM = "current-suites-v5"
+SOURCE_ALGORITHM = "suite-inputs-v1"
 
 
 def canonical(value):
@@ -37,14 +38,23 @@ def command(arguments, root=ROOT):
 
 def configuration():
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    if (type(config["schema"]) is not int or config["schema"] != 4
+    if (type(config["schema"]) is not int or config["schema"] != 5
             or not 1 <= config["lifetime_days"] <= 14 or not config["environment_epoch"]):
         raise ValueError("Invalid evidence lifetime/environment epoch")
-    for rule in config["exclusions"]:
-        if not rule["reason"] or not set(rule["suites"]) <= set(SUITES):
-            raise ValueError("Unreviewed dependency exclusion")
-        if any("*" in p or p.startswith("/") or ".." in p.split("/") for p in rule["paths"]):
-            raise ValueError("Exclusions must be exact repository paths")
+    if not isinstance(config.get("source_inputs"), list) or not config["source_inputs"]:
+        raise ValueError("Missing source input policy")
+    for rule in config["source_inputs"]:
+        if not rule["reason"] or not rule["paths"] or not set(rule["suites"]) <= set(SUITES):
+            raise ValueError("Unreviewed source input rule")
+        for path in rule["paths"]:
+            parts = path.rstrip("/").split("/")
+            if (path.startswith("/") or "\\" in path or "**" in path or "?" in path or "[" in path
+                    or any(part in ("", ".", "..") for part in parts)
+                    or any("*" in part for part in parts[:-1])):
+                raise ValueError("Input rules must be repository directories or single-level file patterns")
+        if "extensions" in rule and (not rule["extensions"] or not all(p.endswith("/") for p in rule["paths"])
+                or not all(re.fullmatch(r"\.[a-z0-9]+", extension) for extension in rule["extensions"])):
+            raise ValueError("File-type rules require an explicit directory scope")
     return config
 
 
@@ -77,10 +87,22 @@ def full_ci_execution_contract(workflow):
     return digest(workflow)
 
 
+def source_suites(path, config):
+    # First matching ownership rule wins. A directory includes its descendants;
+    # filename globs match only that directory level, never across separators.
+    for rule in config["source_inputs"]:
+        if rule.get("extensions") and Path(path).suffix not in rule["extensions"]:
+            continue
+        for pattern in rule["paths"]:
+            if (path.startswith(pattern) if pattern.endswith("/") else
+                    path.count("/") == pattern.count("/") and fnmatch.fnmatchcase(path, pattern)):
+                return rule["suites"]
+    # New/unclassified roots cannot silently disappear from qualification.
+    return SUITES
+
+
 def source_fingerprint(entries, suite, config, execution_contract=None):
-    # Default include unknown/new code, fixtures, tests, and dependencies.
-    excluded = {p for rule in config["exclusions"] if suite in rule["suites"] for p in rule["paths"]}
-    files = sorted(entry for entry in entries if entry[0] not in excluded)
+    files = sorted(entry for entry in entries if suite in source_suites(entry[0], config))
     # Optional contract argument is for isolated pure-entry tests only.
     return (digest({"files": files, "execution_contract": execution_contract})
             if execution_contract is not None else digest(files))
@@ -145,41 +167,43 @@ def nuget_identity(root=ROOT):
     return digest(resolved)
 
 
-def environment(config, root=ROOT):
-    # Retain observed versions for provenance, including ephemeral runner drift.
+def environment(config, root=ROOT, observe=True):
+    # Only policy and resolved dependency contents authorize reuse. Observations
+    # of an ephemeral VM are useful provenance, never a prerequisite for a HIT.
+    def observed(arguments):
+        if not observe:
+            return None
+        try:
+            return command(arguments, root)
+        except Exception:
+            return None
+
     common = {
         "epoch": config["environment_epoch"],
         "os": platform.system(), "arch": platform.machine(), "kernel": platform.release(),
         "runner_os": os.environ.get("RUNNER_OS", ""), "runner_arch": os.environ.get("RUNNER_ARCH", ""),
         "python": platform.python_version(),
-        "dotnet": command(["dotnet", "--version"], root),
-        "runtimes": [" ".join(line.split()[:2]) for line in command(["dotnet", "--list-runtimes"], root).splitlines()],
+        "dotnet": observed(["dotnet", "--version"]),
+        "runtimes": [" ".join(line.split()[:2]) for line in (observed(["dotnet", "--list-runtimes"]) or "").splitlines()],
         "nuget": nuget_identity(root),
-        "node": command(["node", "--version"], root), "npm": command(["npm", "--version"], root),
-        "pwsh": command(["pwsh", "-NoLogo", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], root),
+        "node": observed(["node", "--version"]), "npm": observed(["npm", "--version"]),
+        "pwsh": observed(["pwsh", "-NoLogo", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"]),
         "locale": {k: os.environ.get(k, "") for k in ("TZ", "LANG", "LC_ALL", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT")},
     }
     if platform.system() == "Linux":
-        packages = command(["dpkg-query", "-W", "-f=${binary:Package}=${Version}\\n"], root).splitlines()
-        if not packages:
-            raise ValueError("Native runtime package identity unavailable")
-        common["native_packages"] = digest(sorted(packages))
+        packages = (observed(["dpkg-query", "-W", "-f=${binary:Package}=${Version}\\n"]) or "").splitlines()
+        common["native_packages"] = digest(sorted(packages)) if packages else None
     if Path("/etc/os-release").exists():
         common["distribution"] = {k: v.strip('"') for line in Path("/etc/os-release").read_text().splitlines()
                                   if "=" in line for k, v in [line.split("=", 1)] if k in ("ID", "VERSION_ID")}
     result = {suite: dict(common) for suite in SUITES}
     problems = {}
-    image = SQL_TAG
-    try:
-        image = sql_image()
-        docker = command(["docker", "version", "--format", "{{.Server.Version}}"], root)
-        if not docker:
-            raise ValueError("Docker server version is missing")
-        for suite in ("dotnet", "browser"):
-            result[suite].update(sql_image=image, docker=docker)
-    except Exception:
-        for suite in ("dotnet", "browser"):
-            problems[suite] = "SQL image/toolchain identity unavailable"
+    # The fresh-only SQL bootstrap resolves and exports the immutable image.
+    # Neither a registry request nor a running Docker daemon is needed for reuse.
+    image = os.environ.get("ASAP_CI_SQL_IMAGE", SQL_TAG)
+    docker = observed(["docker", "version", "--format", "{{.Server.Version}}"])
+    for suite in ("dotnet", "browser"):
+        result[suite].update(sql_image=image, docker=docker)
     try:
         browsers = {
             "version": json.loads((root / "node_modules/playwright/package.json").read_text(encoding="utf-8"))["version"],

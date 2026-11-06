@@ -24,8 +24,10 @@ class Origin:
         return body
 
     def pages(self, path, key, **kwargs):
-        if path.startswith("/actions/workflows/dotnet.yml/runs?"):
-            return iter([self.api.get(f"/actions/runs/{self.run_id}")])
+        if path.startswith("/actions/artifacts?name="):
+            name = path.partition("name=")[2]
+            return (artifact for artifact in self.api.pages(f"/actions/runs/{self.run_id}/artifacts", "artifacts")
+                    if artifact["name"] == name)
         return self.api.pages(path, key, **kwargs)
 
 
