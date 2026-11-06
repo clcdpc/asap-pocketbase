@@ -33,6 +33,7 @@
     "Asap.Tests.Integration.PatronJourneyTests.SystemFormatRuleEditorPersistsItsActualPostThroughSqlAndReload",
     "Asap.Tests.Integration.PatronJourneyTests.TitleRequestsTableLayoutFitsWideViewsAndContainsNarrowScrolling",
     "Asap.Tests.Integration.PatronJourneyTests.TitleTabCountsBrowserUsesCompleteAuthorizedSqlDataAndRefreshesAfterMutation",
+    "Asap.Tests.Integration.PatronJourneyTests.WeeklyProfileBrowserShowsPrimaryAccountInfoAndPreservesPreferenceContractsAcrossAccessibleLayouts",
     "Asap.Tests.Integration.PatronJourneyTests.WeeklySummaryBrowserPreservesGestureIdentityRecoveryAndAuthorizedRunScope"
   ]
 }

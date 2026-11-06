@@ -569,8 +569,23 @@ public sealed partial class PatronJourneyTests
 
             AssertOutboxStillPending(await ReadCommittedOutboxByIdAsync(dispatcher.EnqueuedIds.Single()));
             await using var verify = await contexts.CreateDbContextAsync();
-            Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(item =>
-                item.BusinessKey != null && item.BusinessKey.StartsWith(businessKeyPrefix)));
+            var committedCopies = await verify.EmailOutbox.AsNoTracking().Where(item =>
+                item.BusinessKey != null && item.BusinessKey.StartsWith(businessKeyPrefix)).ToArrayAsync();
+            Assert.HasCount(2, committedCopies, "Both recipients commit atomically before immediate dispatch starts.");
+            foreach (var copy in committedCopies)
+            {
+                AssertOutboxStillPending(await ReadCommittedOutboxByIdAsync(copy.Id));
+            }
+            var recoveredSender = new RecordingEmailSender();
+            var recovery = CreateEmailOutboxJobs(recoveredSender, EmailOutboxRuntimeOptions.Default);
+            await recovery.SweepAsync(CancellationToken.None);
+            foreach (var copy in committedCopies)
+            {
+                Assert.IsTrue(this.dispatcher!.EnqueuedIds.Contains(copy.Id), "The sweep recovers both committed recipients after cancellation.");
+                await recovery.DeliverAsync(copy.Id, CancellationToken.None);
+                Assert.AreEqual("sent", (await ReadOutboxStateAsync(copy.Id)).Status);
+            }
+            Assert.HasCount(2, recoveredSender.Envelopes);
             Assert.AreEqual("suggestion", await verify.TitleRequests.Where(item => item.Barcode == barcode)
                 .Select(item => item.Status).SingleAsync());
         }

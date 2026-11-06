@@ -186,14 +186,19 @@
           </div>
         </div>
         <form id="profile-form" class="profile-form">
-          <label>
-            <span>Primary notification email</span>
-            <input id="notification-email" type="email" readonly aria-describedby="notification-email-help">
+          <div class="profile-account-info">
+            <dl>
+              <div>
+                <dt id="notification-email-label">Primary notification email</dt>
+                <dd id="notification-email" aria-labelledby="notification-email-label" aria-describedby="notification-email-help">No primary notification email is set.</dd>
+              </div>
+            </dl>
             <small id="notification-email-help">Managed by Staff Access.</small>
-          </label>
+          </div>
           <label>
-            <span>Weekly summary email override</span>
-            <input id="weekly-email" type="email" autocomplete="email" placeholder="Use primary email">
+            <span id="weekly-email-label">Additional weekly summary email (optional)</span>
+            <input id="weekly-email" type="email" autocomplete="email" aria-labelledby="weekly-email-label" aria-describedby="weekly-email-help">
+            <small id="weekly-email-help">When enabled and eligible, weekly summaries go to your primary notification email. A distinct additional address receives a copy; leave blank for primary only. Turning off weekly summaries prevents both copies.</small>
           </label>
           <label class="check-field"><input id="weekly-enabled" type="checkbox"> <span>Receive weekly action summary</span></label>
           <label class="check-field"><input id="purchase-default" type="checkbox"> <span>Send purchase reminder by default</span></label>

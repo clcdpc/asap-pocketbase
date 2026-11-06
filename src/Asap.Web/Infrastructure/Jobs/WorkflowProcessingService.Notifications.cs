@@ -175,46 +175,62 @@ public sealed partial class WorkflowProcessingService
                 .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
             var fromAddress = Clean(librarySettings?.FromAddress) ?? Clean(systemEmail?.FromAddress);
             var fromName = Clean(librarySettings?.FromName) ?? Clean(systemEmail?.FromName);
-            var currentAddress = !string.IsNullOrWhiteSpace(recipient.WeeklyActionSummaryEmail)
-                ? recipient.WeeklyActionSummaryEmail
-                : recipient.NotificationEmail;
-            var currentNormalized = StaffEmail.TryNormalize(currentAddress, out var currentValidAddress)
-                ? currentValidAddress
-                : null;
-            var suppression = currentNormalized is null ? "recipient_missing_or_invalid" :
-                !recipientDomainPolicy.IsAllowed(currentNormalized) ? "recipient_domain_not_allowed" :
-                string.IsNullOrWhiteSpace(staffUrl) ? "staff_url_missing" :
-                string.IsNullOrWhiteSpace(fromAddress) ? "sender_missing" :
-                !readiness.IsConfigured ? "mail_not_configured" : null;
-            var body = suppression is null ? WeeklyBody(
-                newSubmissions, purchases, copies, staffUrl!, periodStartLocal, periodEndLocal) : null;
-            var outbox = new EmailOutbox
+            var primaryAddress = StaffEmail.TryNormalize(recipient.NotificationEmail, out var primary)
+                ? primary : null;
+            var additionalAddress = StaffEmail.TryNormalize(recipient.WeeklyActionSummaryEmail, out var additional)
+                ? additional : null;
+            var recipients = new List<(string? Address, string Kind, string Key)>
             {
-                OrganizationId = authorizationOrganizationId,
-                BusinessKey = businessKey,
-                DeliveryClass = "staff_authorization_sensitive",
-                RecipientStaffUserId = recipient.Id,
-                RecipientAuthenticationEmail = recipient.NormalizedUserPrincipalName,
-                AuthorizationOrganizationId = authorizationOrganizationId,
-                RecipientAddressKind = "weekly_summary",
-                ToAddress = currentNormalized,
-                FromAddress = fromAddress,
-                FromName = fromName,
-                Subject = suppression is null ? $"Weekly ASAP action summary: {newSubmissions.Count} new, {purchases.Count} awaiting bibs, {copies.Count} additional copies" : null,
-                BodyText = body,
-                Status = suppression is null ? "pending" : "suppressed",
-                SuppressionReason = suppression,
-                NextAttemptUtc = suppression is null ? now : null,
-                CreatedUtc = now,
-                SuppressedUtc = suppression is null ? null : now
+                (primaryAddress, "weekly_summary_primary", businessKey)
             };
-            context.EmailOutbox.Add(outbox);
+            if (!string.IsNullOrWhiteSpace(recipient.WeeklyActionSummaryEmail) &&
+                (additionalAddress is null || !string.Equals(primaryAddress, additionalAddress, StringComparison.OrdinalIgnoreCase)))
+            {
+                recipients.Add((additionalAddress, "weekly_summary_additional", $"{businessKey}:additional"));
+            }
+            // The primary key anchors the whole operation, including historical single-recipient
+            // operations. Commit both recipients together; retries never fill in or redirect copies.
+            var outboxItems = new List<EmailOutbox>();
+            var body = string.IsNullOrWhiteSpace(staffUrl) ? null : WeeklyBody(
+                newSubmissions, purchases, copies, staffUrl, periodStartLocal, periodEndLocal);
+            foreach (var (address, kind, key) in recipients)
+            {
+                var suppression = address is null ? "recipient_missing_or_invalid" :
+                    !recipientDomainPolicy.IsAllowed(address) ? "recipient_domain_not_allowed" :
+                    string.IsNullOrWhiteSpace(staffUrl) ? "staff_url_missing" :
+                    string.IsNullOrWhiteSpace(fromAddress) ? "sender_missing" :
+                    !readiness.IsConfigured ? "mail_not_configured" : null;
+                outboxItems.Add(new EmailOutbox
+                {
+                    OrganizationId = authorizationOrganizationId,
+                    BusinessKey = key,
+                    DeliveryClass = "staff_authorization_sensitive",
+                    RecipientStaffUserId = recipient.Id,
+                    RecipientAuthenticationEmail = recipient.NormalizedUserPrincipalName,
+                    AuthorizationOrganizationId = authorizationOrganizationId,
+                    RecipientAddressKind = kind,
+                    ToAddress = address,
+                    FromAddress = fromAddress,
+                    FromName = fromName,
+                    Subject = suppression is null ? $"Weekly ASAP action summary: {newSubmissions.Count} new, {purchases.Count} awaiting bibs, {copies.Count} additional copies" : null,
+                    BodyText = suppression is null ? body : null,
+                    Status = suppression is null ? "pending" : "suppressed",
+                    SuppressionReason = suppression,
+                    NextAttemptUtc = suppression is null ? now : null,
+                    CreatedUtc = now,
+                    SuppressedUtc = suppression is null ? null : now
+                });
+            }
+            context.EmailOutbox.AddRange(outboxItems);
             try
             {
                 await context.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 createdCount++;
-                DispatchCommittedOutbox(outbox, cancellationToken);
+                foreach (var outbox in outboxItems)
+                {
+                    DispatchCommittedOutbox(outbox, cancellationToken);
+                }
             }
             catch (DbUpdateException exception) when (exception.InnerException is SqlException { Number: 2601 or 2627 })
             {
