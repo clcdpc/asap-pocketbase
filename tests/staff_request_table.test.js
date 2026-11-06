@@ -167,6 +167,9 @@ async function until(predicate, message) {
     assert.equal(headings[7].querySelector('button'), null);
     assert.equal(first().cells.length, 8); assert.equal(rows().length, 25);
     assert.match(get('#queue-summary').textContent, /55 suggestion requests/);
+    const assertCounts = () => assert.deepEqual([...get('#status-tabs').querySelectorAll('[data-status]')].map(tab => tab.getAttribute('aria-label')),
+      [`Suggestions (${data.length})`, 'Purchases (0)', 'Pending holds (0)', 'Placed holds (0)', 'Closed (0)']);
+    assertCounts();
     assert.match(first().cells[0].textContent, /Alex Reader 54/);
     const link = first().querySelector('.request-title-link');
     assert.equal(link.tagName, 'A'); assert.match(link.href, /request=9007199254741047/);
@@ -185,6 +188,7 @@ async function until(predicate, message) {
     await until(() => first()?.querySelector('.request-title-link')?.textContent === 'Title 00', 'Bibliographic details sort by Title.');
     const next = get('#request-grid button[aria-label="Next"]'); next.click();
     await until(() => first()?.querySelector('.request-title-link')?.textContent === 'Title 25', 'Pagination reaches the second sorted page.');
+    assertCounts();
     const beforeRefresh = first().querySelector('.request-title-link');
     data = data.slice(1); // A genuinely new 54-row response, not Grid's retained old store.
     await queue.refresh();
@@ -197,22 +201,31 @@ async function until(predicate, message) {
     data = data.slice(-10);
     await queue.refresh();
     await until(() => rows().length === 10 && get('#request-grid .gridjs-currentPage')?.textContent === '1', 'A shrinking accepted result clamps the saved page.');
+    assertCounts();
     data = full;
     await queue.refresh();
     await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 54'), 'The full accepted result renders before filtering.');
     get('#request-search').value = 'Author 03'; get('#request-search').dispatchEvent(new dom.window.Event('input'));
     await until(() => rows().length === 1 && first().textContent.includes('Title 03'), 'Author search resets paging and finds its request.');
     assert.match(get('#queue-summary').textContent, /^1 suggestion request$/);
+    assertCounts();
     get('#request-search').value = 'IDENTIFIER-4'; get('#request-search').dispatchEvent(new dom.window.Event('input'));
     await until(() => rows().length === 11 && get('#request-grid .gridjs-summary')?.textContent.includes('of 11'), 'Identifier search remains supported.');
     get('#request-search').value = ''; get('#request-search').dispatchEvent(new dom.window.Event('input'));
     await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 54'), 'Clearing search renders its accepted rows.');
     get('#claim-filter').value = 'mine'; get('#claim-filter').dispatchEvent(new dom.window.Event('change'));
     await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 27'), 'Mine filtering retains exact staff identity.');
+    assertCounts();
     get('#claim-filter').value = 'all'; get('#claim-filter').dispatchEvent(new dom.window.Event('change'));
     await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 54'), 'Clearing claim renders before another filter action.');
+    get('#similar-filter').value = 'unique'; get('#similar-filter').dispatchEvent(new dom.window.Event('change'));
+    await until(() => get('#request-grid .gridjs-notfound'), 'Similarity can hide all rows without changing scope totals.');
+    assertCounts();
+    get('#similar-filter').value = 'all'; get('#similar-filter').dispatchEvent(new dom.window.Event('change'));
+    await until(() => rows().length === 25, 'Clearing similarity restores the accepted records.');
     get('#tag-filter').value = 'Visible warning'; get('#tag-filter').dispatchEvent(new dom.window.Event('change'));
     await until(() => rows().length === 1 && first().textContent.includes('Visible warning'), 'Warnings remain visible and filterable without a Tags column.');
+    assertCounts();
     const staleButton = first().querySelector('.request-search-shortcut'); staleButton.click();
     const staleSearch = searches.at(-1);
     context = { ...context, scope: '3' }; queue.contextChanged(context, { ...context, scope: '2' });

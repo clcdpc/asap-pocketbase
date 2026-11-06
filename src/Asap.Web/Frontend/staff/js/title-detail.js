@@ -6,7 +6,7 @@ import { createRequestEditor } from './request-editor.js';
 import { researchRecordValue } from './research.js';
 import { createRequestWorkflows } from './request-workflows.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
-import { element, icon, statusLabel, dateTime, text, closeReasonLabel, timeoutLabel, addDetail } from './ui.js';
+import { element, icon, commandButton, statusLabel, dateTime, text, closeReasonLabel, timeoutLabel, addDetail } from './ui.js';
 
 export function createTitleDetailController({ host, sessionIdentity, polarisLookup, copyCreation, announce,
   beforeOpen, isNavigationCurrent, getNavigationGeneration, getScope, onAlign, onOpened, onUpdated = () => {}, beforeClose, onClosed,
@@ -18,14 +18,41 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   let lease = null, actor = null, current = null, returnFocus = null, activeAttempt = null;
   let drafts = createDraftScope(), renderRevision = null, editor = null, workflows = null, copyParent = null, disposed = false, targetGeneration = 0;
   let selectedTab = 'details', tabRequestId = null;
+  let inlineOpeningEnter = false;
+  // Duplicate recovery can sit above retained BIB linking; dismiss the latest
+  // panel first and restore the toolbar only when both owners have finished.
+  const inlineActions = new Map();
 
   function isPresentationCurrent(mounted, owner) {
     return !disposed && mounted?.isCurrent() && sessionIdentity.isCurrent(owner);
   }
   function isCurrentSelection(snapshot) { return isPresentationCurrent(lease, actor) && current?.id === snapshot.id; }
   function hasPendingMutation() { return Boolean(activeAttempt?.pending && sessionIdentity.isCurrent(activeAttempt.owner) || copyParent && copyCreation.hasPendingMutation(copyParent)); }
+  function beginInlineAction(panel, cancel) {
+    workflows?.invalidate();
+    inlineActions.set(panel, cancel);
+    inlineOpeningEnter = true;
+    const bar = lease?.content.querySelector('.action-bar');
+    if (bar) bar.hidden = true;
+  }
+  function endInlineAction(panel) {
+    inlineActions.delete(panel);
+    const bar = lease?.content.querySelector('.action-bar');
+    if (bar) bar.hidden = inlineActions.size > 0;
+  }
+  function cancelInlineAction() {
+    if (hasPendingMutation()) return false;
+    const cancel = [...inlineActions.values()].at(-1);
+    if (!cancel) return false;
+    cancel();
+    return true;
+  }
   function allowRequestMutation(snapshot, declaration) {
     if (!isCurrentSelection(snapshot) || current.version !== snapshot.version || hasPendingMutation()) return false;
+    if (editor?.needsBibLinkReload()) {
+      editor.showBibLinkError('Reload the current request before trying another change.', true);
+      return false;
+    }
     const admission = drafts.admit(declaration);
     if (!admission.allowed) {
       announce(admission.kind === 'editor' ? 'Save or revert the current request edits before performing a workflow action.'
@@ -59,8 +86,25 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   }
   function invalidate() { targetGeneration++; reads.begin('detail-target').abort(); reads.begin('detail').abort(); editor?.invalidate(); workflows?.invalidate(); if (copyParent) copyCreation.invalidate(copyParent); }
   function closeCopy(options) { return !copyParent || copyCreation.close(options, copyParent); }
+  function showDetailsUnavailable(mounted, message) {
+    if (!mounted?.isCurrent()) return false;
+    const close = commandButton('Close', 'times', () => {
+      if (mounted.isCurrent()) host.requestClose();
+    });
+    close.classList.add('request-detail-close');
+    mounted.content.replaceChildren(
+      element('div', { className: 'request-middle' }, element('p', { text: message })),
+      element('footer', { className: 'request-save-footer' }, [
+        element('div', { className: 'request-save-feedback', text: 'Details unavailable' }),
+        element('div', { className: 'form-actions' }, [close])
+      ])
+    );
+    return true;
+  }
   function disposeChildren() {
     renderRevision = null;
+    inlineActions.clear();
+    inlineOpeningEnter = false;
     closeCopy({ navigation: true, force: true }); copyParent = null;
     editor?.dispose(); workflows?.dispose(); editor = null; workflows = null;
     drafts.dispose();
@@ -87,14 +131,24 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     if (disposed || !sessionIdentity.isCurrent(target.owner) || !isNavigationCurrent(ticket)) return false;
     const { request, configuration, owner } = target;
     if (!options.authoritativeRefresh) selectedTab = 'details';
-    const mounted = host.acquire({ dispose: disposeMounted, onClose: close,
+    const mounted = host.acquire({ dispose: disposeMounted, onClose: close, hasInlineAction: () => inlineActions.size > 0,
       onEscape: () => { if (!hasPendingMutation() && workflows?.escape()) return; close(); } });
     lease = mounted; actor = owner;
     returnFocus = opener || document.activeElement; drafts = createDraftScope();
+    mounted.content.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' || !inlineOpeningEnter || !isPresentationCurrent(mounted, owner)) return;
+      // Focus moves during the opener's keydown. Its held-key repeats must not
+      // approve the newly opened panel; a fresh press keeps normal form behavior.
+      if (!event.repeat) { inlineOpeningEnter = false; return; }
+      if (inlineActions.size) { event.preventDefault(); event.stopPropagation(); }
+    }, { capture: true });
+    mounted.content.addEventListener('keyup', event => {
+      if (event.key === 'Enter' && isPresentationCurrent(mounted, owner)) inlineOpeningEnter = false;
+    }, { capture: true });
     for (const name of ['input', 'change']) mounted.content.addEventListener(name, event => {
       if (isPresentationCurrent(mounted, owner) && mounted.content.contains(event.target)) drafts.touch(event.target);
     });
-    onOpened(request, options); renderRequest(request, configuration); mounted.show();
+    onOpened(request, options); renderRequest(request, configuration, null, options.retainedEditor); mounted.show();
     announce(`Opened ${request.title}.`); rememberOpened(request.id);
     if (options.action) workflows.startAction(options.action);
     return true;
@@ -124,7 +178,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         if (options.authoritativeRefresh && lease?.isCurrent()) {
           disposeChildren(); current = Object.freeze({ id: String(id), version: null });
           lease.heading(priorTitle, `Request ${id}`);
-          lease.content.replaceChildren(element('p', { text: 'Current details could not refresh. Reload this request before performing another action.' })); lease.show();
+          showDetailsUnavailable(lease, 'Current details could not refresh. Reload this request before performing another action.'); lease.show();
         }
         announce(error.status === 404 ? 'That request is no longer available.' : error.message, 'error');
         if (options.fromRecent && error.status === 404) forgetUnavailable(String(id));
@@ -169,7 +223,8 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     activeAttempt = attempt; return attempt;
   }
   function disableControls(attempt) {
-    const controls = [...attempt.mounted.content.querySelectorAll('input, select, textarea, button')].map(control => ({ control, disabled: control.disabled }));
+    const controls = [...attempt.mounted.content.querySelectorAll('input, select, textarea, button:not(.request-detail-close)')]
+      .map(control => ({ control, disabled: control.disabled }));
     for (const item of controls) item.control.disabled = true;
     return () => { for (const item of controls) if (attempt.mounted.isCurrent() && item.control.isConnected) item.control.disabled = item.disabled; };
   }
@@ -177,14 +232,37 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     onReceipt(message, attempt.owner, attempt, { detailAvailable, queueSequence: queueSequence() });
   }
   function releaseAttempt(attempt) { if (activeAttempt === attempt) activeAttempt = null; }
-  async function reloadAfterMutation(attempt) {
+  async function reloadAfterMutation(attempt, retained = null) {
     const refreshed = await refreshQueue({ skipDeepLink: true, silent: true });
     if (!attempt.isCurrent()) return null;
+    if (retained) {
+      const detailLoaded = await reloadBibLink(attempt.snapshot, retained, attempt.isCurrent);
+      return { refreshed, detailLoaded, isCurrent: attempt.isCurrent };
+    }
     const detailLoaded = await open(attempt.snapshot.id, null, { authoritativeRefresh: true });
     const replacement = lease;
     return { refreshed, detailLoaded,
       isCurrent: () => isPresentationCurrent(replacement, attempt.owner) && (detailLoaded || replacement === attempt.mounted) &&
         isNavigationCurrent(attempt.generation + (detailLoaded ? 1 : 0)) && current?.id === attempt.snapshot.id };
+  }
+  async function reloadBibLink(snapshot, retained, isCurrent = () => isCurrentSelection(snapshot)) {
+    const ownerEditor = editor;
+    try {
+      const target = await prepare(snapshot.id, { scope: getScope() });
+      if (!target?.isCurrent() || !isCurrent() || editor !== ownerEditor) return false;
+      // Recovery reads leave the editor interactive. Retain changes and any
+      // cancellation made while the authoritative response was in flight.
+      const latestDraft = ownerEditor.captureDraft() ?? retained;
+      onUpdated(target.request);
+      renderRequest(target.request, target.configuration, null, { ...latestDraft, needsReload: false });
+      if (!latestDraft.linking) host.focusClose();
+      return true;
+    } catch (error) {
+      if (isCurrent() && !isAbortError(error) && error.status !== 401) {
+        editor?.showBibLinkError('Current request details could not be loaded. Reload before retrying the action.', true);
+      }
+      return false;
+    }
   }
   async function deleteTitleRequest(snapshot) {
     if (!allowRequestMutation(snapshot, { consumes: null })) return;
@@ -218,8 +296,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         : error.message || 'The title request was not deleted. Review its current state.', uncertain ? 'warning' : 'error');
     } finally { attempt.pending = false; releaseAttempt(attempt); restore(); }
   }
-  async function mutateRequest(snapshot, path, body, successMessage, draft = null) {
+  async function mutateRequest(snapshot, path, body, successMessage, draft = null, retainEditor = false) {
     if (!allowRequestMutation(snapshot, { consumes: draft })) return;
+    const retained = retainEditor ? editor.captureDraft() : null;
     const attempt = beginAttempt(snapshot, path, body), restore = disableControls(attempt);
     announce('Saving request...');
     try {
@@ -248,12 +327,17 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       recordReceipt(attempt, `${message} Sign in again to review the committed request.`, Boolean(detail));
       if (detail) {
         onUpdated(detail);
-        renderRequest(detail, configurations.get(String(detail.libraryOrgId))?.value || {}, editor?.acceptedVerification(detail, body));
+        renderRequest(detail, configurations.get(String(detail.libraryOrgId))?.value || {}, editor?.acceptedVerification(detail, body), retained);
+        if (retained) showBibLinkOutcome(message);
       }
-      else {
+      else if (retained) {
+        const recovery = `${message} Current details could not refresh. Reload before making another change.`;
+        editor.showBibLinkError(recovery, true);
+        showBibLinkOutcome(recovery, true);
+      } else {
         disposeChildren(); current = Object.freeze({ id: snapshot.id, version: null });
         attempt.mounted.heading(snapshot.title, `${snapshot.libraryOrgName} · Request ${snapshot.id}`);
-        attempt.mounted.content.replaceChildren(element('p', { text: 'The action committed. Reload this request to review current details.' }));
+        showDetailsUnavailable(attempt.mounted, 'The action committed. Reload this request to review current details.');
       }
       host.focusClose(); announce(message, notification.partial || patronNotification.partial ? 'warning' : 'success');
       releaseAttempt(attempt);
@@ -270,7 +354,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         ['request_outcome_unconfirmed', 'hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code));
       attempt.outcome = recordedProviderOutcome ? 'provider_recorded' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 && error.response?.code === 'duplicate_open_request') {
-        if (attempt.isCurrent()) await showDuplicateRecovery(attempt, error.response.duplicate); return;
+        if (attempt.isCurrent()) await showDuplicateRecovery(attempt, error.response.duplicate, retained); return;
       }
       const holdReview = path.endsWith('/place-hold') && error.status === 409;
       const pickupReview = path.endsWith('/pickup-preference') && Boolean(error.response?.operationId);
@@ -283,15 +367,37 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       if (needsReceipt) recordReceipt(attempt, `${message} Sign in again to check the authoritative result before retrying.`);
       if (!attempt.isCurrent()) return;
       if (error.status === 409 || uncertain || recordedProviderOutcome) {
-        const review = await reloadAfterMutation(attempt);
+        const review = await reloadAfterMutation(attempt, retained);
         if (needsReceipt && review?.refreshed === true && review.detailLoaded === true) clearReceipt(attempt);
-        if (review?.isCurrent()) announce(message, 'error');
+        if (review?.isCurrent()) {
+          const feedback = retained && uncertain && review.detailLoaded
+            ? `The response was not confirmed. Current saved state: ${statusLabel(current.status)}. Review the saved BIB before retrying.` : message;
+          announce(feedback, 'error');
+          if (retained) {
+            showBibLinkOutcome(feedback, true);
+            editor.showBibLinkError(review.detailLoaded ? feedback : 'Current request details could not be loaded. Reload before retrying the action.', !review.detailLoaded);
+          }
+        }
+        return { outcome: uncertain && !review?.detailLoaded ? 'uncertain' : 'rejected', message, code: error.response?.code };
       } else if (error.status !== 401 && !isAbortError(error)) {
         const message = error.message || 'The request could not be updated.';
         announce(message, 'error');
-        return { outcome: 'rejected', message };
+        return { outcome: 'rejected', message, code: error.response?.code };
       }
     } finally { attempt.pending = false; releaseAttempt(attempt); restore(); }
+  }
+  function showBibLinkOutcome(message, error = false) {
+    const panel = lease?.content.querySelector('.request-workflow-panel');
+    if (!panel) return;
+    panel.querySelector('.bib-link-outcome')?.remove();
+    panel.append(element('p', { className: 'bib-link-outcome', role: error ? 'alert' : 'status' },
+      [message, element('span', { className: 'bib-link-draft-status' })]));
+    updateBibLinkDraftStatus(editor?.isDirty());
+  }
+  function updateBibLinkDraftStatus(dirty) {
+    const status = lease?.content.querySelector('.bib-link-draft-status');
+    const message = dirty ? ' Other request edits remain unsaved.' : '';
+    if (status && status.textContent !== message) status.textContent = message;
   }
   async function mutateOperation(snapshot, operation, action, body, draft = null) {
     if (!allowRequestMutation(snapshot, { consumes: draft })) return;
@@ -333,12 +439,18 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       } else if (error.status !== 401 && !isAbortError(error)) announce(error.message || 'Hold recovery could not be updated.', 'error');
     } finally { attempt.pending = false; releaseAttempt(attempt); restore(); }
   }
-  async function showDuplicateRecovery(attempt, duplicate) {
-    const review = await reloadAfterMutation(attempt);
+  async function showDuplicateRecovery(attempt, duplicate, retained = null) {
+    const review = await reloadAfterMutation(attempt, retained);
     if (!review?.isCurrent()) return;
     if (!review.detailLoaded) {
-      announce('The attempted change was not saved because another open request has this BIB. Current details could not refresh; reload this request before deciding whether to close it.', 'error'); return;
+      const message = 'The attempted change was not saved because another open request has this BIB. Current details could not refresh; reload this request before deciding whether to close it.';
+      if (retained) {
+        editor.showBibLinkError(message, true);
+        showBibLinkOutcome(message, true);
+      }
+      announce(message, 'error'); return;
     }
+    if (retained) editor.showBibLinkError('The BIB association and Already own action were not saved because another open request has this BIB. Your selected BIB and other edits remain unsaved.');
     const snapshot = current, mounted = lease, child = workflows;
     const live = () => review.isCurrent() && mounted.isCurrent() && current === snapshot;
     const label = duplicate && typeof duplicate.id === 'string' && /^\d+$/.test(duplicate.id)
@@ -348,8 +460,10 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     panel.append(element('h3', { id: 'duplicate-recovery-title', text: 'Duplicate BIB request' }),
       element('p', { text: `The attempted change was not saved. This patron already has ${label}.` }),
       element('p', { text: 'Close this current request as a duplicate, or leave it open to edit or select another BIB.' }));
+    if (retained && editor.isDirty()) panel.append(element('p', { text: 'Your unsaved edits and selected BIB are retained. Save or revert those edits before closing this request as a duplicate.' }));
     const edit = element('button', { type: 'button', onclick: () => {
       if (!panel.isConnected || !live()) return;
+      endInlineAction(panel);
       panel.remove(); mounted.content.querySelector('.edit-form input[inputmode="numeric"]')?.focus(); announce('The request remains open. Edit it or select another BIB.');
     } }, 'Continue editing');
     const closeDuplicate = element('button', { type: 'button', className: 'secondary-button', onclick: () => {
@@ -361,10 +475,11 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       mounted.content.querySelector('.request-detail-tabs [role="tab"]')?.click();
       slot.append(panel);
     } else mounted.content.querySelector('.action-bar')?.after(panel);
+    beginInlineAction(panel, () => edit.click());
     (snapshot.status === 'closed' ? edit : closeDuplicate).focus();
     announce('The attempted change was not saved. Review the duplicate request and choose whether to close this request.', 'error');
   }
-  function renderRequest(request, configuration, verified = null) {
+  function renderRequest(request, configuration, verified = null, retained = null) {
     if (tabRequestId !== String(request.id)) { tabRequestId = String(request.id); selectedTab = 'details'; }
     disposeChildren();
     drafts = createDraftScope();
@@ -388,6 +503,10 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     const context = Object.freeze({ request: snapshot, actor: owner, root: mounted.content, scope,
       isCurrent: live, isPending: hasPendingMutation,
       showDetails: () => activateTab('details'),
+      hasInlineAction: () => inlineActions.size > 0,
+      beginInlineAction: (panel, cancel) => { if (live()) beginInlineAction(panel, cancel); },
+      endInlineAction: panel => { if (live()) endInlineAction(panel); },
+      cancelInlineAction: () => live() && cancelInlineAction(),
       admit: declaration => live() && allowRequestMutation(snapshot, declaration),
       confirm: async (options, draft = null, discardOnly = false) => {
         // Revert owns only this editor; unrelated inline drafts must survive it.
@@ -402,11 +521,18 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         return await confirmAction({ ...options, isCurrent }) && isCurrent();
       },
       mutate: (path, body, message, draft = null) => live() ? mutateRequest(snapshot, path, body, message, draft) : Promise.resolve(),
+      completeBibLink: (bibId, draft) => live() ? mutateRequest(snapshot,
+        `/api/asap/staff/title-requests/${snapshot.id}/action`,
+        { version: snapshot.version, action: 'alreadyOwn', bibid: bibId, staffSelectedBibId: bibId },
+        'BIB association and Already own action saved.', draft, true) : Promise.resolve(),
+      reloadBibLink: retained => live() ? reloadBibLink(snapshot, retained, live) : Promise.resolve(false),
       mutateOperation: (operation, action, body, draft = null) => live() ? mutateOperation(snapshot, operation, action, body, draft) : Promise.resolve(),
       delete: () => live() ? deleteTitleRequest(snapshot) : Promise.resolve(),
       openCopy: opener => live() ? openCopy(snapshot, context, opener) : Promise.resolve(false)
     });
-    editor = createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot, verified, request: send });
+    editor = createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot,
+      closeDetail: () => host.requestClose(), onDirtyChange: dirty => { if (live()) updateBibLinkDraftStatus(dirty); },
+      verified, retained, request: send });
     workflows = createRequestWorkflows({ context, editor, announce, request: send });
     const status = statusLabel(request.status);
     lease?.heading(request.title, `${request.libraryOrgName} · Request ${request.id}`, {
@@ -459,10 +585,33 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     const details = element('dl', { className: 'detail-grid' });
     addDetail(details, 'Patron', patronName).replaceChildren(patronValue);
     addDetail(details, 'Barcode', request.barcode).replaceChildren(researchRecordValue(request.barcode, request.research, 'patron'));
-    addDetail(details, 'Email', request.email);
-    addDetail(details, 'Recorded ASAP pickup', request.preferredPickupBranchName || request.preferredPickupBranchId)
-      .append(element('small', { text: 'Historical; holds use live Polaris pickup preference.' }));
-    details.title = "Recorded ASAP pickup is a historical snapshot. Each unfilled request uses the patron's live Polaris pickup preference when its hold is placed. Updating pickup changes the patron's account default; existing holds keep their recorded destination.";
+    const email = text(request.email, '');
+    const emailCell = addDetail(details, 'Email', email);
+    if (email) {
+      const encodedEmail = encodeURIComponent(email);
+      const separator = encodedEmail.lastIndexOf('%40');
+      const recipient = separator < 0 ? encodedEmail
+        : `${encodedEmail.slice(0, separator)}@${encodedEmail.slice(separator + 3)}`;
+      emailCell.replaceChildren(element('a', { href: `mailto:${recipient}`, text: email }));
+    }
+    const pickupCell = addDetail(details, 'Recorded ASAP pickup', request.preferredPickupBranchName || request.preferredPickupBranchId);
+    const pickupHelp = element('details', { className: 'recorded-pickup-help' });
+    const pickupHelpToggle = element('summary', { className: 'recorded-pickup-help-toggle', 'aria-label': 'Pickup details' }, [icon('info-circle'), 'Pickup details']);
+    let pickupEscapeHeld = false;
+    pickupHelp.append(pickupHelpToggle, element('div', { className: 'recorded-pickup-help-content' }, element('p', {
+      text: "The recorded location is a historical snapshot. Each unfilled request uses the patron's live Polaris pickup preference when its hold is placed. Updating pickup changes the patron's account default; existing holds keep their recorded destination."
+    })));
+    pickupHelp.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      if (pickupEscapeHeld) { event.preventDefault(); event.stopPropagation(); return; }
+      if (!pickupHelp.open) return;
+      event.preventDefault(); event.stopPropagation(); pickupEscapeHeld = true; pickupHelp.open = false; pickupHelpToggle.focus();
+    });
+    pickupHelp.addEventListener('keyup', event => {
+      if (event.key !== 'Escape' || !pickupEscapeHeld) return;
+      event.preventDefault(); event.stopPropagation(); pickupEscapeHeld = false;
+    });
+    pickupCell.append(element('small', { className: 'recorded-pickup-summary', text: 'Historical; holds use live Polaris pickup preference.' }), pickupHelp);
     patronContext.prepend(details);
     body.append(patronContext);
     detailsPanel.append(element('p', { className: 'field-help request-metadata',
@@ -530,6 +679,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     body.append(middle, footerRoot);
     lease.content.replaceChildren(body);
     activateTab(selectedTab);
+    editor.restoreBibLink();
     void editor.loadResearch();
   }
 

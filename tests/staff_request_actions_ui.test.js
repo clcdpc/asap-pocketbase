@@ -631,10 +631,13 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     button.click();
     await until(() => document.querySelector('.action-choice'), 'action choice opens');
     let choice = document.querySelector('.action-choice');
+    assert.equal(document.querySelector('.action-bar').hidden, true, 'Inline review hides competing request actions');
+    assert.equal(choice.contains(document.activeElement), true, 'Inline review receives focus');
     if (action === 'purchase' && profileDefault && !scenarioOptions.staleMutation) {
       document.querySelector('#request-dialog').dispatchEvent(
         new dom.window.Event('cancel', { bubbles: true, cancelable: true }));
       assert.equal(document.querySelector('.action-choice'), null, 'Escape dismisses action choices');
+      assert.equal(document.querySelector('.action-bar').hidden, false);
       assert.equal(document.activeElement, button, 'Escape returns focus to action button');
       button.click();
       choice = document.querySelector('.action-choice');
@@ -664,11 +667,14 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     if (scenarioOptions.cancelReview) {
       [...choice.querySelectorAll('button')].find(control => control.textContent.trim() === 'Cancel').click();
       assert.equal(choice.isConnected, false);
+      assert.equal(document.querySelector('.action-bar').hidden, false);
+      assert.equal(document.activeElement, button);
       assert.equal(payload, null, 'Cancel sends no workflow mutation');
       assert.deepEqual(confirmMessages, []);
       return;
     }
     if (action === 'reject') assert.equal(choice.querySelector('button[type="submit"]').textContent, 'Reject and close');
+    else assert.equal(choice.querySelector('button[type="submit"]').textContent, 'Confirm purchase');
     choice.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     choice.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     await until(() => payload !== null, 'action submitted');
@@ -747,6 +753,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       }
       await until(() => document.querySelector('.duplicate-recovery'), 'duplicate recovery appears');
       const panel = document.querySelector('.duplicate-recovery');
+      assert.equal(document.querySelector('.action-bar').hidden, true, 'Duplicate recovery hides competing actions');
       assert.match(panel.textContent, /Request 9007199254740994/);
       assert.match(panel.textContent, /Existing <img src=x onerror=alert\(1\)>/);
       assert.match(panel.textContent, /Pending hold/);
@@ -776,6 +783,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (scenarioOptions.duplicateDecline) {
         [...panel.querySelectorAll('button')].find(item => item.textContent.includes('Continue')).click();
         assert.equal(document.querySelector('.duplicate-recovery'), null);
+        assert.equal(document.querySelector('.action-bar').hidden, false);
         assert.equal(mutationPayloads.length, 1, 'declining does not mutate');
         assert.equal(document.querySelector('.edit-form input[inputmode="numeric"]') !== null, true);
         assert.equal(document.querySelector('#request-dialog .status-badge').textContent, expectedStatus);

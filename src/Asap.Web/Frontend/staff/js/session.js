@@ -32,7 +32,7 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
       onAccepted(staff);
       for (const feature of getFeatures()) feature.setStaff?.(staff);
       shell.showWorkspace(staff); shell.announce('Staff session ready.');
-      await navigation.navigateFromUrl();
+      await navigation.navigateFromUrl({ initial: true });
     } catch (error) {
       if (!disposed && load.isCurrent() && !isAbortError(error)) lose('Staff access could not be loaded. Try signing in again.');
     } finally { reads.finish('session', load.token); }

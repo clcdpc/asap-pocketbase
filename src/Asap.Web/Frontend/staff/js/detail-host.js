@@ -10,6 +10,7 @@ export function createDetailHost({ root }) {
   let mounted = null;
   let cancelFocus = null;
   let disposed = false;
+  let escapeHeld = false;
 
   function cancelFocusReturn() { cancelFocus?.(); cancelFocus = null; }
 
@@ -47,6 +48,7 @@ export function createDetailHost({ root }) {
   function release(owner, options = {}) {
     if (mounted !== owner) return false;
     mounted = null;
+    escapeHeld = false;
     cancelFocusReturn();
     owner.dispose?.(options);
     if (root.open) root.close();
@@ -57,9 +59,21 @@ export function createDetailHost({ root }) {
   }
 
   close.addEventListener('click', () => mounted?.onClose?.(), { signal: events.signal });
+  root.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !escapeHeld && !mounted?.hasInlineAction?.()) return;
+    // Inline cancellation owns the press, including repeats after focus returns
+    // to the toolbar. A native dialog cancel is not always cancelable.
+    event.preventDefault(); event.stopPropagation();
+    if (!escapeHeld) (mounted?.onEscape || mounted?.onClose)?.();
+    escapeHeld = true;
+  }, { signal: events.signal });
+  root.addEventListener('keyup', event => {
+    if (event.key !== 'Escape' || !escapeHeld) return;
+    event.preventDefault(); event.stopPropagation(); escapeHeld = false;
+  }, { signal: events.signal });
   root.addEventListener('cancel', event => {
     event.preventDefault();
-    (mounted?.onEscape || mounted?.onClose)?.();
+    if (!escapeHeld) (mounted?.onEscape || mounted?.onClose)?.();
   }, { signal: events.signal });
   return {
     isOpen: () => root.open,

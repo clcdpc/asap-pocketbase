@@ -38,6 +38,9 @@ async function choose(page, name) {
   const review = page.locator('#request-dialog .action-choice');
   await review.waitFor();
   await review.locator('button[type=submit]:not([disabled])').waitFor();
+  assert.equal(await page.locator('#request-dialog .action-bar').isVisible(), false, 'Inline review hides competing request actions');
+  assert.equal(await review.evaluate(node => node.contains(document.activeElement)), true, 'Focus enters the inline review');
+  assert.equal(await review.locator('button[type=submit]').textContent(), name === 'Purchase' ? 'Confirm purchase' : 'Reject and close');
   assert.equal(await page.locator('#request-dialog .request-more[open]').count(), 0, 'Action selection lets the application dismiss More');
   return review;
 }

@@ -9,8 +9,10 @@ const { JSDOM } = require('jsdom');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-research-'));
   const dom = new JSDOM('<section id="links"></section>', { url: 'https://localhost/staff/' });
   try {
-    fs.copyFileSync(path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend', 'staff', 'js', 'research.js'),
-      path.join(temporary, 'research.js'));
+    for (const name of ['research', 'catalog-queue', 'ui', 'session-identity', 'recent-requests', 'mutation-outcome']) {
+      fs.copyFileSync(path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend', 'staff', 'js', `${name}.js`),
+        path.join(temporary, `${name}.js`));
+    }
     fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
     global.document = dom.window.document;
     global.window = dom.window;
@@ -155,8 +157,9 @@ const { JSDOM } = require('jsdom');
         <select id="polaris-mode"><option value="title">Title</option></select>
         <label id="polaris-query-field"><span id="polaris-query-label"></span><input id="polaris-query"></label>
         <div id="polaris-pair-fields"><input id="polaris-title"><input id="polaris-author"></div>
-        <p id="polaris-status"></p><ul id="polaris-results"></ul>
+        <p id="polaris-status"></p><p id="polaris-ownership-status"></p><ul id="polaris-results"></ul>
         <form id="polaris-form"></form><button id="close-polaris"></button>
+        <button id="polaris-add-author" type="button"></button><section id="polaris-confirmation" hidden></section>
       </dialog>`);
     const dialog = document.querySelector('#polaris-dialog');
     dialog.showModal = () => { dialog.open = true; };

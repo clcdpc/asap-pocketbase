@@ -127,6 +127,7 @@ const scenarios = [
         await close(t);
         await activateRowAction(row, 'assign');
         const assignment = t.page.locator('#request-dialog .inline-form'); await assignment.waitFor();
+        assert.equal(await t.page.locator('#request-dialog .action-bar').isVisible(), false);
         await assignment.getByRole('button', { name: 'Cancel', exact: true }).click(); await close(t);
       }
       assert.deepEqual(await json(t.context, t.origin, '/api/asap/staff/title-requests/' + before.id), before);
@@ -153,10 +154,14 @@ const scenarios = [
     const reads = []; t.page.on('request', request => { if (new URL(request.url()).pathname === '/api/asap/staff/title-requests/' + f.id) reads.push(request.method()); });
     await activateRowAction(row, 'purchase', 'Enter');
     const review = t.page.locator('#request-dialog .action-choice'); await review.locator('button[type="submit"]:not([disabled])').waitFor();
+    assert.equal(await t.page.locator('#request-dialog .action-bar').isVisible(), false);
+    assert.equal(await review.locator('button[type=submit]').textContent(), 'Confirm purchase');
     assert.equal(reads.length, 1, 'Direct workflow click opens details exactly once');
     await review.getByRole('button', { name: 'Cancel', exact: true }).click(); await close(t);
     await actionColumn(t.page, 8); // A real narrow column moves Reject into overflow.
     await activateRowAction(row, 'reject', 'Space'); await review.locator('button[type="submit"]:not([disabled])').waitFor();
+    assert.equal(await t.page.locator('#request-dialog .action-bar').isVisible(), false);
+    assert.equal(await review.locator('button[type=submit]').textContent(), 'Reject and close');
     assert.equal(reads.length, 2, 'Overflow workflow click opens details exactly once');
     await review.getByRole('button', { name: 'Cancel', exact: true }).click(); await close(t);
     await unchanged(t.context, t.origin, f, before); assert.equal(t.mutations.length, 0);

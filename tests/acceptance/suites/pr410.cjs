@@ -519,7 +519,7 @@ const scenarios = [
           if ([status.textContent, ...texts].some(text => text?.startsWith('Workflow action completed.'))) window.acceptanceUnverifiedSuccess = true;
         }).observe(status, { childList: true, subtree: true, characterData: true, characterDataOldValue: true });
       });
-      await review.getByRole('button', { name: 'Purchase', exact: true }).click();
+      await review.getByRole('button', { name: 'Confirm purchase', exact: true }).click();
       await t.page.locator('#app-status').filter({ hasText:
         'Search Polaris, select the matching BIB, and save it before moving to Pending hold.' }).waitFor();
       assert.equal(await review.isVisible(), true, 'Blocked submission leaves the review open');

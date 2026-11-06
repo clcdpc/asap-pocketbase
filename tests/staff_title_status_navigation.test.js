@@ -59,6 +59,9 @@ async function until(predicate, message) {
       navigation.align({ scope: '2' }); title.setStaff(staff); copy.setStaff(staff);
       await title.refresh();
       await until(() => get('#request-grid .request-title-link'), 'Initial title rows render.');
+      const counts = () => [...get('#status-tabs').querySelectorAll('[data-status]')].map(tab => tab.getAttribute('aria-label'));
+      const names = ['Suggestions (55)', 'Purchases (1)', 'Pending holds (0)', 'Placed holds (2)', 'Closed (3)'];
+      assert.deepEqual(counts(), names, 'All five names include authoritative totals, including the empty stage.');
       assert.equal(title.isReady({ scope: '2', status: 'closed' }), true,
         'Readiness describes the scope-wide accepted collection, not its previous selected status.');
       for (const status of [...stages.slice(1), stages[0]]) {
@@ -71,7 +74,16 @@ async function until(predicate, message) {
         assert.equal(rendered, before.rendered + 1, 'One selection must request exactly one table revision.');
         assert.equal(title.isReady(navigation.context()), true);
         assert.equal(title.refreshOnEntry(), undefined, 'Same-scope re-entry uses accepted data.');
+        assert.deepEqual(counts(), names, 'Stage selection keeps every scope-wide total.');
       }
+      const suggestionTab = get('#status-tabs [data-status="suggestion"]');
+      suggestionTab.focus(); suggestionTab.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+      await until(() => navigation.context().status === 'closed', 'Arrow Left wraps to Closed.');
+      assert.equal(document.activeElement, get('#status-tabs [data-status="closed"]'));
+      assert.deepEqual([...get('#status-tabs').querySelectorAll('[data-status]')].map(tab => tab.tabIndex), [-1, -1, -1, -1, 0]);
+      document.activeElement.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+      await until(() => navigation.context().status === 'suggestion', 'Home returns to Suggestions.');
+      assert.equal(document.activeElement, suggestionTab); assert.deepEqual(counts(), names);
       const beforeRecent = calls.length;
       data[0] = { ...data[0], status: 'pending_hold' };
       const alignment = await navigation.alignTitle(data[0], { fromRecent: true }, session.preferences(), await navigation.prepareDeparture());
