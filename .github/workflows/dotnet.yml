@@ -124,11 +124,6 @@ jobs:
       - name: Validate workflow configuration
         run: bash scripts/ci/check-workflows.sh
 
-      # Resolve native libraries before identity/build: --with-deps can upgrade
-      # packages independently of the VM epoch. This does not install a browser.
-      - name: Resolve CI native runtime dependencies
-        run: npx playwright install-deps chromium
-
       - name: Restore and build
         run: dotnet build Asap.sln --configuration Release
 
@@ -163,10 +158,14 @@ jobs:
         run: bash scripts/ci/run-with-performance.sh npm test -- --ci-remaining
 
       - name: Generate ephemeral SQL test credentials
+        id: sql
         if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
+          sql_image="$(python3 -B scripts/ci/reuse.py sql-image)"
+          echo "image=$sql_image" >> "$GITHUB_OUTPUT"
+          echo "ASAP_CI_SQL_IMAGE=$sql_image" >> "$GITHUB_ENV"
           sql_password="Asap$(openssl rand -hex 32)Aa1!"
           echo "::add-mask::$sql_password"
           echo "ASAP_TEST_SQL_SA_PASSWORD=$sql_password" >> "$GITHUB_ENV"
@@ -176,7 +175,7 @@ jobs:
         if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
         shell: bash
         env:
-          SQL_IMAGE: ${{ steps.reuse.outputs.sql_image || 'mcr.microsoft.com/mssql/server:2022-latest' }}
+          SQL_IMAGE: ${{ steps.sql.outputs.image }}
         run: |
           set -euo pipefail
           MSSQL_SA_PASSWORD="$ASAP_TEST_SQL_SA_PASSWORD" \
@@ -212,7 +211,7 @@ jobs:
 
       - name: Install browser acceptance dependencies
         if: ${{ steps.reuse.outputs.browser != 'true' }}
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Run browser accessibility tests
         id: browser
@@ -278,7 +277,8 @@ jobs:
         if: ${{ steps.verify.outcome == 'success' && steps.dotnet.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-dotnet-${{ github.run_id }}-${{ github.run_attempt }}
+          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-dotnet-${{ steps.reuse.outputs.dotnet_fingerprint }}
+          overwrite: true
           path: .artifacts/test-reuse/evidence/dotnet/
           if-no-files-found: ignore
           retention-days: 14
@@ -287,7 +287,8 @@ jobs:
         if: ${{ steps.verify.outcome == 'success' && steps.frontend.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-frontend-${{ github.run_id }}-${{ github.run_attempt }}
+          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-frontend-${{ steps.reuse.outputs.frontend_fingerprint }}
+          overwrite: true
           path: .artifacts/test-reuse/evidence/frontend/
           if-no-files-found: ignore
           retention-days: 14
@@ -296,7 +297,8 @@ jobs:
         if: ${{ steps.verify.outcome == 'success' && steps.browser.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-browser-${{ steps.reuse.outputs.browser_fingerprint }}
+          overwrite: true
           path: .artifacts/test-reuse/evidence/browser/
           if-no-files-found: ignore
           retention-days: 14

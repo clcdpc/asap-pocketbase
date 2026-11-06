@@ -550,12 +550,14 @@ async function main() {
       assert.equal(step(full, name).if, undefined, `${name} must never depend on a reuse HIT`);
     }
     assert.equal(step(full, 'Remove SQL Server test container').if, '${{ always() }}');
-    assert.ok(!reuse.exclusions.some((rule) => rule.paths.includes('.github/workflows/dotnet.yml')));
+    assert.equal(reuse.exclusions, undefined, 'Use one source ownership policy');
+    const executionInputs = reuse.source_inputs.find((rule) => rule.paths.includes('.github/workflows/dotnet.yml'));
+    assert.deepEqual(executionInputs.suites, ['dotnet', 'browser', 'frontend']);
   });
   await check('full qualification owns one runner, build, discovery and SQL lifecycle with sequential suites', async () => {
     assert.deepEqual(Object.keys(workflow.jobs), ['validation-policy', 'build-test-package', 'draft-validation', 'validation', 'deploy-test-iis']);
     assert.equal(full['timeout-minutes'], 120);
-    assert.equal(reuse.schema, 4);
+    assert.equal(reuse.schema, 5);
     assert.equal(reuse.browser_job, undefined);
     assert.equal(step(full, 'Find reusable test executions').env.ASAP_CI_SUITES, undefined);
     assert.equal(step(full, 'Verify required test suites').env.ASAP_CI_SUITES, undefined);
@@ -574,6 +576,9 @@ async function main() {
       assert.doesNotMatch(test.run, /&(?!&)|\b(nohup|Start-Process)\b/);
       assert.equal(test['continue-on-error'], undefined);
       assert.equal(step(full, 'Verify required test suites').env[`${suite.toUpperCase()}_OUTCOME`], `\${{ steps.${suite}.outcome }}`);
+      const upload = step(full, `Upload original ${suite} execution evidence`);
+      assert.equal(upload.with.name, `asap-test-evidence-v\${{ steps.reuse.outputs.schema }}-${suite}-\${{ steps.reuse.outputs.${suite}_fingerprint }}`);
+      assert.equal(upload.with.overwrite, true, 'Retry replaces only that run\'s same-key artifact');
     }
     const credentials = step(full, 'Generate ephemeral SQL test credentials').run;
     assert.match(credentials, /::add-mask::\$sql_password/);
@@ -583,7 +588,10 @@ async function main() {
     assert.match(step(full, 'Wait for SQL Server').run, /docker exec --interactive "\$ASAP_CI_SQL_CONTAINER"/);
     assert.match(step(full, 'Remove SQL Server test container').run, /docker rm --force "\$ASAP_CI_SQL_CONTAINER"/);
     assert.equal(step(full, 'Remove SQL Server test container').if, '${{ always() }}');
-    assert.equal(step(full, 'Install browser acceptance dependencies').run, 'npx playwright install chromium');
+    assert.equal(step(full, 'Install browser acceptance dependencies').run, 'npx playwright install --with-deps chromium');
+    assert.match(credentials, /python3 -B scripts\/ci\/reuse.py sql-image/);
+    assert.equal(step(full, 'Start SQL Server 2022').env.SQL_IMAGE, '${{ steps.sql.outputs.image }}');
+    assert.ok(!full.steps.some((candidate) => /playwright install-deps/.test(candidate.run || '')));
     for (const context of [await routed(pr('ready_for_review', false)), await routed(pr('converted_to_draft', true))]) {
       const active = Object.values(workflow.jobs).filter((job) => job['runs-on'] === 'clc-linux' && enabled(job, context));
       assert.equal(active.length, 1, 'Policy selects exactly one clc-linux job');

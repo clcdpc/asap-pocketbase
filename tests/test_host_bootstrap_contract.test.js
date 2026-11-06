@@ -168,6 +168,9 @@ try {
     path.join(hostRoot, 'DataProtection-Keys')
   );
   assert.strictEqual(generatedApplication.Application.LogPath, path.join(hostRoot, 'Logs'));
+  assert.strictEqual(generatedDeployment.IisSiteName, 'ASAP');
+  assert.strictEqual(generatedDeployment.IisAppPoolName, 'ASAP');
+  assert.strictEqual(generatedDeployment.DeploymentPath, 'D:\\Sites\\ASAP');
   assert.strictEqual(generatedDeployment.StagingRoot, path.join(hostRoot, 'Staging'));
   assert.strictEqual(generatedDeployment.AllowSqlDataLoss, false, 'new hosts must default to protected SQL publication');
   assert.strictEqual(generatedDeployment.BackupRoot, path.join(hostRoot, 'Backups'));
