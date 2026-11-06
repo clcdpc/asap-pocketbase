@@ -537,6 +537,17 @@ acceptance source-preservation guard failed against its older main pin and now
 pins verified `e20c0698`; current CI policy and resources are preserved exactly.
 The consolidated PR records the resulting final revision's fresh qualification.
 
+The independently completed focused `i471` acceptance run on `854b512` found one
+additional objective failure: a saved explicit empty Common creator override
+rendered no ownership/reset controls. The empty-list return skipped the existing
+group-status refresh. It now refreshes the same controls as a nonempty list.
+Retained red/green frontend checks cover saved-empty population, pending reset,
+Discard, deleting the last creator, equal-empty System comparison and unrelated
+owned records. Both affected frontend files pass. The original 10/11 acceptance
+receipt remains intact; the completed focused tooling checkout qualifies the fix
+against its required assertion. This is final acceptance remediation, not a third
+independent issue-level review. Current CI on `854b512` continues unchanged.
+
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
 Complex implementation uses Sol MAX; focused implementation and Pass 1 use

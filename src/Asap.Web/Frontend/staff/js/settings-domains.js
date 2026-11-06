@@ -986,6 +986,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     if (values.length === 0) {
       container.append(element('p', { className: 'settings-empty', text: 'No values configured.' }));
       setEditorControls('creator', container);
+      refreshGroupStatus('creators');
       return;
     }
     for (const [index, value] of values.entries()) {

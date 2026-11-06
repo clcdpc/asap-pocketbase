@@ -110,6 +110,45 @@ const { JSDOM } = require('jsdom');
       publicationOptions: set([{ id: 'different-library-choice', label: 'Any year', enabled: true, sortOrder: 0 }]) } } }, false);
     assert.doesNotMatch(root.querySelector('#publication-options-inherit-field').textContent, /Matches system/,
       'Equal visible labels with different public selection IDs are different whole-list values.');
+    const creatorStatus = () => root.querySelector('#common-creators-inherit-field');
+    const emptyCreators = { ...data, stored: { ...data.stored,
+      libraryOverride: { ...override, commonCreators: set([]) } } };
+    editors.populate(emptyCreators, false);
+    const emptyAccepted = JSON.parse(editors.snapshot()).creators;
+    assert.equal(editors.collect().changed, false);
+    assert.deepEqual(editors.collect().values.creators, []);
+    assert.equal(editors.collect().values.creatorsUseSystem, false);
+    assert.match(creatorStatus().textContent, /Library setting/);
+    assert.equal(creatorStatus().querySelectorAll('.settings-use-system').length, 1,
+      'Reloading a saved empty creator override retains its ownership and reset action.');
+    creatorStatus().querySelector('.settings-use-system').click(); await Promise.resolve();
+    assert.equal(editors.collect().changed, true);
+    assert.equal(editors.collect().values.creatorsUseSystem, true);
+    assert.deepEqual(editors.collect().values.creators, ['System creator']);
+    assert.match(creatorStatus().textContent, /Using system value · Unsaved/);
+    assert.equal(editors.collect().values.formats.find(value => value.id === owned.id).label, owned.label);
+    assert.equal(editors.collect().values.templates.find(value => value.id === customTemplate.id).templateKey, customTemplate.templateKey);
+    editors.populate(emptyCreators, false);
+    assert.deepEqual(JSON.parse(editors.snapshot()).creators, emptyAccepted, 'Discard restores the accepted explicit empty override.');
+    assert.equal(editors.collect().changed, false);
+    const lastCreator = { ...emptyCreators, stored: { ...emptyCreators.stored,
+      configuredSystem: { ...configured, commonCreators: set([]) },
+      libraryOverride: { ...override, commonCreators: set(['Library only']) } } };
+    editors.populate(lastCreator, false);
+    const lastAccepted = JSON.parse(editors.snapshot()).creators;
+    root.querySelector('#common-creators-editor [data-row-action="delete"]').click();
+    assert.deepEqual(editors.collect().values.creators, []);
+    assert.equal(editors.collect().values.creatorsUseSystem, false);
+    assert.match(creatorStatus().textContent, /Library setting · Matches system · Unsaved/,
+      'Deleting the last creator refreshes the explicit empty draft comparison.');
+    assert.equal(document.activeElement, root.querySelector('#add-common-creator'));
+    creatorStatus().querySelector('.settings-use-system').click(); await Promise.resolve();
+    assert.equal(editors.collect().values.creatorsUseSystem, true);
+    assert.deepEqual(editors.collect().values.creators, []);
+    assert.match(creatorStatus().textContent, /Using system value · Unsaved/);
+    editors.populate(lastCreator, false);
+    assert.deepEqual(JSON.parse(editors.snapshot()).creators, lastAccepted, 'Discard restores the last accepted creator after an empty reset draft.');
+    assert.equal(editors.collect().changed, false);
     const longReference = 'System reference '.repeat(12);
     editors.populate({ ...data, stored: { ...data.stored,
       configuredSystem: { ...configured, formats: [{ ...systemFormat, message: longReference }],
