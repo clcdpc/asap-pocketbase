@@ -64,6 +64,19 @@ reruns and final receipt reconciliation do not add review passes.
 | #463 Direct edit/inheritance | Pending | Pending | Pending | Pending | Pending |
 | #466 Blocking draft navigation | Pending | Pending | Pending | Pending | Pending |
 
+Implementation/reviewer models are selected explicitly on each child agent.
+Orchestration remains in the parent Codex session, as in the #438 record.
+Complex implementation uses Sol MAX; focused implementation and Pass 1 use
+Luna MAX. Pass 2 assignments and actual executed results are recorded per issue.
+
+Environment preparation (not implementation qualification): npm dependencies
+installed; .NET SDK 10.0.303 / Node 24.19.0 and matching Chromium available.
+The baseline Release build passed with zero warnings/errors. Local SQL was
+verified as SQL Server 2022 Developer 16.0.1210.3. Receipts live outside Git at
+`C:\Users\mfields\.codex\tmp\asap-i471\`; final counts come from final-source
+native discovery, never these baseline preparation results. Runner availability
+could not be read through the current token (403); no runner was activated.
+
 Full Staff dark-mode consistency (#456), global search navigation (#467), human
 assistive-technology acceptance (#398), live providers and deployment remain
 outside this implementation. No merge, issue closure, deployment, production tag
