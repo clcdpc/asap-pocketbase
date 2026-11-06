@@ -778,7 +778,26 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   function focusSetRow(index, action) {
     const row = dom.creators.querySelectorAll('[data-domain-row]')[index];
     const target = action ? row?.querySelector(`[data-row-action="${action}"]:not(:disabled)`) : null;
-    (target || row?.querySelector('input') || addButtons.creators)?.focus();
+    const input = row?.querySelector('input');
+    const focusTarget = target || input || addButtons.creators;
+    focusTarget?.focus();
+    if (!row || focusTarget !== input) return;
+
+    const view = root.ownerDocument.defaultView;
+    const style = view.getComputedStyle(input);
+    const clearance = Math.max(6, (parseFloat(style.outlineWidth) || 0) + (parseFloat(style.outlineOffset) || 0)) + 1;
+    const viewport = view.visualViewport;
+    const top = (viewport?.offsetTop || 0) + clearance;
+    let bottom = (viewport?.offsetTop || 0) + (viewport?.height || view.innerHeight) - clearance;
+    const saveBar = root.querySelector('.settings-save-bar');
+    if (saveBar && view.getComputedStyle(saveBar).position === 'sticky') {
+      bottom = Math.min(bottom, saveBar.getBoundingClientRect().top - clearance);
+    }
+
+    const bounds = row.getBoundingClientRect();
+    if (!bounds.height || bounds.height > bottom - top) return;
+    const scroll = bounds.top < top ? bounds.top - top : Math.max(0, bounds.bottom - bottom);
+    if (scroll) view.scrollBy({ top: scroll, behavior: 'instant' });
   }
 
   function updateCodeWarning() {

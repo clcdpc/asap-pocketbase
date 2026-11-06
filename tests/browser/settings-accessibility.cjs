@@ -265,7 +265,9 @@ async function runSourceComponents(artifacts) {
   const states = [];
   for (const configuration of [
     { name: 'desktop', width: 1280, height: 900, zoom: 1 }, { name: 'mobile', width: 390, height: 844, zoom: 1 },
-    { name: 'native-200', width: 1280, height: 900, zoom: 2 }, { name: 'native-400', width: 1440, height: 900, zoom: 4 }
+    { name: 'native-200', width: 1280, height: 900, zoom: 2 },
+    { name: 'native-200-wrapped', width: 1000, height: 900, zoom: 2 },
+    { name: 'native-400', width: 1440, height: 900, zoom: 4 }
   ]) {
     const extension = path.join(__dirname, 'native-zoom-extension');
     const context = await chromium.launchPersistentContext(path.join(artifacts, `${configuration.name}-profile`), {
@@ -327,7 +329,7 @@ async function runSourceComponents(artifacts) {
       assert.equal(await page.evaluate(() => window.accessibilitySettings.isReady()), true,
         await page.locator('#settings-message').textContent());
       const receipt = { ...configuration, physicalWidth: configuration.width, physicalHeight: configuration.height,
-        zoom, focus: [], history: [], scrollCases: [], contrasts: [], accessibility: [] };
+        zoom, focus: [], creatorFallbacks: [], history: [], scrollCases: [], contrasts: [], accessibility: [] };
       const evidence = await context.newCDPSession(page);
       const captureView = async name => {
         const capture = await evidence.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
@@ -383,7 +385,7 @@ async function runSourceComponents(artifacts) {
       assert.equal(await newCreator.getByLabel('Creator', { exact: true }).count(), 1);
       assert.equal(await newCreator.locator('input').evaluate(input => input === document.activeElement), true,
         `${configuration.name}: Add creator focuses the new row input.`);
-      await newCreator.locator('input').fill(`A newly added very long creator ${'catalog label '.repeat(10)}`);
+      await newCreator.locator('input').fill(`A newly added very long creator ${'catalog label '.repeat(10).trimEnd()}`);
       const commonCreatorGeometry = await page.evaluate(() => {
         const rect = node => {
           const bounds = node.getBoundingClientRect();
@@ -428,6 +430,96 @@ async function runSourceComponents(artifacts) {
       await captureView('common-creators');
       receipt.commonCreatorLayout = { compact, ...commonCreatorGeometry };
       await scan('common-creators');
+      if (configuration.name === 'native-200-wrapped') {
+        assert.equal(zoom, 2, 'Boundary fallback coverage uses actual native browser zoom 200%.');
+        assert.ok(commonCreatorGeometry.editor.width < 520,
+          `The 1000px native-200 window must exercise the wrapped creator layout: ${JSON.stringify(commonCreatorGeometry)}`);
+        const valuesBeforeMove = await creatorRows.locator('input').evaluateAll(inputs => inputs.map(input => input.value));
+        const moveExpected = [valuesBeforeMove[1], valuesBeforeMove[0], ...valuesBeforeMove.slice(2)];
+        const moveUp = creatorRows.nth(1).locator('[data-row-action="up"]');
+        assert.equal(await moveUp.isDisabled(), false, 'The second creator can move to the first position.');
+        await moveUp.focus();
+        await page.keyboard.press('Enter');
+        assert.deepEqual(await creatorRows.locator('input').evaluateAll(inputs => inputs.map(input => input.value)), moveExpected,
+          'Move up changes the whole-list order before focusing the first row.');
+        const proveCreatorFallback = async (name, expectedValues, expectedIndex) => {
+          const inputs = creatorRows.locator('input');
+          assert.deepEqual(await inputs.evaluateAll(nodes => nodes.map(input => input.value)), expectedValues,
+            `${name}: the whole creator list has the expected order.`);
+          const target = creatorRows.nth(expectedIndex).locator('input');
+          await prove(target);
+          const focus = receipt.focus.at(-1);
+          const geometry = await page.evaluate(() => {
+            const rect = node => {
+              const bounds = node.getBoundingClientRect();
+              return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
+                width: bounds.width, height: bounds.height };
+            };
+            const input = document.activeElement;
+            const row = input.closest('.settings-creator-row');
+            const label = row.querySelector('.settings-domain-field span');
+            const actions = row.querySelector('.settings-row-actions');
+            const style = getComputedStyle(input);
+            const extent = (parseFloat(style.outlineWidth) || 0) + (parseFloat(style.outlineOffset) || 0);
+            const clearance = Math.max(6, extent) + 1;
+            const viewport = window.visualViewport;
+            const offsetLeft = viewport?.offsetLeft || 0, offsetTop = viewport?.offsetTop || 0;
+            const width = viewport?.width || innerWidth, height = viewport?.height || innerHeight;
+            const usable = { left: offsetLeft + clearance, right: offsetLeft + width - clearance,
+              top: offsetTop + clearance, bottom: offsetTop + height - clearance };
+            const saveBar = document.querySelector('.settings-save-bar');
+            const saveBarBounds = saveBar?.getBoundingClientRect();
+            const stickyBar = saveBar && getComputedStyle(saveBar).position === 'sticky';
+            if (stickyBar) usable.bottom = Math.min(usable.bottom, saveBarBounds.top - clearance);
+            const inputBounds = rect(input), labelBounds = rect(label), rowBounds = rect(row), actionBounds = rect(actions);
+            const ring = { left: inputBounds.left - extent, right: inputBounds.right + extent,
+              top: inputBounds.top - extent, bottom: inputBounds.bottom + extent };
+            const inside = bounds => bounds.left >= usable.left && bounds.right <= usable.right &&
+              bounds.top >= usable.top && bounds.bottom <= usable.bottom;
+            return { value: input.value, focused: document.activeElement === input, focusVisible: input.matches(':focus-visible'),
+              rowIndex: [...document.querySelectorAll('#common-creators-editor .settings-creator-row')].indexOf(row),
+              viewport: { width: innerWidth, height: innerHeight, zoom: devicePixelRatio }, usable, row: rowBounds,
+              label: labelBounds, input: inputBounds, ring, actions: actionBounds,
+              buttons: [...row.querySelectorAll('.settings-row-actions button')].map(button => ({
+                name: button.getAttribute('aria-label'), disabled: button.disabled
+              })), labelVisible: inside(labelBounds), ringVisible: inside(ring),
+              labelAboveInput: labelBounds.bottom <= inputBounds.top + 1 && Math.abs(labelBounds.left - inputBounds.left) < 1 &&
+                Math.abs(labelBounds.right - inputBounds.right) < 1,
+              actionsBelowInput: actionBounds.top >= inputBounds.bottom - 1,
+              scrollWidth: document.documentElement.scrollWidth, overflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          assert.equal(focus.active, true, `${name}: the fallback input owns focus.`);
+          assert.equal(focus.focusVisible, true, `${name}: keyboard focus remains visible.`);
+          assert.ok(focus.outlineWidth >= 2, `${name}: the input retains its focus outline.`);
+          assert.equal(geometry.focused, true);
+          assert.equal(geometry.focusVisible, true);
+          assert.equal(geometry.rowIndex, expectedIndex, `${name}: focus targets the expected surviving row.`);
+          assert.equal(geometry.value, expectedValues[expectedIndex]);
+          assert.equal(geometry.viewport.zoom, 2);
+          assert.ok(geometry.labelVisible, `${name}: Creator label fits the usable viewport: ${JSON.stringify(geometry)}`);
+          assert.ok(geometry.ringVisible, `${name}: the whole focus ring fits the usable viewport: ${JSON.stringify(geometry)}`);
+          assert.equal(geometry.labelAboveInput, true, `${name}: the Creator label remains above its input.`);
+          assert.equal(geometry.actionsBelowInput, true, `${name}: wrapped rows retain input-before-actions order.`);
+          assert.deepEqual(geometry.buttons.map(button => button.name), ['Move up', 'Move down', 'Delete']);
+          assert.equal(geometry.scrollWidth <= geometry.viewport.width, true, `${name}: no horizontal page overflow.`);
+          assert.equal(geometry.overflow, false);
+          const scanName = `common-creators-${name}`;
+          receipt.creatorFallbacks.push({ name, expectedValues, expectedIndex, focus, ...geometry });
+          await scan(scanName);
+        };
+        await proveCreatorFallback('move-to-first', moveExpected, 0);
+        assert.equal(await creatorRows.first().locator('[data-row-action="up"]').isDisabled(), true,
+          'The newly first creator keeps Move up disabled.');
+
+        const deleteExpected = moveExpected.slice(0, -1);
+        const deleteLast = creatorRows.last().locator('[data-row-action="delete"]');
+        assert.equal(await deleteLast.isDisabled(), false, 'The last creator can be deleted.');
+        await deleteLast.focus();
+        await page.keyboard.press('Enter');
+        assert.deepEqual(await creatorRows.locator('input').evaluateAll(inputs => inputs.map(input => input.value)), deleteExpected,
+          'Delete removes only the last creator before focusing its previous row.');
+        await proveCreatorFallback('delete-last', deleteExpected, 1);
+      }
       await page.evaluate(() => window.accessibilitySettings.discardDraft());
       assert.equal(await page.locator('#settings-save').isDisabled(), true, 'Discard retires the source fixture draft.');
       await firstTab.click();
