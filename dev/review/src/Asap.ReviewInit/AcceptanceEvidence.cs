@@ -83,13 +83,13 @@ internal static class AcceptanceEvidence
                 WHERE Id = 2 AND IsActive = 1 AND OrganizationCodeId = 2;
                 SELECT CONVERT(varchar(20), org.Id),
                     (SELECT COUNT(*) FROM asap.AdministrativeAudit a WHERE a.OrganizationId = org.Id AND a.Action = N'library_settings_updated'),
-                    CONVERT(varchar(64), HASHBYTES('SHA2_256', (
-                        SELECT r.* FROM asap.TitleRequest r WHERE r.LibraryOrganizationId = org.Id ORDER BY r.Id FOR JSON PATH, INCLUDE_NULL_VALUES)), 2),
-                    CONVERT(varchar(64), HASHBYTES('SHA2_256', (
+                    CONVERT(varchar(64), HASHBYTES('SHA2_256', COALESCE((
+                        SELECT r.* FROM asap.TitleRequest r WHERE r.LibraryOrganizationId = org.Id ORDER BY r.Id FOR JSON PATH, INCLUDE_NULL_VALUES), N'[]')), 2),
+                    CONVERT(varchar(64), HASHBYTES('SHA2_256', COALESCE((
                         SELECT e.* FROM asap.TitleRequestEvent e JOIN asap.TitleRequest r ON r.Id = e.TitleRequestId
-                        WHERE r.LibraryOrganizationId = org.Id ORDER BY e.Id FOR JSON PATH, INCLUDE_NULL_VALUES)), 2),
-                    CONVERT(varchar(64), HASHBYTES('SHA2_256', (
-                        SELECT c.* FROM asap.FormatAutoClaimRule c WHERE c.LibraryOrganizationId = org.Id ORDER BY c.Id FOR JSON PATH, INCLUDE_NULL_VALUES)), 2),
+                        WHERE r.LibraryOrganizationId = org.Id ORDER BY e.Id FOR JSON PATH, INCLUDE_NULL_VALUES), N'[]')), 2),
+                    CONVERT(varchar(64), HASHBYTES('SHA2_256', COALESCE((
+                        SELECT c.* FROM asap.FormatAutoClaimRule c WHERE c.LibraryOrganizationId = org.Id ORDER BY c.Id FOR JSON PATH, INCLUDE_NULL_VALUES), N'[]')), 2),
                     (SELECT COUNT(*) FROM asap.TitleRequest r WHERE r.LibraryOrganizationId = org.Id),
                     (SELECT COUNT(*) FROM asap.TitleRequestEvent e JOIN asap.TitleRequest r ON r.Id = e.TitleRequestId WHERE r.LibraryOrganizationId = org.Id)
                 FROM asap.Organization org WHERE org.Id BETWEEN 47101 AND 47107 ORDER BY org.Id;

@@ -107,7 +107,8 @@ async function compactRows(t, scope) {
     assert.equal(await rows.last().locator('[data-row-action="down"]').isDisabled(), true);
     await rows.first().locator('[data-row-action="down"]').press('Enter');
     assert.deepEqual(await rows.locator('input').evaluateAll(nodes => nodes.map(node => node.value)), [...creators].reverse());
-    assert.equal(await rows.last().locator('[data-row-action="up"]').evaluate(node => node === document.activeElement), true);
+    assert.equal(await rows.last().locator('input').evaluate(node => node === document.activeElement), true,
+      'Moving to a disabled boundary returns focus to the moved Creator input');
     await t.page.locator('#add-common-creator').click();
     assert.equal(await rows.last().locator('input').evaluate(node => node === document.activeElement), true);
     await rows.last().locator('input').fill('Remove this draft');
