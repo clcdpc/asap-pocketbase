@@ -432,6 +432,27 @@ journey passes 1/1, and the Release build has zero warnings/errors. Receipts:
 `integration-build.log`, `integration-functional*` and
 `integration-functional2/integration-functional2.trx`.
 
+### Integrated acceptance corrections
+
+The first six-suite disposable acceptance invocation on `2dd4880` executed all
+48 required scenarios: 41 passed and seven failed. Four failures were the older
+#390 expectation of routine format-code headings, superseded by #461; one was
+the older expectation that inherited controls are disabled, superseded by #463.
+Those assertions now check readable labels with retained identities and the
+directly editable inherited state with its explicit status. Existing SQL,
+history, ownership and reset assertions remain intact.
+
+The other two failures exposed provider actions bottom-aligned with inheritance
+status text, 23px below their inputs. Provider-only wide-layout CSS now aligns
+controls below the caption. A focused shipped-DOM/CSS browser regression passes
+12 System/inherited/pinned states across four desktop/mobile widths, retaining
+strict alignment, containment and overflow assertions. Its two-test file and
+the format-card native-zoom regression pass 2/2 and 1/1 respectively; the retained
+Settings accessibility/layout, domain-editor and direct-inheritance files also
+pass. Failed acceptance and red/green provider receipts are preserved outside
+Git. Final revision-wide acceptance and CI results belong in the consolidated
+PR; this correction is objective integration testing, not another review pass.
+
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
 Complex implementation uses Sol MAX; focused implementation and Pass 1 use

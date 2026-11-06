@@ -398,7 +398,9 @@ const scenarios = [
       assert.deepEqual(after.stored.configuredSystem, before.stored.configuredSystem, 'System values were not changed');
       assert.equal(after.effective.successTitle, systemTitle, 'Effective SuccessTitle now inherits the system value');
       assert.equal(await input.inputValue(), systemTitle, 'Unsaved draft was discarded and editor repopulated');
-      assert.equal(await input.isDisabled(), true, 'Inherited value is no longer an editable library override');
+      assert.equal(await input.isDisabled(), false, 'Inherited values remain directly editable without creating an override');
+      assert.equal(await t.page.locator('[data-setting-key="successTitle"] .settings-inheritance-status').innerText(),
+        'Using system value', 'The accepted reset restores inherited ownership');
       assert.equal(await t.page.locator('#settings-discard').isVisible(), false, 'No dirty draft remains');
       assert.deepEqual(after.stored.libraryOverride.templates.filter(item => item.sourceTemplateId === null), owned,
         'Owned template identities, content and SQL rowversions are unchanged');

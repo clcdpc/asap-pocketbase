@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { nativeZoom } = require('./helpers/accessibility.cjs');
-const { obscurePicker, pickerGeometry } = require('./helpers/workflow-settings.cjs');
+const { obscurePicker, pickerGeometry, providerGeometry } = require('./helpers/workflow-settings.cjs');
 const frontend = path.resolve(__dirname, '../../src/Asap.Web/Frontend');
 
 // Focused browser regression with the shipped DOM/CSS/editor and a deterministic
@@ -114,6 +114,75 @@ test('patron-code picker clears the sticky footer at native zoom and limited hei
     assert.equal(await chip.count(), 1);
     await chip.getByRole('button').click();
     await page.locator('#settings-save-detail').evaluate(node => { node.textContent = 'Everything in this settings context is saved.'; });
+  }
+  await page.evaluate(require('axe-core').source);
+  assert.deepEqual(await page.evaluate(async () => (await axe.run()).violations
+    .filter(item => ['serious', 'critical'].includes(item.impact)).map(item => item.id)), []);
+  assert.equal(await page.evaluate(() => [...document.images].filter(node => node.getClientRects().length)
+    .every(node => node.complete && node.naturalWidth > 0)), true);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(external, []);
+});
+
+test('provider inputs and actions align with inherited and pinned column statuses', async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const errors = [], external = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('dialog', async dialog => { errors.push('Unexpected native dialog: ' + dialog.type()); await dialog.dismiss(); });
+  await page.route('**/*', async route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== 'https://localhost:8080') {
+      external.push(url.origin); await route.abort(); return;
+    }
+    if (url.pathname === '/staff/') {
+      const html = (await fs.readFile(path.join(frontend, 'staff/index.html'), 'utf8'))
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '');
+      await route.fulfill({ contentType: 'text/html', body: html });
+    } else {
+      await route.fulfill({ contentType: url.pathname.endsWith('.js') ? 'text/javascript' :
+        url.pathname.endsWith('.css') ? 'text/css' : 'application/octet-stream',
+      body: await fs.readFile(path.join(frontend, url.pathname)) });
+    }
+  });
+  await page.goto('https://localhost:8080/staff/');
+  const artifacts = process.env.ASAP_PROVIDER_LAYOUT_ARTIFACTS;
+  if (artifacts) await fs.mkdir(artifacts, { recursive: true });
+  for (const [width, height] of [[1440, 1000], [1120, 900], [1000, 900], [390, 844]]) {
+    await page.setViewportSize({ width, height });
+    for (const mode of ['system', 'inherited', 'pinned']) {
+      await page.evaluate(async mode => {
+        const { createSettingsDomainEditors } = await import('/staff/js/settings-domains.js');
+        const root = document.querySelector('#settings-view');
+        for (let node = root; node; node = node.parentElement) node.hidden = false;
+        for (const node of document.querySelectorAll('#workspace > section')) node.hidden = node !== root;
+        root.querySelector('#settings-form').hidden = false;
+        for (const panel of root.querySelectorAll('.settings-panel')) panel.hidden = panel.id !== 'settings-workflow';
+        const provider = { id: '20', key: 'catalog', label: 'System catalog',
+          urlTemplate: 'https://catalog.example.org?q={query}', isEnabled: true, sortOrder: 0 };
+        const absent = { exists: false, values: [] };
+        const configured = { providers: [provider], formats: [], templates: [],
+          publicationOptions: absent, commonCreators: absent, allowedPatronCodeIds: absent };
+        const pinned = mode === 'pinned';
+        const current = pinned ? { ...provider, label: 'Library catalog', isEnabled: false, overridden: true } : provider;
+        const library = { ...configured, providers: pinned ? [{ id: '20', kind: 'libraryOverride',
+          label: current.label, urlTemplate: null, isEnabled: false, version: 'provider-version' }] : [] };
+        window.providerEditors?.dispose();
+        window.providerEditors = createSettingsDomainEditors({ root });
+        window.providerEditors.populate({ orgId: mode === 'system' ? 'system' : '2',
+          stored: { configuredSystem: configured, libraryOverride: mode === 'system' ? null : library,
+            providers: [current], formats: [], templates: [], customFields: [], formatRules: [], autoClaimRules: [] },
+          effective: { externalSearchProviders: [current], formats: [], customFields: [] }, autoClaimStaff: [] }, mode === 'system');
+      }, mode);
+      await page.locator('#external-search-provider-editor').scrollIntoViewIfNeeded();
+      if (artifacts) await page.screenshot({ path: path.join(artifacts, `${mode}-${width}.png`) });
+      const geometry = await providerGeometry(page);
+      assert.equal(geometry.rows.length, 1);
+      assert.equal(geometry.rows[0].library, mode !== 'system');
+      if (artifacts) await fs.writeFile(path.join(artifacts, `${mode}-${width}.json`), JSON.stringify(geometry, null, 2));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    }
   }
   await page.evaluate(require('axe-core').source);
   assert.deepEqual(await page.evaluate(async () => (await axe.run()).violations

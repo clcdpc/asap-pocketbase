@@ -70,11 +70,12 @@ node --test tests/acceptance/direct-actions.test.cjs
 ```
 
 The `i390` Format rules suite reviews real synthetic SQL settings in System and
-Review Library scopes. It checks complete collapsed cards, configured names/codes,
-Required/Optional/Hidden summaries (including enabled and retained disabled custom
-rules), independent keyboard disclosures, Tab behavior and dirty-state restoration.
+Review Library scopes. It checks complete collapsed cards, effective configured
+names and retained identities, Required/Optional/Hidden summaries (including enabled
+and retained disabled custom rules), independent keyboard disclosures, Tab behavior
+and dirty-state restoration.
 Live Material formats draft names update expanded/collapsed headers and accessible
-names, including code-qualified move/delete actions for duplicate labels, without
+names, including positional move/delete context for duplicate labels, without
 replacing controls or independently dirtying Format rules. In either scope, a
 malformed collapsed requirement blocks redraw and global Save before any POST.
 The library draft also removes a hidden control deliberately, checks that Add field

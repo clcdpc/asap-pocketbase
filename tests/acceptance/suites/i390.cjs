@@ -39,8 +39,8 @@ async function initialCards(page, before) {
     const card = cards(page).nth(index);
     assert.equal(await card.getAttribute('data-rule-code'), format.code);
     assert.equal(await toggle(card).getAttribute('aria-expanded'), 'false');
-    assert.ok((await toggle(card).innerText()).includes(format.label));
-    assert.ok((await toggle(card).innerText()).includes(format.code));
+    assert.equal(await card.locator('.settings-rule-identity').innerText(), format.label,
+      'Rule headings use the effective configured label; identity remains in data-rule-code.');
     assert.equal(await card.locator('.settings-rule-details').isVisible(), false);
     assert.equal(await card.locator('[data-format-field]').count(), 4);
     assert.equal(await card.locator('[data-format-label]').count(), 4);

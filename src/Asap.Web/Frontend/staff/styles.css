@@ -504,6 +504,11 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 #external-search-provider-editor .settings-row-actions button { flex: 0 0 40px; }
 @container (min-width: 720px) {
   #external-search-provider-editor .settings-provider-row { grid-template-columns: minmax(150px, 1fr) minmax(240px, 2fr) auto auto; }
+  /* Library statuses sit below each control. Align controls from the caption
+     line instead of bottom-aligning actions with those status messages. */
+  #external-search-provider-editor .settings-provider-row:has(> .settings-inheritance-field) { align-items: start; }
+  #external-search-provider-editor .settings-provider-row > .settings-inheritance-field:has(> .settings-domain-check),
+  #external-search-provider-editor .settings-provider-row:has(> .settings-inheritance-field) > .settings-row-actions { margin-top: calc(.78lh + 4px); }
 }
 #patron-code-eligibility .field-help { margin: 0; }
 /* Normal flow preserves the empty live availability region without reserving
