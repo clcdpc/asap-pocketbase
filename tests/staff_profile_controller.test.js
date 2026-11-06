@@ -8,6 +8,45 @@ const event = { preventDefault() {} };
   await fixture(async ({ load, get }) => {
     const { createSessionIdentity } = await load('session-identity');
     const { createProfileController } = await load('profile-controller');
+    const session = createSessionIdentity();
+    let current = { ...staff, notificationEmail: 'primary@example.org', weeklyActionSummaryEmail: null,
+      weeklyActionSummaryEnabled: true };
+    session.accept(current);
+    const posted = [];
+    const controller = createProfileController({ root: get('#profile-view'), sessionIdentity: session,
+      announce() {}, onReceipt() {}, clearReceipt() {}, onSessionLost() {}, onAccessUnavailable() {},
+      onPreferences: (value, owner) => session.updatePreferences(value, owner),
+      loadSession: async () => ({ authenticated: true, accessAllowed: true, staff: current }),
+      request: async (path, init) => {
+        posted.push(init.body); current = { ...current, ...init.body, version: `saved-${posted.length}` };
+        return { staff: current };
+      } });
+    try {
+      controller.setStaff(session.preferences());
+      const field = get('#weekly-email');
+      assert.equal(field.closest('label').querySelector('span').textContent, 'Additional weekly summary email (optional)');
+      assert.equal(field.getAttribute('aria-describedby'), 'weekly-email-help');
+      const help = get('#weekly-email-help').textContent;
+      assert.match(help, /primary notification email/); assert.match(help, /distinct additional address receives a copy/);
+      assert.match(help, /leave blank for primary only/); assert.match(help, /Turning off weekly summaries prevents both/);
+      assert.equal(field.value, '', 'an absent additional preference stays blank');
+      assert.equal(field.required, false); assert.equal(field.checkValidity(), true);
+      field.value = 'not-an-email'; assert.equal(field.checkValidity(), false);
+      field.value = ''; await controller.save(event);
+      assert.equal(posted[0].weeklyActionSummaryEmail, null);
+      field.value = ' additional@example.org '; await controller.save(event);
+      assert.equal(posted[1].weeklyActionSummaryEmail, 'additional@example.org');
+      assert.equal(field.value, 'additional@example.org');
+      assert.equal(Object.hasOwn(posted[1], 'notificationEmail'), false);
+      get('#weekly-enabled').checked = false; await controller.save(event);
+      assert.equal(posted[2].weeklyActionSummaryEnabled, false);
+      field.value = 'discard@example.org'; controller.discardDraft();
+      assert.equal(field.value, 'additional@example.org');
+    } finally { controller.dispose(); }
+  });
+  await fixture(async ({ load, get }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createProfileController } = await load('profile-controller');
     const session = createSessionIdentity(); session.accept(staff);
     let finish;
     const notices = [], receipts = [], posted = [];

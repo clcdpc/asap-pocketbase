@@ -191,8 +191,9 @@
             <small id="notification-email-help">Managed by Staff Access.</small>
           </label>
           <label>
-            <span>Weekly summary email override</span>
-            <input id="weekly-email" type="email" autocomplete="email" placeholder="Use primary email">
+            <span id="weekly-email-label">Additional weekly summary email (optional)</span>
+            <input id="weekly-email" type="email" autocomplete="email" aria-labelledby="weekly-email-label" aria-describedby="weekly-email-help">
+            <small id="weekly-email-help">When enabled and eligible, weekly summaries go to your primary notification email. A distinct additional address receives a copy; leave blank for primary only. Turning off weekly summaries prevents both copies.</small>
           </label>
           <label class="check-field"><input id="weekly-enabled" type="checkbox"> <span>Receive weekly action summary</span></label>
           <label class="check-field"><input id="purchase-default" type="checkbox"> <span>Send purchase reminder by default</span></label>
