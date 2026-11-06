@@ -16,7 +16,11 @@ async function ready(page, scope) {
     !document.getElementById('settings-refresh').disabled, scope);
 }
 async function open(t, scope, section = 'patron') {
-  await t.page.goto(`${t.origin}/staff/?stage=settings&settingsScope=${scope}#settings-${section}`);
+  const target = `${t.origin}/staff/?stage=settings&settingsScope=${scope}`;
+  // Chromium may treat a repeated URL/fragment as same-document navigation.
+  // Setup saves require a fresh application GET and accepted editor baseline.
+  if (t.page.url().split('#')[0] === target) await t.page.reload({ waitUntil: 'networkidle' });
+  else await t.page.goto(`${target}#settings-${section}`, { waitUntil: 'networkidle' });
   await ready(t.page, scope);
   await t.page.locator(`#settings-nav-${section}`).click();
   return read(t, scope);
@@ -194,11 +198,12 @@ const scenarios = [
   } },
   { id: 'i471-inheritance-persistence', writes: true, requirements: ['#463: equal pins, false/zero/blanks/empty lists, per-field/template/list/item resets, future System changes, owned preservation'], run: async t => {
     const scope = '47102', initial = await open(t, scope), system = initial.stored.configuredSystem;
-    const originalLimit = system.workflow.suggestionLimit, book = system.formats.find(row => row.code === 'book');
+    const originalLimit = system.workflow.suggestionLimit, inheritedLimit = initial.systemValues.workflow.suggestionLimit;
+    const book = system.formats.find(row => row.code === 'book');
     const owned = { formats: initial.stored.libraryOverride.formats, fields: initial.stored.customFields,
       templates: initial.stored.templates.filter(row => row.isCustom) };
     const raw = '  Meaningful library blank follows: \r\n  ';
-    await post(t, scope, { workflow: { suggestionLimit: originalLimit, commonAuthorsEnabled: false, commonAuthorsList: [], allowedPatronCodeIds: [] },
+    await post(t, scope, { workflow: { suggestionLimit: inheritedLimit, commonAuthorsEnabled: false, commonAuthorsList: [], allowedPatronCodeIds: [] },
       patron: { successMessage: raw, publicationOptions: [] },
       formats: [{ id: book.id, version: book.version, pinOverrides: true, sortOrder: 0, isEnabled: false, message: '' }],
       templates: [{ templateKey: 'suggestion_submitted', subject: 'Pinned subject', body: raw }] });
@@ -215,13 +220,14 @@ const scenarios = [
       assert.match(await field.textContent(), /Library setting.*Matches system/);
       const writes = t.mutations.length; await limit.focus(); assert.equal(await t.page.locator('#settings-save').isDisabled(), true);
       await field.locator('.settings-use-system').press('Enter');
-      assert.equal(await limit.inputValue(), String(originalLimit)); assert.equal(await t.page.locator('#settings-save').isEnabled(), true);
+      assert.equal(await limit.inputValue(), String(inheritedLimit)); assert.equal(await t.page.locator('#settings-save').isEnabled(), true);
       await discard(t); assert.equal(t.mutations.length, writes); assert.match(await field.textContent(), /Matches system/);
-      await post(t, 'system', { workflow: { suggestionLimit: originalLimit + 1 } });
-      await open(t, scope, 'workflow'); assert.equal(await limit.inputValue(), String(originalLimit), 'Equal-value pin survives a later System change');
+      await post(t, 'system', { workflow: { suggestionLimit: inheritedLimit + 1 } });
+      await open(t, scope, 'workflow'); assert.equal(await limit.inputValue(), String(inheritedLimit), 'Equal-value pin survives a later System change');
       await field.locator('.settings-use-system').press('Enter'); await save(t);
-      await post(t, 'system', { workflow: { suggestionLimit: originalLimit + 2 } });
-      await open(t, scope, 'workflow'); assert.equal(await limit.inputValue(), String(originalLimit + 2));
+      await post(t, 'system', { workflow: { suggestionLimit: inheritedLimit + 2 } });
+      await open(t, scope, 'workflow'); assert.equal(await limit.inputValue(), String(inheritedLimit + 2));
+      await t.page.locator('#common-authors-enabled').check();
       for (const selector of ['#common-creators-inherit-field', '#patron-codes-inherit-field']) {
         await decideConfirmation(t.page, () => t.page.locator(selector + ' .settings-use-system').click(), dialog => dialog.accept());
       }
@@ -273,6 +279,8 @@ const scenarios = [
             assert.equal(await email.evaluate(node => node === document.activeElement), true); await visibleEvidence(email);
             assert.equal(t.mutations.length, count); await checkpoint(t.page, t.directory, `${t.id}-native200-${width}`, { nativeViewport: true });
             witness.native200.push({ width, exactEmailFocus: true, noNavigationWrites: true });
+            await row.getByRole('button', { name: 'Cancel', exact: true }).click();
+            await t.page.locator('#settings-nav-workflow').click();
             await discard(t);
           } finally { await nativeZoom(t.context, t.page, 1); }
         }
