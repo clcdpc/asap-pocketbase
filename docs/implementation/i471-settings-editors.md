@@ -61,7 +61,7 @@ reruns and final receipt reconciliation do not add review passes.
 | #461 Hidden identities/readable labels | `7be87eb`, `583de79`, `2990e78` | Luna MAX: 3 findings fixed | Astra HIGH + Terra MAX: clipping and history-witness gap fixed | Retained editor/collision tests; real SQL/browser save/recovery/history; desktop/mobile/native200 | Technically qualified; final integration pending |
 | #462 Add rule feedback | `423c352`, `7b2cd22` | Luna MAX: 1 test gap fixed | Luna MAX: independent browser matrix, no findings | Retained domain/browser matrix and real-SQL Add/save/reload pass | Technically qualified; final integration pending |
 | #465 Common creator rows | `a2501ad`, `49b3951`, `8fbe412` | Luna MAX: Move down test gap fixed | Terra MAX: narrow native-200 focus reveal fixed | Five rendered sizes; owning SQL/browser 1/1 pass | Technically qualified; final integration pending |
-| #463 Direct edit/inheritance | Pending | Pending | Pending | Pending | Pending |
+| #463 Direct edit/inheritance | `56c514d`, `72c7258`, `e66947c` | Luna MAX: empty template lineage fixed | Astra HIGH + Terra MAX: combined save, comparison expansion and mobile Discard fixed | Real-SQL ownership/history matrix; retained SQL/browser regressions; four frontend files; format/picker native zoom | Technically qualified; final integration pending |
 | #466 Blocking draft navigation | Pending | Pending | Pending | Pending | Pending |
 
 ### #461 evidence
@@ -250,6 +250,13 @@ errors. Receipts remain external: `463-pass1-domain-red.log`,
 `463-pass1-green/463-pass1-green.trx`, matching build/domain/template logs and
 `463-pass1-discovery.json`. These are focused remediation checks, not another
 independent review or a claim of final integration qualification.
+
+Pass 2 paired fresh Astra HIGH persisted-state verification with fresh Terra MAX
+rendered interaction scenarios. The independent SQL matrix completed 12 cells;
+its second test exposed the combined-save failure with exact rollback hashes.
+Terra recorded 17/18 desktop assertions and 18 clean layout/accessibility scans,
+with the two interaction failures below. Both continued the same unfinished
+pass after a usage reset; no third review was started.
 
 Pass 2 identified three supported P2s. A first shared-format Label edit and a
 built-in Author edit now reuse the same pending EF override inside Global Save,
