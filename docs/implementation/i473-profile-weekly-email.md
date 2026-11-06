@@ -39,7 +39,7 @@ checkout are preserved. #454 is merged; #469 is open and is not incorporated.
 
 | Issue | Implementation | Pass 1 | Pass 2 | Focused evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| #441 | `84d01d7`; focused qualification below | Luna MAX: P2 test gap corrected | Pending: Astra HIGH state matrix | SQL and Profile browser | Awaiting Pass 2 |
+| #441 | `84d01d7`, `a1ac681` | Luna MAX: forced partial-retry coverage added | Astra HIGH: state matrix and 20 independent probes pass | SQL 68/68; browser 1/1; focused Node/build pass | Technically qualified |
 | #440 | Pending | Pending: Luna MAX | Pending: Luna MAX browser interaction | Pending | Waiting for #441 |
 
 Requested child models/reasoning will be selected explicitly. The parent
@@ -128,3 +128,29 @@ Pass 1 — independent requirements review by Luna MAX:
 
 These automated checks do not constitute human screen-reader or live-mailbox
 acceptance. Full CI and integration/acceptance qualification follow #440.
+
+Pass 2 — independent adversarial verification by Astra HIGH:
+
+- Current SQL/provider matrix: 68/68 passed, zero skipped. Twenty independently
+  constructed temporary probes also passed, zero skipped. No actionable integrity
+  finding remained. Earlier zero-test CLI invocation is excluded from evidence.
+- Probe source was archived under ignored `.artifacts/i473-pass2/`, removed from
+  the test project, and a restored clean Release build passed with zero warnings
+  or errors. No product changes were required.
+
+| Adversarial transitions | Persisted outcome verified |
+| --- | --- |
+| Primary/additional/normalized duplicate; opt-out; invalid/domain restrictions | Exact independent recipients and suppressed states |
+| Account/address/library/role changes before validation and at intent | Original row suppressed without redirect or backfill |
+| Either sibling accepted; safe failure; same scheduled/forced replay after restart | Stable keys and accepted sibling rowversion; only failed copy retries |
+| Provider timeout/lost acknowledgment; expired post-intent lease | Ambiguous evidence retained; unsafe resend refused |
+| Concurrent queue/delivery workers; same/new forced IDs | Unique operation identities and fenced per-recipient leases |
+| Legacy pending/completed/failed normal and forced operations | Original destination/history and safe recovery, no retroactive copies |
+| Slot swaps/convergence, opt-out/domain contraction after partial success | Changed copy suppressed; accepted sibling unchanged |
+| Old worker resumes after fresh pre/post-intent lease recovery | Fencing prevents duplicate provider sends |
+
+The matrix and actual commands are retained in
+`.artifacts/i473-pass2/review-result.txt` with three TRX receipts and probe source.
+Worker restart is modeled by fresh workers over persisted SQL/lease state,
+without terminating the OS process. Both issue-level review passes are complete;
+final integration is evidence reconciliation, not another review pass.
