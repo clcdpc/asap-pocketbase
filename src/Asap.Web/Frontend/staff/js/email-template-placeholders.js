@@ -324,7 +324,9 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
       const card = ensureCard(owner);
       for (const entry of card.entries) {
         const inheritance = owner.querySelector(`[data-template-status="${entry.role}"]`);
-        if (inheritance) entry.control.closest('.settings-template-field').append(inheritance);
+        const field = entry.control.closest('.settings-template-field');
+        // Keep the focused/clicked reset button mounted when blur refreshes a card.
+        if (inheritance && inheritance.parentElement !== field) field.append(inheritance);
       }
       if (reset) {
         setExpanded(card, false);

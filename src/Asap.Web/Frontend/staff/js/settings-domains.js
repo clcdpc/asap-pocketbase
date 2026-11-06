@@ -2004,7 +2004,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const current = fields.map((name, index) => {
       const control = row.querySelector(selectors[index]); return name === 'enabled' ? control.checked : control.value;
     });
-    const status = inheritanceStatus({ owned: intent?.reset ? false : value.hadOverride || Boolean(intent),
+    const status = inheritanceStatus({ owned: intent?.reset ? false : value.hadOverride || Object.values(intent?.fields || {}).includes('pin'),
       value: current, systemValue: fields.map(inheritedDisplay), pending: Boolean(intent), label: `${value.displayName} template`, showComparison: false,
       onReset: () => {
         templateIntents.set(id, { reset: true, fields: {} });
@@ -2061,7 +2061,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         sortOrderBaseline: numeric(row.dataset.templateBaselineSortOrder, 0),
         sortOrderChanged: !persisted || sortOrder !== numeric(row.dataset.templateBaselineSortOrder, 0),
         isCustom: row.dataset.templateKind === 'custom',
-        overridden: lineage ? !intent?.reset && (row.dataset.templateHadOverride === 'true' || Boolean(intent)) : !lineage,
+        overridden: lineage ? !intent?.reset && (row.dataset.templateHadOverride === 'true' || Object.values(intent?.fields || {}).includes('pin')) : !lineage,
         hadOverride: row.dataset.templateHadOverride === 'true',
         reset: lineage && Boolean(intent?.reset),
         fieldIntents: intent?.fields || {},

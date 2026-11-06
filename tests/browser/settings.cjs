@@ -244,7 +244,116 @@ async function runLibraryRuleCompletenessEditor(page, axeSource, args, report) {
   await scan(page, axeSource, args.artifactRoot, report, 'mobile');
 }
 
+async function verifyTemplateResetOnlyDrafts(page, args, report, saveSettings, ready) {
+  const read = scope => page.evaluate(async scope => {
+    const response = await fetch(`/api/asap/staff/settings?orgId=${encodeURIComponent(scope)}`);
+    assertResponse(response);
+    return response.json();
+    function assertResponse(response) { if (!response.ok) throw new Error(`Template witness GET ${response.status}`); }
+  }, scope);
+  const post = async (scope, templates) => {
+    const current = await read(scope);
+    const result = await page.evaluate(async ({ scope, templates, version }) => {
+      const session = await (await fetch('/api/asap/staff/session')).json();
+      const response = await fetch('/api/asap/staff/settings', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken },
+        body: JSON.stringify({ orgId: scope, version, templates }) });
+      return { status: response.status, body: await response.text() };
+    }, { scope, templates, version: current.version });
+    assert.equal(result.status, 200, result.body);
+  };
+  const reload = async () => {
+    await page.reload({ waitUntil: 'networkidle' }); await ready(args.scopeId);
+    await page.locator('#settings-nav-templates').click();
+  };
+  const card = key => page.locator(`[data-template-key="${key}"]`);
+  const open = async key => {
+    const row = card(key), toggle = row.locator('[data-template-toggle]');
+    if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+    return row;
+  };
+  const initial = await read(args.scopeId);
+  const keys = ['suggestion_submitted', `rejection:audit_reset_${args.formatCode}`];
+  const sources = keys.map(key => initial.stored.templates.find(row => row.organizationId === '1' && row.templateKey === key));
+  assert.ok(sources.every(Boolean), 'Both built-in and additional System sources must be seeded.');
+  const sourceIds = new Set(sources.map(row => row.id));
+  const lineage = data => data.stored.templates.filter(row => row.organizationId === args.scopeId && sourceIds.has(row.sourceTemplateId));
+  const custom = data => data.stored.templates.find(row => row.organizationId === args.scopeId &&
+    row.templateKey === `rejection:audit_reset_custom_${args.formatCode}`);
+  const owned = custom(initial);
+  assert.ok(owned?.isCustom); assert.deepEqual(lineage(initial), []);
+  await page.locator('#settings-nav-templates').click();
+  try {
+    for (const key of keys) {
+      const row = await open(key);
+      assert.equal(await row.locator('[data-template-field="subject"]').isEditable(), true);
+      await row.locator('[data-template-field="subject"]').fill(`Temporary subject ${key}`);
+      const reset = row.locator('[data-template-status="subject"] .settings-use-system');
+      await reset.focus(); await reset.press('Enter');
+      assert.match(await row.locator('[data-template-status="subject"]').textContent(), /Using system value.*Unsaved/);
+    }
+    assert.equal(await page.locator('#settings-save').isEnabled(), true, 'Reset intent stays a guarded unsaved draft until Global Save.');
+    const resetPayload = await saveSettings();
+    const afterReset = await read(args.scopeId);
+    report.templateResetOnlyWitness = { before: lineage(initial), after: lineage(afterReset) };
+    assert.deepEqual(lineage(afterReset), [], 'Edit → field reset → Save must not create either empty Library lineage.');
+    assert.equal((resetPayload.templates || []).some(row => keys.includes(row.templateKey)), false,
+      'No accepted lineage plus no remaining pin has no template write.');
+    assert.deepEqual(custom(afterReset), owned);
+    await post('system', sources.map(row => ({ templateKey: row.templateKey,
+      subject: `Later system ${row.templateKey}`, body: `Later system body ${row.templateKey}` })));
+    await reload();
+    for (const key of keys) {
+      const row = await open(key);
+      assert.equal(await row.locator('[data-template-field="subject"]').inputValue(), `Later system ${key}`);
+      assert.equal(await row.locator('[data-template-field="body"]').inputValue(), `Later system body ${key}`);
+      for (const role of ['subject', 'body']) assert.match(await row.locator(`[data-template-status="${role}"]`).textContent(), /^Using system value/);
+      if (key !== 'suggestion_submitted') assert.match(await row.locator('[data-template-item-status]').textContent(), /^Using system value/);
+      await row.locator('[data-template-field="subject"]').fill(`Temporary reset beside pin ${key}`);
+      await row.locator('[data-template-status="subject"] .settings-use-system').click();
+      await row.locator('[data-template-field="body"]').fill(`Pinned Library body ${key}`);
+    }
+    report.templateResetOnlyNoLineage = true;
+    const pinnedPayload = await saveSettings();
+    const pinned = await read(args.scopeId);
+    for (const source of sources) {
+      const row = lineage(pinned).find(row => row.sourceTemplateId === source.id);
+      assert.ok(row?.id && row.version); assert.equal(row.templateKey, source.templateKey);
+      assert.equal(row.subject, null); assert.equal(row.body, `Pinned Library body ${source.templateKey}`);
+      const posted = pinnedPayload.templates.find(row => row.templateKey === source.templateKey);
+      assert.equal(Object.hasOwn(posted, 'subject'), false, 'Resetting an absent column does not suppress its sibling pin or materialize a null field.');
+      assert.equal(posted.body, row.body);
+    }
+    await post(args.scopeId, sources.map(row => ({ templateKey: row.templateKey, sourceTemplateId: row.id,
+      body: `  Accepted raw\r\nbody ${row.templateKey}  ` })));
+    await reload();
+    const acceptedRaw = await read(args.scopeId);
+    for (const key of keys) {
+      const row = await open(key);
+      await row.locator('[data-template-field="subject"]').fill(`Reset existing lineage ${key}`);
+      await row.locator('[data-template-status="subject"] .settings-use-system').click();
+    }
+    const acceptedResetPayload = await saveSettings();
+    const acceptedAfter = await read(args.scopeId);
+    assert.deepEqual(lineage(acceptedAfter), lineage(acceptedRaw),
+      'Accepted lineage IDs/versions, sparse raw CRLF body and other-column pins remain exact.');
+    assert.deepEqual(custom(acceptedAfter), owned);
+    for (const key of keys) {
+      const row = acceptedResetPayload.templates.find(row => row.templateKey === key);
+      assert.equal(row.subject, null); assert.equal(Object.hasOwn(row, 'body'), false);
+    }
+    report.templateResetKeepsSiblingPinsAndRawRows = true;
+    await post(args.scopeId, sources.map(row => ({ templateKey: row.templateKey, sourceTemplateId: row.id, reset: true })));
+    const cleared = await read(args.scopeId);
+    assert.deepEqual(lineage(cleared), []); assert.deepEqual(custom(cleared), owned);
+  } finally {
+    await post('system', sources.map(row => ({ templateKey: row.templateKey, subject: row.subject, body: row.body })));
+    await reload();
+  }
+}
+
 async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings, waitForSettingsReady) {
+  await verifyTemplateResetOnlyDrafts(page, args, report, saveSettings, waitForSettingsReady);
   const read = (scope = args.scopeId) => page.evaluate(async scope => {
     const response = await fetch(`/api/asap/staff/settings?orgId=${encodeURIComponent(scope)}`);
     if (!response.ok) throw new Error(`Settings GET ${response.status}`);

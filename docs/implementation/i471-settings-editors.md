@@ -230,6 +230,27 @@ recorded after the current focused runs; initial failed receipts are retained
 under the external `463-*` evidence paths. Human visual/screen-reader acceptance
 is not claimed by automated axe, geometry or browser screenshots.
 
+Pass 1 (fresh Luna MAX) identified one supported P2: edit then field-reset on an
+inherited template with no accepted Library lineage could create an empty row.
+The single remediation omits absent-column resets while retaining explicit
+sibling pins and all accepted-row reset semantics. Additional-template item
+status now derives pending ownership from real pins, not merely the presence of
+an intent object. A related mouse activation issue in that same flow was fixed:
+blur refresh no longer moves an already-mounted template status/reset node.
+
+Focused red/green proof uses the existing production metadata Browser case,
+without adding a Browser identity. Red observed two physical empty lineage rows
+(built-in and additional); green passes 1/1 and verifies no lineage rows, later
+System fallback/status, sibling Body pins, exact accepted row IDs/versions/raw
+CRLF content, and preservation of the custom template. The direct-domain and
+retained template editor files pass. Both Release builds have zero warnings or
+errors. Receipts remain external: `463-pass1-domain-red.log`,
+`463-pass1-red/463-pass1-red.trx` (mouse target witness),
+`463-pass1-sql-red/463-pass1-sql-red.trx`,
+`463-pass1-green/463-pass1-green.trx`, matching build/domain/template logs and
+`463-pass1-discovery.json`. These are focused remediation checks, not another
+independent review or a claim of final integration qualification.
+
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
 Complex implementation uses Sol MAX; focused implementation and Pass 1 use

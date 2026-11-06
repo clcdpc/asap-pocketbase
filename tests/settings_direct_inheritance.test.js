@@ -94,6 +94,17 @@ const { JSDOM } = require('jsdom');
     editors.populate(data, false);
     assert.equal(editors.collect().changed, false, 'Discard replaces pin/reset intent with accepted raw ownership.');
     retiredReset.click(); assert.equal(editors.collect().changed, false, 'A retained reset from a retired render cannot alter accepted state.');
+    const missingLineage = { ...data, stored: { ...data.stored, templates: [source, customTemplate],
+      libraryOverride: { ...override, templates: [customTemplate] } } };
+    editors.populate(missingLineage, false);
+    edit(template().querySelector('.template-subject'), 'Temporary inherited subject');
+    template().querySelector('[data-template-status="subject"] .settings-use-system').click();
+    assert.match(template().querySelector('[data-template-item-status]').textContent, /Using system value · Unsaved/,
+      'Reset-only field intent on an inherited template does not own a new lineage draft.');
+    assert.equal(editors.collect().templates.find(value => value.sourceTemplateId === '40').overridden, false);
+    edit(template().querySelector('.template-body'), 'Genuine sibling pin');
+    assert.match(template().querySelector('[data-template-item-status]').textContent, /Library setting/);
+    assert.equal(editors.collect().templates.find(value => value.sourceTemplateId === '40').overridden, true);
     assert.deepEqual(override.providers[0], { id: '20', kind: 'libraryOverride', label: '', isEnabled: false, urlTemplate: null, version: 'provider-version' });
     editors.populate({ ...data, stored: { ...data.stored, libraryOverride: { ...override,
       publicationOptions: set([{ id: 'different-library-choice', label: 'Any year', enabled: true, sortOrder: 0 }]) } } }, false);

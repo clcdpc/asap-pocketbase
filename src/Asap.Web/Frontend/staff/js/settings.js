@@ -2207,7 +2207,7 @@ export function createSettingsController({
       };
       for (const [role, value] of [['subject', subject], ['body', body]]) {
         const intent = state.templateIntents.get(`${key}.${role}`);
-        if (intent) row[role] = intent === 'reset' ? null : value;
+        if (intent === 'pin' || libraryRow && intent === 'reset') row[role] = intent === 'reset' ? null : value;
       }
       if (Object.keys(row).length > 2) append(row, fieldset);
     }
@@ -2233,10 +2233,14 @@ export function createSettingsController({
         if (item.reset) {
           row.reset = true;
         } else {
-          if (item.subjectChanged) row.subject = item.fieldIntents?.subject === 'reset' ? null : item.subject;
-          if (item.bodyChanged) row.body = item.fieldIntents?.body === 'reset' ? null : item.body;
-          if (item.displayNameChanged) row.displayName = item.fieldIntents?.displayName === 'reset' ? null : item.displayName;
-          if (item.enabledChanged) row.enabled = item.fieldIntents?.enabled === 'reset' ? true : item.enabled;
+          // Resets remove accepted columns. Without a lineage row they have
+          // nothing to remove; only a remaining explicit pin can create a row.
+          const writesField = key => item[`${key}Changed`] &&
+            (isSystem() || item.hadOverride || item.fieldIntents?.[key] === 'pin');
+          if (writesField('subject')) row.subject = item.fieldIntents?.subject === 'reset' ? null : item.subject;
+          if (writesField('body')) row.body = item.fieldIntents?.body === 'reset' ? null : item.body;
+          if (writesField('displayName')) row.displayName = item.fieldIntents?.displayName === 'reset' ? null : item.displayName;
+          if (writesField('enabled')) row.enabled = item.fieldIntents?.enabled === 'reset' ? true : item.enabled;
           if (isSystem() && item.sortOrderChanged) row.sortOrder = item.sortOrder;
         }
         if (row.reset || !isSystem() && item.overridden && !item.hadOverride || Object.keys(row).length > 2) append(row, editor);
