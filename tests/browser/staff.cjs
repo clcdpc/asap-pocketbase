@@ -3827,7 +3827,7 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
     for (const key of ['id', 'tenantId', 'authenticationEmail', 'role', 'organizationId']) assert.equal(revised[key], original[key]);
     assert.equal(await page.locator('#staff-identity').textContent(), revised.displayName);
     await page.getByRole('button', { name: 'Profile', exact: true }).click();
-    assert.equal(await page.locator('#notification-email').inputValue(), revised.notificationEmail);
+    assert.equal(await page.locator('#notification-email').textContent(), revised.notificationEmail);
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'staff-access-current-preferences');
 
     for (const kind of ['Title', 'Additional Copy']) {

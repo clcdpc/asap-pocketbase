@@ -40,11 +40,48 @@ checkout are preserved. #454 is merged; #469 is open and is not incorporated.
 | Issue | Implementation | Pass 1 | Pass 2 | Focused evidence | Status |
 | --- | --- | --- | --- | --- | --- |
 | #441 | `84d01d7`, `a1ac681` | Luna MAX: forced partial-retry coverage added | Astra HIGH: state matrix and 20 independent probes pass | SQL 68/68; browser 1/1; focused Node/build pass | Technically qualified |
-| #440 | Pending | Pending: Luna MAX | Pending: Luna MAX browser interaction | Pending | Waiting for #441 |
+| #440 | This implementation commit | Pending: Luna MAX | Pending: Luna MAX browser interaction | Release build; focused Node; 271 navigation/draft journeys; real-SQL browser 1/1 | Implementation complete; independent reviews pending |
 
 Requested child models/reasoning will be selected explicitly. The parent
 session cannot switch its own model and retains the current Codex orchestration
 configuration. Final reconciliation uses Astra EXTRA HIGH.
+
+## #440 primary account information and refresh
+
+- Profile now presents the primary notification email as a selectable `dt`/`dd`
+  account value with the existing Staff Access help text. A missing value reads
+  “No primary notification email is set.” No input or edit control remains.
+- `profileValues()` contains only editable preferences, and the POST payload
+  still excludes `NotificationEmail`. The account display refreshes from the
+  exact latest `sessionIdentity.preferences()` snapshot even while a Profile
+  draft or mutation is present; editable preferences keep their existing draft,
+  conflict, uncertain-save and identity guards. Older same-actor snapshots and
+  previous identities cannot repaint the account value.
+- Browser checks verify present/missing/long values, selection, label/help
+  association, no input/tab stop, changed-primary conflict refresh, save payload,
+  keyboard flow, and desktop/dark/mobile/200% zoom layouts.
+
+Focused implementation evidence:
+
+- `dotnet build tests/Asap.Tests/Asap.Tests.csproj -c Release --no-restore`:
+  passed, zero warnings/errors.
+- `node tests/staff_profile_controller.test.js` and
+  `node tests/staff_dotnet_frontend.test.js`: passed. The focused controller
+  cases cover safe text, present/missing state, payload exclusion, draft refresh,
+  pending mutation, same-actor stale snapshot and identity replacement.
+- `node tests/staff_navigation_drafts_ui.test.js`: 271 journeys passed.
+- MTP real-SQL browser run: 1/1 passed. The first attempt failed because
+  Playwright could not find the native definition by `getByRole('definition')`;
+  the test now checks the semantic `dt`/`dd` markup and explicit ARIA
+  associations directly. Final command:
+  `dotnet tests/Asap.Tests/bin/Release/net10.0/Asap.Tests.dll --filter FullyQualifiedName~WeeklyProfileBrowserShowsPrimaryAccountInfoAndPreservesPreferenceContractsAcrossAccessibleLayouts --report-trx --report-trx-filename i440-weekly-profile-browser-20261105-03.trx --results-directory .artifacts/test-results/i440-weekly-profile-browser-20261105-03`.
+  Receipt: `.artifacts/test-results/i440-weekly-profile-browser-20261105-03/i440-weekly-profile-browser-20261105-03.trx`.
+- Browser report and screenshots:
+  `.artifacts/browser/weekly-profile-130bdf9c31454deeafe7ab0e88c89e91/`.
+  All six states (missing, long mobile, desktop, dark, mobile and native 200%
+  zoom) had zero serious/critical axe findings, no overflow and loaded images;
+  external requests and page errors were zero. Automated checks do not replace
+  human screen-reader acceptance.
 
 ## #441 recipient and recovery contract
 
@@ -74,7 +111,7 @@ configuration. Final reconciliation uses Astra EXTRA HIGH.
   retroactive copy. This applies to scheduled and forced operations.
 - The Profile field remains optional and uses the existing save, normalization,
   rowversion and draft contracts. Staff access still owns the primary address;
-  its read-only Profile input is left for #440. Other notifications are unchanged.
+  #440 displays it as account information. Other notifications are unchanged.
 
 | Required cases | SQL/provider evidence (`WeeklyRecipient…` methods) |
 | --- | --- |

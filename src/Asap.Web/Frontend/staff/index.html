@@ -185,11 +185,15 @@
           </div>
         </div>
         <form id="profile-form" class="profile-form">
-          <label>
-            <span>Primary notification email</span>
-            <input id="notification-email" type="email" readonly aria-describedby="notification-email-help">
+          <div class="profile-account-info">
+            <dl>
+              <div>
+                <dt id="notification-email-label">Primary notification email</dt>
+                <dd id="notification-email" aria-labelledby="notification-email-label" aria-describedby="notification-email-help">No primary notification email is set.</dd>
+              </div>
+            </dl>
             <small id="notification-email-help">Managed by Staff Access.</small>
-          </label>
+          </div>
           <label>
             <span id="weekly-email-label">Additional weekly summary email (optional)</span>
             <input id="weekly-email" type="email" autocomplete="email" aria-labelledby="weekly-email-label" aria-describedby="weekly-email-help">

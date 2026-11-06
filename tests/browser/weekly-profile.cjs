@@ -17,9 +17,9 @@ async function main() {
   const headers = { 'X-ASAP-Test-Staff-Id': staffId, 'X-ASAP-Test-Tenant-Id': tenantId, 'X-ASAP-Test-Staff-Email': email };
   const report = { externalRequests: 0, pageErrors: [], posts: [], states: [] };
   const contexts = [];
-  let conflictNext = false;
+  let conflictNext = false, primaryForNextSession;
 
-  async function bind(context) {
+  async function bind(context, { missingPrimary = false, primaryEmail } = {}) {
     contexts.push(context);
     await context.route('**/*', route => {
       if (new URL(route.request().url()).origin === origin) return route.continue();
@@ -37,9 +37,21 @@ async function main() {
         assert.equal(response.status(), 200, 'The first real SQL mutation advances rowversion.');
         const stale = await route.fetch();
         assert.equal(stale.status(), 409, 'The same original version must conflict in SQL.');
+        primaryForNextSession = 'conflict-review@example.org';
         return route.fulfill({ response: stale });
       }
       return route.fulfill({ response });
+    });
+    await page.route('**/api/asap/staff/session', async route => {
+      const response = await route.fetch();
+      const session = await response.json();
+      if (primaryEmail !== undefined) session.staff.notificationEmail = primaryEmail;
+      if (missingPrimary) session.staff.notificationEmail = null;
+      if (primaryForNextSession !== undefined) {
+        session.staff.notificationEmail = primaryForNextSession;
+        primaryForNextSession = undefined;
+      }
+      return route.fulfill({ response, json: session });
     });
     await page.goto(`${origin}/staff/?stage=profile`, { waitUntil: 'networkidle' });
     await page.locator('#profile-view:not([hidden])').waitFor();
@@ -71,6 +83,31 @@ async function main() {
 
   try {
     const page = await bind(await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers }));
+    const primary = page.locator('#notification-email');
+    assert.equal(await page.getByText('Primary notification email', { exact: true }).count(), 1);
+    assert.equal(await primary.textContent(), 'primary@example.org');
+    assert.equal(await page.locator('#notification-email').evaluate(node => node.tagName), 'DD');
+    assert.equal(await page.locator('input#notification-email').count(), 0, 'primary account text is not an input');
+    assert.equal(await page.locator('#notification-email').getAttribute('tabindex'), null, 'account text is not a keyboard tab stop');
+    assert.equal(await page.locator('#notification-email').getAttribute('aria-labelledby'), 'notification-email-label');
+    assert.equal(await page.locator('#notification-email').getAttribute('aria-describedby'), 'notification-email-help');
+    const selectedPrimary = await page.locator('#notification-email').evaluate(node => {
+      const range = document.createRange(); range.selectNodeContents(node);
+      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      return selection.toString();
+    });
+    assert.equal(selectedPrimary, 'primary@example.org', 'account email remains selectable and copyable');
+    const missingPage = await bind(await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers }),
+      { missingPrimary: true });
+    assert.equal(await missingPage.locator('#notification-email').textContent(),
+      'No primary notification email is set.');
+    assert.equal(await missingPage.locator('input#notification-email').count(), 0);
+    await scan(missingPage, 'missing-primary');
+    const longAddress = `${'long-address-segment-'.repeat(12)}@example.org`;
+    const longPrimaryPage = await bind(await browser.newContext({ viewport: { width: 390, height: 844 }, extraHTTPHeaders: headers }),
+      { primaryEmail: longAddress });
+    assert.equal(await longPrimaryPage.locator('#notification-email').textContent(), longAddress);
+    await scan(longPrimaryPage, 'long-primary-mobile');
     const field = page.getByRole('textbox', { name: 'Additional weekly summary email (optional)', exact: true });
     assert.equal(await field.inputValue(), '', 'Absent preference remains blank.');
     assert.equal(await field.getAttribute('aria-describedby'), 'weekly-email-help');
@@ -102,8 +139,12 @@ async function main() {
     await page.getByRole('button', { name: 'Save profile', exact: true }).click(); await conflict;
     await page.locator('#app-status').filter({ hasText: /changed|stale/i }).waitFor();
     assert.equal(await field.inputValue(), 'conflict@example.org', 'Conflict recovery reloads authoritative SQL preferences.');
+    assert.equal(await page.locator('#notification-email').textContent(), 'conflict-review@example.org',
+      'authoritative conflict recovery refreshes primary account text while the mutation is being reviewed');
     await field.fill('additional@example.org'); await page.locator('#weekly-enabled').uncheck(); await save(page);
     assert.equal(report.posts.at(-1).weeklyActionSummaryEnabled, false);
+    assert.equal(await page.locator('#notification-email').textContent(), 'primary@example.org',
+      'the next accepted session refresh replaces the prior authoritative account snapshot');
     await page.reload({ waitUntil: 'networkidle' });
     assert.equal(await field.inputValue(), 'additional@example.org');
     assert.equal(await page.locator('#weekly-enabled').isChecked(), false);

@@ -10,7 +10,7 @@ public sealed partial class PatronJourneyTests
 {
     [TestMethod]
     [TestCategory(TestCategories.Browser)]
-    public async Task WeeklyProfileBrowserPreservesAdditionalPreferenceValidationDraftsAndAccessibleLayouts()
+    public async Task WeeklyProfileBrowserShowsPrimaryAccountInfoAndPreservesPreferenceContractsAcrossAccessibleLayouts()
     {
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         using var client = factory.CreateClient();
@@ -30,7 +30,7 @@ public sealed partial class PatronJourneyTests
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "browser-results.json")));
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
-            Assert.AreEqual(4, report.RootElement.GetProperty("states").GetArrayLength());
+            Assert.AreEqual(6, report.RootElement.GetProperty("states").GetArrayLength());
             var saved = await context.StaffUsers.AsNoTracking().SingleAsync(item => item.Id == id);
             Assert.AreEqual("primary@example.org", saved.NotificationEmail);
             Assert.AreEqual("additional@example.org", saved.WeeklyActionSummaryEmail);
