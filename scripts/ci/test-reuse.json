@@ -1,5 +1,5 @@
 {
-  "schema": 4,
+  "schema": 5,
   "repository": "clcdpc/asap-pocketbase",
   "repository_id": 1221758626,
   "workflow": ".github/workflows/dotnet.yml",
@@ -11,6 +11,104 @@
   "environment_epoch": "clc-linux-2026-10-29-v1",
   "lifetime_days": 14,
   "exclusions": [
+    {
+      "paths": [
+        ".github/workflows/issue-triage.yml"
+      ],
+      "suites": [
+        "dotnet",
+        "browser"
+      ],
+      "reason": "Only the issues event labels issues; the retained frontend issue-triage contract owns its behavior. No build, native test or browser consumer reads it."
+    },
+    {
+      "paths": [
+        "scripts/ci/reviewed-test-categories.json"
+      ],
+      "suites": [
+        "dotnet",
+        "browser"
+      ],
+      "reason": "Selection always validates the complete disjoint native catalog against this inventory. Each suite fingerprints its exact resulting identities and methods, so a change only to the other partition does not invalidate it. Frontend CI safety contracts also read the inventory and keep it included."
+    },
+    {
+      "paths": [
+        "tests/administration_audit.test.js",
+        "tests/email_template_placeholders.test.js",
+        "tests/frontend_native_dialog_guard.test.js",
+        "tests/issue_triage_workflow.test.js",
+        "tests/patron_auth_restore_race_dotnet.test.js",
+        "tests/patron_embed_loader.test.js",
+        "tests/patron_html.test.js",
+        "tests/patron_initial_config_failed_login_dotnet.test.js",
+        "tests/patron_initial_config_race_dotnet.test.js",
+        "tests/patron_submission_identity_race.test.js",
+        "tests/patron_text_placeholders.test.js",
+        "tests/request_custom_field_drafts.test.js",
+        "tests/settings_accessibility_layout.test.js",
+        "tests/settings_domain_editor.test.js",
+        "tests/settings_email_admin.test.js",
+        "tests/settings_library_participation.test.js",
+        "tests/settings_logo_multipart.test.js",
+        "tests/settings_mutation_scope_race_dotnet.test.js",
+        "tests/settings_organization_catalog_guard.test.js",
+        "tests/settings_patron_code_picker.test.js",
+        "tests/settings_polaris_diagnostic.test.js",
+        "tests/settings_polaris_feedback.test.js",
+        "tests/settings_save_completion.test.js",
+        "tests/settings_staff_access.test.js",
+        "tests/settings_staff_scope.test.js",
+        "tests/settings_template_editor.test.js",
+        "tests/shared_http_response_contract.test.js",
+        "tests/staff_access_postcommit_401_ui.test.js",
+        "tests/staff_analytics_race_dotnet.test.js",
+        "tests/staff_bulk_controller.test.js",
+        "tests/staff_confirmation.test.js",
+        "tests/staff_copy_controllers.test.js",
+        "tests/staff_copy_table.test.js",
+        "tests/staff_custom_fields_clear.test.js",
+        "tests/staff_departure_protocol.test.js",
+        "tests/staff_dialog_focus_dotnet.test.js",
+        "tests/staff_display_order.test.js",
+        "tests/staff_dotnet_frontend.test.js",
+        "tests/staff_draft_scope.test.js",
+        "tests/staff_email_test.test.js",
+        "tests/staff_forbidden_recovery_dotnet.test.js",
+        "tests/staff_http_session_identity.test.js",
+        "tests/staff_legacy_links_url.test.js",
+        "tests/staff_navigation_drafts_ui.test.js",
+        "tests/staff_operations_controller.test.js",
+        "tests/staff_operations_postcommit_401_ui.test.js",
+        "tests/staff_operations_ui.test.js",
+        "tests/staff_owner_replacement.test.js",
+        "tests/staff_profile_controller.test.js",
+        "tests/staff_queue_host_controller.test.js",
+        "tests/staff_recent_navigation.test.js",
+        "tests/staff_request_actions_ui.test.js",
+        "tests/staff_request_details.test.js",
+        "tests/staff_request_table.test.js",
+        "tests/staff_research.test.js",
+        "tests/staff_router_navigation.test.js",
+        "tests/staff_session_identity.test.js",
+        "tests/staff_session_shell_controller.test.js",
+        "tests/staff_stale_navigation_ui.test.js",
+        "tests/staff_suggestion_contract.test.js",
+        "tests/staff_suggestion_controller.test.js",
+        "tests/staff_suggestion_partial_401_ui.test.js",
+        "tests/staff_suggestion_postcommit_401_ui.test.js",
+        "tests/staff_suggestion_quick_create.test.js",
+        "tests/staff_suggestion_ui.test.js",
+        "tests/staff_title_controller.test.js",
+        "tests/staff_title_status_navigation.test.js",
+        "tests/test_data_protection_certificate_provisioning.test.js",
+        "tests/test_host_bootstrap_contract.test.js"
+      ],
+      "suites": [
+        "dotnet",
+        "browser"
+      ],
+      "reason": "Audited standalone Node contract tests, launched only by tests/run_all.js. Neither native projects nor browser scripts import/read them. Keep the two mandatory CI safety contracts, the runner, shared helpers, unknown/new files and native tests included; test_native_exclusions_have_no_cross_suite_consumers guards direct consumers."
+    },
     {
       "paths": [
         "scripts/ci/test-reuse.md",

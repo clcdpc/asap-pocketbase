@@ -50,7 +50,8 @@ Test-IIS activation still requires existing explicit authorization and successfu
 final qualification. There is no aggregation test job or additional runner.
 
 Browser and frontend source changes invalidate their evidence. Only the exact
-audited JS/CSS paths listed in test-reuse.json can leave backend evidence valid.
+audited JS/CSS paths and standalone Node contracts listed in test-reuse.json
+can leave backend evidence valid.
 HTML entry points, vendor assets, manifests, new paths, backend/schema/test
 changes and execution/security/build/deployment tooling remain conservative.
 Current build/publication checks and frontend-serving/browser contracts still
@@ -58,22 +59,27 @@ validate changed asset bytes.
 
 ## Events, provenance and evidence
 
-PR selection verifies current base/head, exact synthetic-merge parents, a unique
+PR selection verifies the trusted current head, actual synthetic-merge parents,
+the first parent's membership in fetched main history, a unique
 merge base and both sides of renames. Every valid changed path selects the full
 required population, including documentation, build/CI tooling and unknown paths.
 The cumulative PR diff does not demand fresh execution: reuse independently
 compares the effective tested inputs, including CI/test tooling by default.
-Ambiguous or invalid metadata still forces fresh execution. Only explicit
+Advertised base SHAs may lag or advance on the same main lineage without
+forcing fresh execution. Ambiguous or invalid metadata still forces fresh execution. Only explicit
 force-full bypasses otherwise valid matching evidence. Triggering and originating
 events do not affect eligibility: PR, manual, branch, tag, release and deployment
 runs share the same fingerprint/evidence contract. Tag refs (including annotated
 tags) must peel to the exact tested commit; release and deployment metadata must
 agree with it. Verified empty diffs still require the complete population.
 
-Evidence schema 4 rejects prior populations and the two-job contract. It binds suite, exact
+Evidence schema 5 rejects prior populations and the two-job contract. It binds suite, exact
 identities, complete classification, source/resolved dependencies, originating
 run/attempt/job, checkout logs, Git blob/tree identity, artifact digest, age and
-successful original steps. Lookup is bounded and read-only. The final suite
+successful original steps. Lookup queries artifacts by their exact suite
+fingerprint, remains bounded/read-only, and is unaffected by unrelated run
+volume. Deployment-only retries preserve the independently successful original
+qualification; later failed qualification attempts still reject it. The final suite
 verifier re-fetches original evidence; a cached plan cannot authorize success.
 The full workflow, including browser execution and the required gate, is part
 of the execution contract. Reused evidence never becomes new original evidence.

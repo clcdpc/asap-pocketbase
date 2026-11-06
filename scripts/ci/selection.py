@@ -42,6 +42,11 @@ def git(*args, root=ROOT):
     return subprocess.check_output(["git", *args], cwd=root, timeout=30, stderr=subprocess.PIPE).decode("utf-8").strip()
 
 
+def ancestor(older, newer, root=ROOT):
+    return subprocess.run(["git", "merge-base", "--is-ancestor", older, newer], cwd=root, timeout=30,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
 def full(reason, fresh=True):
     return {"categories": list(ALL), "fresh": fresh, "reason": reason}
 
@@ -76,11 +81,20 @@ def changed_paths(event_name, event, env, root=ROOT, current_pr=None):
                     and candidate["base"]["repo"]["full_name"] == repository
                     and candidate["author_association"] in ("OWNER", "MEMBER", "COLLABORATOR"),
                     "PR change metadata is not trusted ready validation")
-        base, head = pr["base"]["sha"], pr["head"]["sha"]
-        require(sha(base) and sha(head) and current["base"]["sha"] == base and current["head"]["sha"] == head,
-                "PR base/head changed after the event")
+        head = pr["head"]["sha"]
+        require(sha(head) and current["head"]["sha"] == head, "PR head changed after the event")
         parents = git("rev-list", "--parents", "-n", "1", tested, root=root).split()
-        require(parents == [tested, base, head], "PR synthetic merge does not match event base/head")
+        require(len(parents) == 3 and parents[0] == tested and parents[2] == head,
+                "PR synthetic merge does not match the tested head")
+        # GitHub's advertised base SHA can lag the base used to create the merge.
+        # Trust the actual first parent only after binding it to fetched main.
+        base = parents[1]
+        require(ancestor(base, "refs/remotes/origin/main", root),
+                "PR merge parent is outside trusted main history")
+        for candidate in (pr, current):
+            advertised = candidate["base"]["sha"]
+            require(sha(advertised) and (ancestor(advertised, base, root) or ancestor(base, advertised, root)),
+                    "PR advertised base is outside the tested main lineage")
         merge_bases = git("merge-base", "--all", base, head, root=root).splitlines()
         require(len(merge_bases) == 1 and sha(merge_bases[0]), "PR merge base is ambiguous")
         baseline = merge_bases[0]
@@ -206,13 +220,14 @@ def population(selected, root=ROOT):
     selected_uids = sorted(uid for key in selected["categories"] for uid in partitions[key])
     expression = FILTERS["core"]
     require(expression == FILTERS["core"], "Unexpected execution filter")
-    catalog_identity = digest({"catalog": catalog, "partitions": partitions, "reviewed": reviewed})
     suites = {}
     for suite, tests, expression in (("dotnet", selected_uids, expression),
                                       ("browser", sorted(partitions["browser"]), FILTERS["browser"])):
+        # The full disjoint union is validated above on every invocation. Its
+        # unrelated partition must not become an input to this suite's reuse key.
         suites[suite] = {"filter": expression, "minimum": len(tests), "expected": len(tests),
-                         "identities": sorted(digest(uid) for uid in tests), "population": catalog_identity}
-    suites["dotnet"].update(partition_counts={key: len(partitions[key]) for key in PARTITIONS})
+                         "identities": sorted(digest(uid) for uid in tests),
+                         "population": digest({uid: catalog[uid] for uid in tests})}
     files = sorted(p.name for p in (root / "tests").glob("*.test.js"))
     require(files, "Frontend discovery is empty")
     suites["frontend"] = {"filter": "npm test (all root *.test.js files)", "minimum": len(files),
@@ -231,7 +246,7 @@ def prepare(root=ROOT, directory=DIRECTORY):
     (directory / "selection.json").write_bytes(canonical(result) + b"\n")
     # Human-readable case inventory; authorization still re-discovers the population.
     (directory / "catalog.json").write_bytes(canonical({"commit": result["commit"], "partitions": members}) + b"\n")
-    print(json.dumps({"decision": selected, "counts": suites["dotnet"]["partition_counts"],
+    print(json.dumps({"decision": selected, "counts": {key: len(value) for key, value in members.items()},
                       "selected": suites["dotnet"]["expected"], "discovery_seconds": seconds}, indent=2))
 
 

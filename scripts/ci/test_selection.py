@@ -120,6 +120,7 @@ class GitDiffTests(unittest.TestCase):
         self.git("checkout", "-q", "main")
         base = self.commit("database/Asap.Database/Tables/New.sql", "schema") if advance_base else self.initial
         self.git("merge", "--no-ff", "-qm", "synthetic merge", head)
+        self.git("update-ref", "refs/remotes/origin/main", base)
         tested = self.git("rev-parse", "HEAD")
         repo = {"full_name": "clcdpc/asap-pocketbase"}
         pr = {"number": 1, "state": "open", "draft": False, "author_association": "COLLABORATOR",
@@ -197,6 +198,22 @@ class GitDiffTests(unittest.TestCase):
         self.assertIn("database/Asap.Database/Tables/New.sql", paths)
         self.assertEqual(policy.paths_policy(paths)["categories"], policy.ALL)
 
+    def test_stale_advertised_base_uses_verified_main_merge_parent(self):
+        event, env = self.integration(advance_base=True)
+        event["pull_request"]["base"]["sha"] = self.initial
+        current = copy.deepcopy(event["pull_request"])
+        paths = policy.changed_paths("pull_request", event, env, self.root, current)
+        self.assertIn("database/Asap.Database/Tables/New.sql", paths)
+        (self.root / "event.json").write_text(json.dumps(event))
+        with mock.patch.object(reuse.GitHub, "get", return_value=current):
+            self.assertFalse(policy.decision({**env, "GH_TOKEN": "fixture"}, self.root)["fresh"])
+
+    def test_merge_parent_must_belong_to_trusted_main_history(self):
+        event, env = self.integration(advance_base=True)
+        self.git("update-ref", "refs/remotes/origin/main", self.initial)
+        with self.assertRaises(policy.SelectionError):
+            policy.changed_paths("pull_request", event, env, self.root, event["pull_request"])
+
     def test_changed_head_base_merge_parent_or_trust_cannot_use_selective_diff(self):
         event, env = self.integration()
         for field in ("head", "base", "draft", "trust", "fork", "closed"):
@@ -253,6 +270,48 @@ class GitDiffTests(unittest.TestCase):
         paths = policy.changed_paths("push", event, self.env(tested, "push"), self.root)
         self.assertIn("src/Unreviewed/Source.cs", paths)
         self.assertFalse(policy.paths_policy(paths)["fresh"])
+
+
+class PopulationIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / "scripts/ci").mkdir(parents=True)
+        (self.root / "tests").mkdir()
+        (self.root / "tests/frontend.test.js").touch()
+        self.parts = {key: {key: {"method": "Asap.Tests." + key + ".Case", "name": key}}
+                      for key in policy.PARTITIONS}
+
+    def population(self):
+        reviewed = {"Browser": [value["method"] for value in self.parts["browser"].values()]}
+        (self.root / "scripts/ci/reviewed-test-categories.json").write_text(json.dumps(reviewed))
+        def discover(expression=None, root=None):
+            if expression is None:
+                return {uid: value for tests in self.parts.values() for uid, value in tests.items()}
+            return self.parts[next(key for key, value in policy.FILTERS.items() if value == expression)]
+        with mock.patch.object(policy, "discover", side_effect=discover):
+            return policy.population(policy.full("complete", fresh=False), self.root)[0]
+
+    def test_another_partition_or_frontend_population_does_not_invalidate_native_suite(self):
+        before = self.population()
+        self.parts["browser"]["new"] = {"method": "Asap.Tests.browser.New", "name": "new"}
+        after = self.population()
+        self.assertEqual(before["dotnet"], after["dotnet"])
+        self.assertNotEqual(before["browser"], after["browser"])
+        (self.root / "tests/new.test.js").touch()
+        with_frontend = self.population()
+        self.assertEqual(after["dotnet"], with_frontend["dotnet"])
+        self.assertEqual(after["browser"], with_frontend["browser"])
+        self.assertNotEqual(after["frontend"], with_frontend["frontend"])
+
+    def test_reclassification_changes_both_affected_suite_keys(self):
+        before = self.population()
+        self.parts["core"]["other"] = {"method": "Asap.Tests.core.Other", "name": "other"}
+        self.parts["browser"]["core"] = self.parts["core"].pop("core")
+        after = self.population()
+        for suite in ("dotnet", "browser"):
+            self.assertNotEqual(before[suite], after[suite])
 
 
 class PopulationTests(unittest.TestCase):
