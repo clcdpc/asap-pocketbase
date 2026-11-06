@@ -24,8 +24,9 @@ test('format cards retain complete drafts and use the actual container width at 
     await context.close();
     await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
-  const page = context.pages()[0], errors = [], external = [];
+  const page = context.pages()[0], errors = [], external = [], mutations = [];
   page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => { if (request.method() === 'POST') mutations.push(request.url()); });
   page.on('dialog', async dialog => { errors.push('Unexpected native dialog: ' + dialog.type()); await dialog.dismiss(); });
   await context.route('**/*', async route => {
     const url = new URL(route.request().url());
@@ -46,7 +47,7 @@ test('format cards retain complete drafts and use the actual container width at 
     root.querySelector('#settings-form').hidden = false;
     for (const panel of root.querySelectorAll('.settings-panel')) panel.hidden = panel.id !== 'settings-patron';
     for (const tab of root.querySelectorAll('[role="tab"]')) tab.setAttribute('aria-selected', String(tab.id === 'settings-nav-patron'));
-    const formats = ['book', 'digital', 'other'].map((code, index) => ({ id: String(10 + index), code,
+    const formats = ['book', 'digital', 'other', 'audio', 'video', 'journal'].map((code, index) => ({ id: String(10 + index), code,
       label: index ? 'Configured long format ' + 'wrapping'.repeat(18) : 'Configured Book', ownerOrganizationId: 1,
       overridden: false, version: 'AAAAAAAAAAE=',
       isEnabled: true, messageBehavior: 'none', title: { mode: 'required', label: 'Title' },
@@ -72,7 +73,25 @@ test('format cards retain complete drafts and use the actual container width at 
       patronCodeChoices: [], autoClaimStaff: [] };
     window.editors.populate(window.ruleData, false);
   });
+  await page.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
+  async function assertNoSeriousRuleAccessibilityFindings() {
+    const findings = await page.evaluate(async () => {
+      const block = document.querySelector('#format-rules-editor').parentElement;
+      const results = await window.axe.run(block);
+      return results.violations.filter(item => ['serious', 'critical'].includes(item.impact))
+        .map(item => `${item.id}: ${item.help}`);
+    });
+    assert.deepEqual(findings, []);
+  }
   const cards = page.locator('#format-rules-editor [data-rule-code]');
+  const initialRuleCount = await cards.count();
+  assert.equal(initialRuleCount, 6, 'The reported six-card exhausted state is represented by fixture data.');
+  const addRule = page.locator('#add-format-rule');
+  const ruleAvailability = page.locator('#format-rule-availability');
+  assert.equal(await addRule.isDisabled(), true, 'Add rule is unavailable when every material format has a rule.');
+  assert.equal(await ruleAvailability.innerText(), 'All available formats already have rules.');
+  assert.equal(await addRule.getAttribute('aria-describedby'), 'format-rule-availability');
+  await assertNoSeriousRuleAccessibilityFindings();
   const first = cards.first(), button = first.locator('[data-rule-toggle]');
   assert.equal(await cards.locator('.settings-rule-details:visible').count(), 0);
   const collapsedHeight = (await first.boundingBox()).height;
@@ -239,20 +258,76 @@ test('format cards retain complete drafts and use the actual container width at 
   await button.focus();
   await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
   assert.equal(await button.evaluate(node => getComputedStyle(node).outlineStyle !== 'none'), true);
-  await page.locator('#add-material-format').click();
-  await page.locator('#add-format-rule').click();
-  const customMaterial = page.locator('#material-formats-editor [data-domain-row]').last();
-  const customCard = cards.last(), retainedCustom = await customCard.elementHandle();
+  const addFormat = page.locator('#add-material-format');
+  const formatRows = page.locator('#material-formats-editor [data-domain-row]');
+  await addFormat.click();
+  const firstCustomMaterial = formatRows.last();
+  const firstCustomCode = await firstCustomMaterial.getAttribute('data-format-code');
+  assert.equal(await addRule.isDisabled(), false, 'A newly available material format enables Add rule.');
+  assert.equal(await ruleAvailability.isHidden(), true);
+  await firstCustomMaterial.locator('[data-material-field="label"]').fill('First draft format');
+  const beforeFirstAdd = await page.evaluate(() => window.editors.collect());
+  await addRule.focus();
+  await page.keyboard.press('Enter');
+  const firstCustomCard = page.locator(`#format-rules-editor [data-rule-code="${firstCustomCode}"]`);
+  assert.equal(await firstCustomCard.count(), 1, 'Exactly one rule is created for the first eligible format.');
+  assert.equal(await firstCustomCard.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true');
+  assert.equal(await firstCustomCard.locator('[data-rule-toggle]').evaluate(node => node === document.activeElement), true,
+    'Keyboard activation focuses the expanded new rule.');
+  assert.equal((await page.evaluate(() => window.editors.collect())).domainsChanged.rules, true);
+  assert.equal((await page.evaluate(() => window.editors.collect())).changed, true);
+  assert.equal(await formatRows.count(), initialRuleCount + 1, 'Adding a rule does not create another material format.');
+  const firstCustomTitle = firstCustomCard.locator('[data-format-label="title"]');
+  await firstCustomTitle.fill('Unsaved first rule draft');
+
+  await addFormat.click();
+  const secondCustomMaterial = formatRows.last();
+  const draftCode = await secondCustomMaterial.getAttribute('data-format-code');
+  const customMaterial = page.locator(`#material-formats-editor [data-format-code="${draftCode}"]`);
+  assert.notEqual(draftCode, firstCustomCode);
+  assert.equal(await addRule.isDisabled(), false, 'The next unrepresented format remains eligible.');
+  assert.equal(await ruleAvailability.isHidden(), true);
+  const formatsBeforeSecondRule = await formatRows.count();
+  await addRule.focus();
+  await page.keyboard.press('Space');
+  const customCard = page.locator(`#format-rules-editor [data-rule-code="${draftCode}"]`);
+  const retainedCustom = await customCard.elementHandle();
+  assert.equal(await customCard.count(), 1, 'The next activation adds one distinct rule.');
+  assert.equal(await customCard.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true');
+  assert.equal(await customCard.locator('[data-rule-toggle]').evaluate(node => node === document.activeElement), true);
+  assert.equal(await formatRows.count(), formatsBeforeSecondRule);
+  assert.equal(await firstCustomCard.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true',
+    'An existing expansion survives adding another rule.');
+  assert.equal(await firstCustomTitle.inputValue(), 'Unsaved first rule draft', 'An existing rule draft survives rerender.');
+  assert.equal(await addRule.isDisabled(), true);
+  assert.equal(await ruleAvailability.innerText(), 'All available formats already have rules.');
+  await page.evaluate(() => document.getElementById('add-format-rule').dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  assert.equal(await page.locator('#format-rules-editor [data-rule-code]').count(), initialRuleCount + 2,
+    'A repeated activation after exhaustion cannot append a duplicate rule.');
+  assert.equal((await page.evaluate(() => window.editors.collect())).values.rules.length, initialRuleCount + 2);
+  assert.ok(beforeFirstAdd.values.formats.length < (await page.evaluate(() => window.editors.collect())).values.formats.length);
+
+  await customCard.locator('.settings-row-actions [data-row-action="delete"]').click();
+  assert.equal(await addRule.isDisabled(), false, 'Deleting a rule makes its existing format available again.');
+  assert.equal(await ruleAvailability.isHidden(), true);
+  await addRule.focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator(`#format-rules-editor [data-rule-code="${draftCode}"]`).count(), 1,
+    'Deleting and re-adding keeps one rule for the same stable format code.');
+  assert.equal(await addRule.isDisabled(), true);
+  assert.equal(await firstCustomTitle.inputValue(), 'Unsaved first rule draft');
+
+  const readdedCustomCard = page.locator(`#format-rules-editor [data-rule-code="${draftCode}"]`);
+  const retainedReaddedCustom = await readdedCustomCard.elementHandle();
   const panelId = await customCard.locator('[data-rule-toggle]').getAttribute('aria-controls');
-  const customTitle = customCard.locator('[data-format-label="title"]');
+  const customTitle = readdedCustomCard.locator('[data-format-label="title"]');
   await customTitle.fill('Unsaved custom title');
-  const draftCode = await customMaterial.getAttribute('data-format-code');
   assert.match(draftCode, /^custom_[a-f0-9]{32}$/);
   await customMaterial.locator('[data-material-field="label"]').fill('Configured Book');
-  assert.equal(await retainedCustom.evaluate(node => node.isConnected), true);
-  assert.equal(await customCard.getAttribute('data-rule-code'), draftCode);
-  assert.equal(await customCard.locator('[data-rule-toggle]').getAttribute('aria-controls'), panelId);
-  assert.equal(await customCard.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true');
+  assert.equal(await retainedReaddedCustom.evaluate(node => node.isConnected), true);
+  assert.equal(await readdedCustomCard.getAttribute('data-rule-code'), draftCode);
+  assert.equal(await readdedCustomCard.locator('[data-rule-toggle]').getAttribute('aria-controls'), panelId);
+  assert.equal(await readdedCustomCard.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true');
   assert.equal(await customTitle.inputValue(), 'Unsaved custom title');
   const position = await customCard.evaluate(node => [...node.parentElement.children].indexOf(node) + 1);
   for (const name of [`Move Configured Book, format ${position} up`, `Move Configured Book, format ${position} down`,
@@ -260,14 +335,69 @@ test('format cards retain complete drafts and use the actual container width at 
     assert.equal(await customCard.getByRole('button', { name, exact: true }).getAttribute('title'), name);
   }
   await customMaterial.getByRole('button', { name: 'Move up', exact: true }).click();
-  const redrawnMaterial = page.locator('#material-formats-editor [data-format-id=""]');
+  const redrawnMaterial = page.locator(`#material-formats-editor [data-format-code="${draftCode}"]`);
   await redrawnMaterial.locator('[data-material-field="label"]').fill('Renamed after reorder');
   assert.equal(await redrawnMaterial.getAttribute('data-format-code'), draftCode);
-  assert.equal(await retainedCustom.evaluate(node => node.isConnected && node.dataset.ruleCode), draftCode);
-  assert.equal(await customCard.locator('[data-rule-toggle]').getAttribute('aria-controls'), panelId);
+  assert.equal(await retainedReaddedCustom.evaluate(node => node.isConnected && node.dataset.ruleCode), draftCode);
+  assert.equal(await readdedCustomCard.locator('[data-rule-toggle]').getAttribute('aria-controls'), panelId);
   assert.equal(await customTitle.inputValue(), 'Unsaved custom title');
   assert.equal(await page.evaluate(() => window.editors.collect().values.rules.some(rule => rule.code === 'book')), true);
   await retainedCustom.dispose();
+  await retainedReaddedCustom.dispose();
+
+  await page.evaluate(() => {
+    const data = structuredClone(window.ruleData);
+    data.stored.configuredSystem.formats = [];
+    data.stored.libraryOverride.formats = [];
+    data.stored.formats = [];
+    data.stored.formatRules = [];
+    data.effective.formats = [];
+    window.emptyFormatRuleData = data;
+    window.editors.populate(data, false);
+  });
+  assert.equal(await cards.count(), 0);
+  assert.equal(await addRule.isDisabled(), true);
+  assert.equal(await ruleAvailability.innerText(), 'Add a material format before adding a rule.');
+  await assertNoSeriousRuleAccessibilityFindings();
+  assert.equal((await page.evaluate(() => window.editors.collect())).changed, false,
+    'Availability feedback does not dirty an empty settings draft.');
+  await page.evaluate(() => window.editors.populate(window.emptyFormatRuleData, true));
+  assert.equal(await cards.count(), 0);
+  assert.equal(await addRule.isDisabled(), true);
+  assert.equal(await ruleAvailability.innerText(), 'Add a material format before adding a rule.');
+
+  await page.evaluate(() => window.editors.populate(window.ruleData, true));
+  assert.equal(await addRule.isDisabled(), true, 'System scope independently reports its exhausted formats.');
+  assert.equal(await ruleAvailability.innerText(), 'All available formats already have rules.');
+  await page.evaluate(() => window.editors.populate(window.ruleData, false));
+  assert.equal(await addRule.isDisabled(), true, 'Returning to the inherited library scope recomputes availability.');
+  assert.equal(await ruleAvailability.innerText(), 'All available formats already have rules.');
+
+  await page.evaluate(() => {
+    const data = structuredClone(window.ruleData);
+    const format = data.effective.formats[0];
+    data.stored.configuredSystem.formats = [format];
+    data.stored.libraryOverride.formats = [];
+    data.stored.formats = [format];
+    data.stored.formatRules = data.stored.formatRules.filter(rule => rule.code === format.code);
+    data.effective.formats = [format];
+    window.singleFormatRuleData = data;
+    window.editors.populate(data, true);
+  });
+  assert.equal(await cards.count(), 1);
+  const lastRuleDelete = cards.first().locator('.settings-row-actions [data-row-action="delete"]');
+  await lastRuleDelete.focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await cards.count(), 0);
+  assert.equal(await addRule.isDisabled(), false, 'Deleting the only rule makes Add rule immediately available.');
+  assert.equal(await ruleAvailability.isHidden(), true);
+  assert.equal(await addRule.evaluate(node => node === document.activeElement), true,
+    'After keyboard deletion, focus lands on the newly enabled Add rule control.');
+  await page.keyboard.press('Enter');
+  assert.equal(await cards.count(), 1);
+  assert.equal(await addRule.isDisabled(), true);
+  assert.equal(await ruleAvailability.innerText(), 'All available formats already have rules.');
+  assert.deepEqual(mutations, [], 'Add rule only updates the draft and never saves implicitly.');
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);
 });

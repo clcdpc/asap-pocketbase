@@ -639,6 +639,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     formats: root.querySelector('#material-formats-editor'),
     fields: root.querySelector('#additional-fields-editor'),
     rules: root.querySelector('#format-rules-editor'),
+    ruleAvailability: root.querySelector('#format-rule-availability'),
     claims: root.querySelector('#format-claim-rules-editor'),
     templates: root.querySelector('#email-templates-editor')
   };
@@ -1134,6 +1135,26 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       dom.formats.append(row);
       if (!state.system && !custom) updateRowDisabled(row, !override.input.checked);
     }
+    updateRuleAvailability();
+  }
+
+  function eligibleRuleFormats(values = readRules()) {
+    const represented = new Set(values.map(rule => rule.code));
+    return readFormats().filter(format => !represented.has(format.code));
+  }
+
+  function updateRuleAvailability() {
+    if (!addButtons.rules || !dom.ruleAvailability) return;
+    const formats = readFormats();
+    const available = eligibleRuleFormats();
+    const message = formats.length === 0
+      ? 'Add a material format before adding a rule.'
+      : available.length === 0
+        ? 'All available formats already have rules.'
+        : '';
+    addButtons.rules.disabled = available.length === 0;
+    dom.ruleAvailability.textContent = message;
+    dom.ruleAvailability.hidden = !message;
   }
 
   function removeFormat(index) {
@@ -1441,6 +1462,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       dom.rules.append(row);
     }
     refreshRuleDefinitions();
+    updateRuleAvailability();
     if (focusedRow) {
       const rows = [...dom.rules.querySelectorAll('[data-rule-code]')];
       const retainedRow = rows.find(item => item.dataset.ruleCode === focusedCode);
@@ -1448,7 +1470,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       const action = [...(retainedRow?.querySelectorAll('.settings-row-actions button') || [])]
         .find(button => !button.disabled && (focusedAction
           ? button.dataset.rowAction === focusedAction : button.getAttribute('aria-label') === focusedName));
-      (action || row?.querySelector('[data-rule-toggle]') || addButtons.rules)?.focus();
+      const target = action || row?.querySelector('[data-rule-toggle]') || addButtons.rules;
+      if (target?.disabled) dom.ruleAvailability?.focus();
+      else target?.focus();
     }
   }
 
@@ -2027,6 +2051,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       if (['fields', 'rules'].includes(name) && !canRedrawRules()) return;
       const rules = name === 'fields' ? readRules() : null;
       const values = readDomain(name);
+      if (name === 'rules' && eligibleRuleFormats(values).length === 0) {
+        updateRuleAvailability();
+        return;
+      }
       const added = factory(values);
       if (!added) return;
       values.push(added);
@@ -2148,9 +2176,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     return { id: null, key: draftKey('field_', keys), type: 'text', label: 'New field', enabled: true, options: [] };
   });
   bindAdd('rules', values => {
-    const format = readFormats().find(item => !values.some(rule => rule.code === item.code));
+    const format = eligibleRuleFormats(values)[0];
     if (!format) return null;
-    return normalizeRule({ code: format?.code || '' }, format || {});
+    return normalizeRule({ code: format.code }, format);
   });
   bindAdd('claims', values => ({ materialFormatId: readFormats()[0]?.id || '', staffUserId: '' }));
   function unusedTemplateKey(values) {
