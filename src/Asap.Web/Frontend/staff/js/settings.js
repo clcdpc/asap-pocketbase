@@ -272,6 +272,7 @@ export function createSettingsController({
 }) {
   const dom = {
     message: root.querySelector('#settings-message'),
+    draftBlockers: root.querySelector('#settings-draft-blockers'),
     commonAuthorsEnabled: root.querySelector('#common-authors-enabled'),
     commonAuthorsOptions: root.querySelector('#common-authors-options'),
     scopeField: root.querySelector('#settings-scope-field'),
@@ -375,7 +376,20 @@ export function createSettingsController({
       ready: Boolean(state.data && String(state.data.orgId) === String(state.scope) && !state.awaitingReload && !state.loading),
       dirty: isDirty(), blocked: Boolean(state.pendingMutation || state.saving || state.outcomeUncertain || state.awaitingReload) }),
     onOperations: onEmailTestOperations, onSubmitted: onEmailTestSubmitted });
-  let settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
+  // Capture developer-authored labels before inheritance/status content and
+  // runtime template/roster labels are rendered. Draft values never label links.
+  const settingsPanelLabels = new Map(dom.nav.map(button => [button.dataset.settingsPanel, button.textContent.trim()]));
+  const settingsFields = [...dom.form.elements]
+    .filter(control => control.matches('input, textarea, select') && control.id && control.type !== 'hidden' && !control.closest('[data-settings-ignore="true"]'))
+    .map(control => {
+      const field = control.closest('.settings-field');
+      const template = control.closest('.settings-template');
+      return { control, key: control.id, panel: control.closest('[data-settings-panel-content]')?.dataset.settingsPanelContent,
+        label: [template?.querySelector('legend')?.textContent, field?.querySelector('label, span')?.textContent].filter(Boolean).join(' — ') || 'Settings field',
+        scalar: field?.dataset.settingSection ? `${field.dataset.settingSection}.${field.dataset.settingKey}` : null,
+        template: template ? `${template.dataset.templateKey}.${control.dataset.templateField}` : null };
+    });
+  let settingsDraft = registerSettingsDraft();
   let staffCreateDraft = null;
   let polarisTest = null;
   const staffDrafts = new Map(), rosterDrafts = new Set(), staffRows = new Map();
@@ -690,15 +704,139 @@ export function createSettingsController({
 
   function clearBlockedDraftNotice() {
     blockedDraftNotice?.clear();
+    if (typeof blockedDraftNotice?.clearNavigation === 'function') blockedDraftNotice.clearNavigation();
     blockedDraftNotice = null;
+    dom.draftBlockers.replaceChildren();
+    dom.draftBlockers.hidden = true;
+  }
+
+  function registerSettingsDraft() {
+    return drafts.register({ root: dom.form, kind: 'settings', isDirty: hasSettingsDraft, metadata: settingsDraftDestinations });
+  }
+
+  function settingsDraftDestinations() {
+    const baseline = new Map(state.baselineSnapshot);
+    const [scalarValues = [], templateValues = []] = state.baselineOwnership ? JSON.parse(state.baselineOwnership) : [];
+    const scalars = new Map(scalarValues), templates = new Map(templateValues);
+    const changed = settingsFields.filter(field => {
+      const control = field.control;
+      return baseline.get(control.id) !== (control.type === 'checkbox' ? control.checked : control.value) ||
+        field.scalar && scalars.get(field.scalar) !== state.scalarIntents.get(field.scalar) ||
+        field.template && templates.get(field.template) !== state.templateIntents.get(field.template);
+    });
+    return changed.map(field => ({ key: field.key, panel: field.panel, label: field.label, reveal() {
+      if (!field.control.isConnected || !dom.form.contains(field.control)) return null;
+      const toggle = field.control.closest('.settings-template')?.querySelector('[data-template-toggle]');
+      if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+      return field.control;
+    } })).concat(domainEditors.draftDestinations());
+  }
+
+  function blockerEntries(admission) {
+    return (admission.blockers || []).flatMap(blocker => (blocker.metadata?.() || [])
+      .map(destination => ({ ...destination, handle: blocker.handle })));
+  }
+
+  function renderBlockedDraftNotice(notice, admission) {
+    const entries = blockerEntries(admission);
+    const count = admission.blockers.length;
+    if (notice.count !== count) {
+      notice.count = count;
+      dom.message.textContent = blockedDraftMessage(count);
+      if (typeof notice.clearNavigation === 'function') notice.clearNavigation();
+      notice.clearNavigation = announce(dom.message.textContent, 'warning');
+    }
+    if (notice.entries?.length === entries.length && entries.every((entry, index) =>
+      ['handle', 'key', 'label', 'panel'].every(key => notice.entries[index][key] === entry[key]))) return;
+    notice.entries = entries;
+    const list = node('ul', { 'aria-label': 'Unsaved drafts blocking this action' });
+    for (const entry of entries) {
+      const section = settingsPanelLabels.get(entry.panel) || 'Settings';
+      const button = node('button', { type: 'button', className: 'secondary-button', text: `Go to ${section} — ${entry.label}` });
+      // The opaque owner and destination key stay in this closure, never DOM.
+      listen(button, 'click', () => navigateToBlockingDraft(notice, entry.handle, entry.key));
+      list.append(node('li', {}, [node('span', { text: `${entry.label} in ${section}.` }), button]));
+    }
+    dom.draftBlockers.replaceChildren(list);
+    dom.draftBlockers.hidden = entries.length === 0;
+  }
+
+  function blockedDraftMessage(count) {
+    return `${count} unsaved ${count === 1 ? 'draft is' : 'drafts are'} blocking this action. Save or cancel each listed draft, then retry.`;
+  }
+
+  function reportDraftRecovery(message) {
+    notify(message, 'warning');
+    dom.refresh.focus();
+  }
+
+  function navigateToBlockingDraft(notice, handle, key) {
+    if (!isSettingsContextCurrent(notice.context) || drafts !== notice.scope || !state.staff ||
+        state.staff.active === false || !['admin', 'super_admin'].includes(state.staff.role) || !state.visible || !root.isConnected) {
+      reportDraftRecovery('This draft belongs to an earlier Settings context. Open Settings for your current access and review current drafts before retrying.');
+      return;
+    }
+    if (state.awaitingReload || state.outcomeUncertain) {
+      reportDraftRecovery('Refresh settings to reconcile the previous change before reviewing drafts or retrying.');
+      return;
+    }
+    if (state.pendingMutation || state.loading || dom.form.hidden || dom.form.inert) {
+      reportDraftRecovery('Wait for the current Settings operation to finish, then retry the original action to review its blockers.');
+      return;
+    }
+    const admission = drafts.admit(notice.declaration);
+    if (notice !== blockedDraftNotice || admission.reason !== 'competing_draft') {
+      reportDraftRecovery('This blocker notice is no longer current. Review current drafts and retry the original action.');
+      return;
+    }
+    const blocker = admission.blockers.find(item => item.handle === handle);
+    const destination = blocker?.metadata?.().find(item => item.key === key);
+    if (!destination) {
+      reportDraftRecovery('That draft is no longer a current blocker. Review current drafts and retry the original action.');
+      return;
+    }
+    if (destination.unavailable) {
+      reportDraftRecovery(destination.unavailable);
+      return;
+    }
+    const section = dom.nav.find(button => button.dataset.settingsPanel === destination.panel);
+    if (!section || section.hidden || section.disabled || !activatePanel(destination.panel, true) ||
+        !isSettingsContextCurrent(notice.context)) return;
+    let target = destination.reveal();
+    if (!target || !target.isConnected || !dom.form.contains(target)) {
+      reportDraftRecovery('This editor is no longer available. Review current drafts or explicitly refresh Settings before retrying.');
+      return;
+    }
+    // A feature can hide/disable its dependent dirty field. Reveal the owning
+    // visible group without changing the feature or manufacturing an override.
+    if (target.matches(':disabled') || target.closest('[hidden], [inert]')) {
+      target = target.closest('.settings-fieldset');
+      if (target?.closest('[hidden], [inert]')) return;
+      target?.setAttribute('tabindex', '-1');
+    }
+    if (target && !target.matches('input, select, textarea, button, [tabindex]')) target.setAttribute('tabindex', '-1');
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: 'instant' });
+    queueStaffReveal(target);
+    if (typeof notice.clearNavigation === 'function') notice.clearNavigation();
+    notice.clearNavigation = announce(`Showing ${destination.label} in ${settingsPanelLabels.get(destination.panel)}. Unsaved changes are preserved.`);
   }
 
   function beginSettingsMutation(slot, consumes, preserves = []) {
     if (disposed || !state.staff || !state.visible || !root.isConnected || state.pendingMutation || state.awaitingReload) return null;
     const declaration = { consumes, preserves };
-    if (!drafts.admit(declaration).allowed) {
+    const admission = drafts.admit(declaration);
+    if (!admission.allowed) {
       clearBlockedDraftNotice();
-      blockedDraftNotice = { declaration, clear: notify('Save or discard the competing Settings draft before this action.', 'warning') };
+      if (admission.reason !== 'competing_draft') {
+        notify('This action belongs to an earlier draft. Review current Settings or explicitly refresh before retrying.', 'warning');
+        return null;
+      }
+      const count = admission.blockers.length;
+      const clear = notify(blockedDraftMessage(count), 'warning');
+      blockedDraftNotice = { declaration, clear, count, context: captureSettingsContext(), scope: drafts };
+      renderBlockedDraftNotice(blockedDraftNotice, admission);
+      dom.draftBlockers.querySelector('button')?.focus();
       return null;
     }
     clearBlockedDraftNotice();
@@ -772,7 +910,7 @@ export function createSettingsController({
     cancelPolarisTest();
     dom.syncOrganizations.disabled = false;
     contextGeneration += 1; drafts.dispose(); drafts = createDraftScope();
-    settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
+    settingsDraft = registerSettingsDraft();
     staffDrafts.clear(); rosterDrafts.clear(); staffRows.clear(); staffCreateDraft = null;
     state.staffCanAssignSuperAdmin = false;
     dom.staffUsers.replaceChildren();
@@ -993,6 +1131,7 @@ export function createSettingsController({
   }
 
   function notify(message, kind = '') {
+    clearBlockedDraftNotice();
     const generation = ++notificationGeneration;
     dom.message.textContent = message || '';
     dom.message.className = `settings-message${kind ? ` ${kind}` : ''}`;
@@ -1019,10 +1158,10 @@ export function createSettingsController({
 
   function hasStaffDraft() { return [...staffDrafts.values()].some(isDirty => isDirty()); }
 
-  function registerStaffDraft(ownerRoot, controls, kind) {
+  function registerStaffDraft(ownerRoot, controls, kind, metadata) {
     const baseline = controls.map(control => control.value);
     const dirty = () => ownerRoot.isConnected && state.staff !== null && !state.awaitingReloadMutation && controls.some((control, index) => control.value !== baseline[index]);
-    const handle = drafts.register({ root: ownerRoot, kind, isDirty: dirty });
+    const handle = drafts.register({ root: ownerRoot, kind, isDirty: dirty, metadata });
     staffDrafts.set(handle, dirty);
     return handle;
   }
@@ -1033,7 +1172,10 @@ export function createSettingsController({
     dom.staffEmail.value = '';
     populateStaffCreateControls();
     staffCreateDraft = registerStaffDraft(dom.staffEmail.closest('fieldset'),
-      [dom.staffEmail, dom.staffRole, dom.staffOrganization], 'new staff user');
+      [dom.staffEmail, dom.staffRole, dom.staffOrganization], 'new staff user', () => [{
+        key: 'create', panel: 'staff', label: 'New staff-account draft',
+        reveal() { setStaffCreateOpen(true); return dom.staffEmail; }
+      }]);
   }
 
   function snapshotDrafts() {
@@ -1046,6 +1188,7 @@ export function createSettingsController({
     if (blockedDraftNotice) {
       const admission = drafts.admit(blockedDraftNotice.declaration);
       if (admission.allowed || admission.reason === 'invalid_owner' || admission.reason === 'invalid_preservation') clearBlockedDraftNotice();
+      else if (admission.reason === 'competing_draft') renderBlockedDraftNotice(blockedDraftNotice, admission);
     }
     const dirty = isDirty();
     const settingsDirty = hasSettingsDraft();
@@ -1699,9 +1842,26 @@ export function createSettingsController({
     });
     record.reset();
     // The baseline changes only after this account's accepted save/cancel/reload.
+    const ownerContext = captureSettingsContext();
     record.draft = drafts.register({ root: row, kind: 'staff editor', isDirty: () =>
       row.isConnected && state.staff !== null && (!state.awaitingReloadMutation ||
-        state.awaitingReloadMutation.preserves?.includes(record.draft)) && record.dirty() });
+        state.awaitingReloadMutation.preserves?.includes(record.draft)) && record.dirty(), metadata: () => {
+      const position = [...dom.staffUsers.children].indexOf(row) + 1;
+      const scope = scopedStaffOrganizationId();
+      const unavailable = !isSettingsContextCurrent(ownerContext) || staffRows.get(id) !== record ||
+        !dom.staffUsers.contains(row) || record.unavailable ||
+        scope && String(property(record.user, 'organizationId')) !== scope;
+      return [{ key: 'editor', panel: 'staff', label: `Staff-account edits (roster row ${position})`,
+        unavailable: unavailable ? 'This account is no longer available in the current roster context. Its draft is retained. Open Staff access to cancel the retained draft, or use Refresh roster to review current accounts.' : null,
+        reveal() {
+          if (property(record.user, 'active') === false) {
+            dom.staffShowInactive.checked = true;
+            updateStaffVisibility();
+          }
+          setOpen(true);
+          return email;
+        } }];
+    } });
     staffDrafts.set(record.draft, () => row.isConnected && (!state.awaitingReloadMutation ||
       state.awaitingReloadMutation.preserves?.includes(record.draft)) && record.dirty());
     rosterDrafts.add(record.draft);
@@ -1714,7 +1874,7 @@ export function createSettingsController({
     const focused = dom.staffUsers.contains(document.activeElement) ? document.activeElement : null;
     const ids = new Set(state.staffUsers.map(user => stringValue(property(user, 'id'))));
     for (const [id, record] of staffRows) {
-      if (ids.has(id)) continue;
+      if (ids.has(id) && drafts.owns(record.draft)) continue;
       if (!discard && record.dirty()) {
         record.markUnavailable();
         continue;
@@ -1726,6 +1886,9 @@ export function createSettingsController({
     if (!staffCreateDraft) resetStaffCreateDraft();
     for (const user of [...state.staffUsers].sort(staffRosterOrder)) {
       const id = stringValue(property(user, 'id'));
+      // Explicit discard/reload replaces a retired owner above. A preserving
+      // refresh cannot grant a reinserted former row fresh editing authority.
+      if (staffRows.has(id) && !drafts.owns(staffRows.get(id).draft)) continue;
       const record = staffRows.get(id) || createStaffRow(user);
       staffRows.set(id, record);
       record.accept(user, discard);

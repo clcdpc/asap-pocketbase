@@ -62,7 +62,7 @@ reruns and final receipt reconciliation do not add review passes.
 | #462 Add rule feedback | `423c352`, `7b2cd22` | Luna MAX: 1 test gap fixed | Luna MAX: independent browser matrix, no findings | Retained domain/browser matrix and real-SQL Add/save/reload pass | Technically qualified; final integration pending |
 | #465 Common creator rows | `a2501ad`, `49b3951`, `8fbe412` | Luna MAX: Move down test gap fixed | Terra MAX: narrow native-200 focus reveal fixed | Five rendered sizes; owning SQL/browser 1/1 pass | Technically qualified; final integration pending |
 | #463 Direct edit/inheritance | `56c514d`, `72c7258`, `e66947c` | Luna MAX: empty template lineage fixed | Astra HIGH + Terra MAX: combined save, comparison expansion and mobile Discard fixed | Real-SQL ownership/history matrix; retained SQL/browser regressions; four frontend files; format/picker native zoom | Technically qualified; final integration pending |
-| #466 Blocking draft navigation | Pending | Pending | Pending | Pending | Pending |
+| #466 Blocking draft navigation | Initial implementation | Pending | Pending | 16 Settings files, shared draft regressions; retained SQL/browser metadata identity with desktop/mobile/native200 | Initial qualification complete; independent reviews pending |
 
 ### #461 evidence
 
@@ -288,6 +288,67 @@ files pass; both Release builds have zero warnings/errors. Final discovery is
 Browser method or temporary independent probe remains. `463-pass2-remediation.json`
 records the exact candidate, counts and receipt selection. Broader integration
 qualification and human assistive-technology acceptance remain separate.
+
+### #466 initial implementation and evidence
+
+Admission enumerates all actual competing owners and retains its first-kind
+contract for other controllers. Optional owner metadata remains internal. The
+Settings warning lists individually actionable, readable destinations outside
+the inert form: new account, exact roster position, and actual dirty fields or
+groups within the single global Settings owner. Account identities, editable
+values and opaque owner handles never label the actions. Staff records retain
+their global-record ownership; no setting, inheritance scope or schema changed.
+
+Blocked actions focus the first navigation control. Activation re-admits the
+original consumption/preservation declaration and checks current identity,
+scope/generation, mounted owner and destination before using existing section
+and disclosure controls. It reveals inactive rows through the roster display
+preference and announces the focused destination. Draft values and explicit
+pin/reset intents are preserved; navigation performs no mutation. Retired,
+unavailable and uncertain owners receive a current recovery explanation and a
+focusable reload path. A disconnected turn retires a handle before reinsertion;
+synchronous mounted roster reorders keep their owner. The existing PUT-only
+roster preservation declaration is unchanged. An explicit accepted reload
+replaces a retired row with a fresh owner; preserving refreshes and former
+controls cannot grant that new handle to the retired row.
+
+The retained Staff Access file now covers a main Settings field blocking a
+roster save, three simultaneous owners, exact row/new-account focus, hidden
+inactive rows, failed/uncertain blocker saves, identity replacement, disposal
+and detach/reinsert retirement. The retained draft-scope file checks complete
+enumeration, preservation exclusions, first-kind compatibility and retirement.
+Both the initial and final-source Settings selections pass 16/16 current files.
+The final draft-scope file passes. The earlier shared draft selection passes
+3/3 files, including 271 navigation/draft journeys; the focused Staff Access
+rerun also passes after adding explicit fresh-owner recovery coverage.
+
+The existing production metadata Browser identity passes 1/1 with real SQL:
+Workflow Save -> exact Staff editor, multiple owner resolution -> original
+retry, a real 409 followed by committed-response uncertainty/reconciliation,
+same-section lifecycle retry, an equal-display pending reset -> explicit null
+save, exact rule/template disclosure routes, stale scope actions and retired
+row recovery followed by a real fresh-owner save. Seven
+destinations have measured focus. Four new desktop/mobile scans and the six
+retained scans are clean; two native 200% states measure 632x402 and 492x402 CSS
+pixels with full focused-email containment, no CSS/pinch zoom and clean axe,
+images, page/external-request and overflow guards. No Browser identity was added.
+
+The final Release build has zero warnings/errors. Native discovery remains
+1486 current tests, with the retained metadata Browser UID unchanged. No new
+Browser identity or category entry was added. The final real-SQL/browser run
+passes 1/1, zero failures/skips; the earlier run also passed, without being
+counted as another distinct case.
+
+Receipts remain outside Git under `466-*` in the shared evidence root:
+`466-settings-final.json`, `466-draft-frontend.json`,
+`466-draft-scope-final2.log`, `466-final/466-final.trx`,
+`466-final-browser/settings-browser-results.json`, the PNG companions,
+`466-build-final.log` and `466-final-discovery.json`. Initial failures and the
+red/green retired-owner recovery receipts are retained. The first native PNG
+capture was blank despite passing geometry and is not rendered visual evidence;
+the passing corrected CDP rerun supplies visually inspected captures. Human
+assistive-technology acceptance and both independent review passes remain
+separate; this record does not self-approve the issue.
 
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.

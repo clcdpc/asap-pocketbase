@@ -126,6 +126,13 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(report.RootElement.GetProperty("templateResetOnlyNoLineage").GetBoolean());
             Assert.IsTrue(report.RootElement.GetProperty("templateResetKeepsSiblingPinsAndRawRows").GetBoolean());
             Assert.IsTrue(report.RootElement.GetProperty("inheritanceInteractionWitness").GetProperty("cancelPreservedAndAcceptDiscardedBoth").GetBoolean());
+            var blockers = report.RootElement.GetProperty("draftBlockers");
+            foreach (var flag in new[] { "multipleOwnersAndRetry", "failedAndUncertainBlockerRecovery", "equalDisplayResetPreserved",
+                "settingsFieldsAndDisclosures", "staleContextActionRetired", "retiredOwnerRecovered", "noNavigationWrites" })
+            {
+                Assert.IsTrue(blockers.GetProperty(flag).GetBoolean(), flag);
+            }
+            Assert.AreEqual(2, blockers.GetProperty("native200").GetArrayLength());
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
             using var after = await ReadSettingsDocumentAsync(client, libraryId.ToString());
@@ -143,6 +150,7 @@ public sealed partial class PatronJourneyTests
         {
             await ExecuteNonQueryAsync("""
                 DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] = @org;
+                DELETE FROM [asap].[StaffUser] WHERE [OrganizationId] = @org;
                 DELETE FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] = @org;

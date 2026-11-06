@@ -2095,6 +2095,43 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     });
   }
 
+  function draftDestinations() {
+    if (disposed || !state.baseline) return [];
+    const current = JSON.parse(readSnapshot()), baseline = JSON.parse(state.baseline);
+    const definitions = [
+      ['publication', 'patron', 'Publication options'], ['creators', 'workflow', 'Common creator list'],
+      ['codes', 'workflow', 'Allowed patron codes'], ['providers', 'workflow', 'External search providers'],
+      ['formats', 'patron', 'Material formats'], ['fields', 'patron', 'Custom fields'],
+      ['rules', 'patron', 'Format rules'], ['claims', 'patron', 'Auto-claim rules'],
+      ['templates', 'templates', 'Additional templates']
+    ];
+    return definitions.flatMap(([name, panel, label]) => {
+      // Equal-display resets still own a draft, including built-in rule
+      // columns sharing the MaterialFormatOverride row with Material formats.
+      const ruleIntent = name === 'rules' && [...formatIntents.entries()].find(([, intent]) =>
+        intent.reset || Object.keys(intent.fields).some(key => !['label', 'isEnabled', 'sortOrder'].includes(key)));
+      if (JSON.stringify(current[name]) === JSON.stringify(baseline[name]) && !ruleIntent) return [];
+      const values = Array.isArray(current[name]) ? current[name] : current[name]?.values;
+      const original = Array.isArray(baseline[name]) ? baseline[name] : baseline[name]?.values;
+      let index = Array.isArray(values) ? values.findIndex((value, index) => JSON.stringify(value) !== JSON.stringify(original?.[index])) : -1;
+      const intents = current[name]?.intents;
+      if (index < 0 && intents?.length) {
+        const id = intents[0][0];
+        index = values.findIndex(value => [value.id, value.code, value.uiId].includes(id));
+      }
+      if (index < 0 && ruleIntent) index = values.findIndex(value => value.code === ruleIntent[0]);
+      const row = dom[name]?.querySelectorAll(':scope > [data-domain-row]')[Math.max(0, index)];
+      return [{ key: name, panel, label, reveal() {
+        if (!dom[name]?.isConnected || !root.contains(dom[name])) return null;
+        // Use the existing disclosures; opening them changes presentation only.
+        const toggle = row?.querySelector('[data-rule-toggle], [data-template-toggle]');
+        if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+        return toggle || (name === 'codes' ? dom.codeSearch : row?.querySelector('input, select, textarea')) ||
+          addButtons[name] || dom[name].closest('.settings-fieldset');
+      } }];
+    });
+  }
+
   function reorder(name, index, offset) {
     if (['fields', 'rules'].includes(name) && !canRedrawRules()) return;
     const rules = name === 'fields' ? readRules() : null;
@@ -2694,6 +2731,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     collect,
     setBaseline: () => { state.baseline = readSnapshot(); },
     snapshot: () => readSnapshot(),
+    draftDestinations,
     setCodeChoices(choices) {
       if (disposed) return;
       if (!Array.isArray(choices) || choices.some(choice => !isRecord(choice) ||

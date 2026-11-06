@@ -352,6 +352,10 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-toolbar .settings-message:empty { flex: 0 0 0; width: 0; max-width: 0; }
 .settings-message.error { color: var(--danger); font-weight: 700; }
 .settings-message.success { color: var(--success); font-weight: 700; }
+.settings-draft-blockers { margin-bottom: 12px; }
+.settings-draft-blockers ul { display: grid; gap: 8px; margin: 0; padding-left: 20px; }
+.settings-draft-blockers li { overflow-wrap: anywhere; }
+.settings-draft-blockers button { margin: 4px 0 0 8px; max-width: 100%; white-space: normal; text-align: left; }
 .settings-layout { display: grid; grid-template-columns: minmax(170px, 210px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .settings-sidebar { position: sticky; top: 14px; }
 .settings-nav { display: grid; gap: 3px; }
