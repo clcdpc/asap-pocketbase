@@ -453,6 +453,12 @@ pass. Failed acceptance and red/green provider receipts are preserved outside
 Git. Final revision-wide acceptance and CI results belong in the consolidated
 PR; this correction is objective integration testing, not another review pass.
 
+Local acceptance plumbing initially passed 82/83 checks: its source-preservation
+guard still pinned CI selection from before changes already merged into main.
+The guard now pins this task's verified `be9c7af` baseline; CI implementation,
+resources and authorization are unchanged. The complete rerun passes 83/83 with
+zero failures/skips; both receipts are retained.
+
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
 Complex implementation uses Sol MAX; focused implementation and Pass 1 use

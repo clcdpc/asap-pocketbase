@@ -347,9 +347,9 @@ test('authorized title-request and additional-copy mutations retain fixture and 
   assert.equal(checks, 4);
 });
 test('existing frontend/browser entry points and full CI guard remain; artifacts are Git ignored', async () => {
-  // Main's current discovery-based guards supersede the retired fixed totals.
+  // Preserve the current main baseline, including its discovery/reuse guards.
   for (const file of ['package.json', 'tests/browser/run.cjs', 'scripts/ci/selection.py']) {
-    const baseline = execFileSync('git', ['show', '8c4493578440a77c5f6f40bd6ccb6d0aef64b9fc:' + file], { cwd: repository, encoding: 'utf8' });
+    const baseline = execFileSync('git', ['show', 'be9c7af87f9ad0aa7a54a1e4a3b76255bbc6bd18:' + file], { cwd: repository, encoding: 'utf8' });
     assert.equal((await fs.readFile(path.join(repository, file), 'utf8')).replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n'));
   }
   const workflow = await fs.readFile(path.join(repository, '.github/workflows/dotnet.yml'), 'utf8');
