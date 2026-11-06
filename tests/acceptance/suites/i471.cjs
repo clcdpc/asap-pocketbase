@@ -130,7 +130,12 @@ async function compactRows(t, scope) {
     assert.equal(await t.page.evaluate(() => document.activeElement.closest('[data-domain-row]')?.dataset.optionId), 'i471_long');
     await pubs.first().locator('[data-publication-field="label"]').fill('Renamed synthetic publication');
     await save(t); await open(t, scope);
-    assert.deepEqual((await read(t, scope)).effective.publicationOptions.map(row => row.id), ['i471_long', 'i471_first']);
+    const saved = await read(t, scope);
+    const storedOptions = scope === 'system' ? saved.stored.configuredSystem.publicationOptions : saved.stored.libraryOverride.publicationOptions;
+    assert.deepEqual(storedOptions.values.map(row => row.id), ['i471_long', 'i471_first']);
+    assert.deepEqual(await pubs.evaluateAll(nodes => nodes.map(node => node.dataset.optionId)), ['i471_long', 'i471_first']);
+    assert.deepEqual(saved.effective.publicationOptions, ['Renamed synthetic publication', 'First synthetic publication'],
+      'Patron publication values retain the existing label-valued contract');
     const geometry = [];
     for (const [name, width, zoom] of [['desktop', 1280, 1], ['mobile', 390, 1], ['native200', 1280, 2]]) {
       await t.page.setViewportSize({ width, height: 900 }); await nativeZoom(t.context, t.page, zoom);
@@ -154,8 +159,8 @@ async function compactRows(t, scope) {
   } finally {
     await nativeZoom(t.context, t.page, 1); await t.page.setViewportSize({ width: 1280, height: 900 });
     if (scope === 'system') await post(t, scope, { workflow: { commonAuthorsEnabled: original.workflow.commonAuthorsEnabled,
-      commonAuthorsList: original.commonCreators.values.map(row => typeof row === 'string' ? row : row.value) },
-      patron: { publicationOptions: original.publicationOptions.values } });
+      commonAuthorsList: original.commonCreators.exists ? original.commonCreators.values.map(row => row.value) : null },
+      patron: { publicationOptions: original.publicationOptions.exists ? original.publicationOptions.values : null } });
   }
 }
 
