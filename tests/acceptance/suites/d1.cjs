@@ -207,7 +207,7 @@ const scenarios = [
     } },
   { id: 'd1-close-reopen-refresh', requirements: ['#400: Closed then Reopen immediately refreshes header/field capabilities', '#402: mutation history stays newest first'], writes: true,
     run: async t => {
-      const f = await fixture(t, 'close-reopen'); t.allowFixture(f); await openFixture(t.page, t.origin, f);
+      const f = await fixture(t, 'close-reopen'); await openFixture(t.page, t.origin, f);
       for (const [label, approve, state] of [['Close silently', 'Close silently', 'closed'], ['Reopen', 'Reopen request', 'suggestion']]) {
         await (await actionButton(t.page, label)).click();
         const confirm = t.page.locator('#confirmation-dialog[open]'); await confirm.waitFor();

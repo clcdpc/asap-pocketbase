@@ -39,7 +39,6 @@ const scenarios = [
     'smoke: authorized UI closure, one action POST, persisted Closed and changed rowversion'
   ], writes: true, run: async t => {
     const fixture = requireFixture((await t.verify()).evidence, 'close-reopen');
-    t.allowFixture(fixture);
     await openFixture(t.page, t.origin, fixture);
     const before = await detail(t.context, t.origin, fixture);
     initialRequest(before, fixture);

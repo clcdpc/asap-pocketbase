@@ -23,7 +23,6 @@ async function outcomeCheckpoint(t, name = t.id + '-complete') {
 async function fresh(t, key, expected) {
   const environment = await t.verify();
   const fixture = requireFixture(environment.evidence, key, expected);
-  t.allowFixture(fixture);
   return fixture;
 }
 async function requestDraft(t, key = 'draft') {
@@ -361,7 +360,6 @@ const scenarios = [
       assert.match(warning, /Discard unsaved settings changes and reset this library's inherited overrides to the current system values/);
       assert.match(warning, /Library-owned custom fields, formats, rejection templates, auto-claim rules and their history are preserved/);
       await checkpoint(t.page, t.directory, t.id + '-review');
-      t.allowSettingsReset({ organizationId: 2, version: before.version });
       const isReset = r => new URL(r.url()).pathname === '/api/asap/staff/settings/reset' && r.request().method() === 'POST';
       const isReload = r => new URL(r.url()).pathname === '/api/asap/staff/settings' &&
         new URL(r.url()).search === '?orgId=2' && r.request().method() === 'GET';

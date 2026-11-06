@@ -81,6 +81,18 @@ internal static class AcceptanceEvidence
                 WHERE OrganizationId = 2 AND TemplateKey = N'rejection:acceptance-pr410-rejection' AND IsCustom = 1;
                 SELECT COUNT(*) FROM asap.Organization
                 WHERE Id = 2 AND IsActive = 1 AND OrganizationCodeId = 2;
+                SELECT CONVERT(varchar(20), org.Id),
+                    (SELECT COUNT(*) FROM asap.AdministrativeAudit a WHERE a.OrganizationId = org.Id AND a.Action = N'library_settings_updated'),
+                    CONVERT(varchar(64), HASHBYTES('SHA2_256', (
+                        SELECT r.* FROM asap.TitleRequest r WHERE r.LibraryOrganizationId = org.Id ORDER BY r.Id FOR JSON PATH, INCLUDE_NULL_VALUES)), 2),
+                    CONVERT(varchar(64), HASHBYTES('SHA2_256', (
+                        SELECT e.* FROM asap.TitleRequestEvent e JOIN asap.TitleRequest r ON r.Id = e.TitleRequestId
+                        WHERE r.LibraryOrganizationId = org.Id ORDER BY e.Id FOR JSON PATH, INCLUDE_NULL_VALUES)), 2),
+                    CONVERT(varchar(64), HASHBYTES('SHA2_256', (
+                        SELECT c.* FROM asap.FormatAutoClaimRule c WHERE c.LibraryOrganizationId = org.Id ORDER BY c.Id FOR JSON PATH, INCLUDE_NULL_VALUES)), 2),
+                    (SELECT COUNT(*) FROM asap.TitleRequest r WHERE r.LibraryOrganizationId = org.Id),
+                    (SELECT COUNT(*) FROM asap.TitleRequestEvent e JOIN asap.TitleRequest r ON r.Id = e.TitleRequestId WHERE r.LibraryOrganizationId = org.Id)
+                FROM asap.Organization org WHERE org.Id BETWEEN 47101 AND 47107 ORDER BY org.Id;
                 """;
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);
@@ -130,11 +142,19 @@ internal static class AcceptanceEvidence
             {
                 throw new InvalidOperationException("Review Library classification is unavailable.");
             }
+            await reader.NextResultAsync(cancellationToken);
+            var settings = new List<object>();
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                settings.Add(new { organizationId = reader.GetString(0), audits = reader.GetInt32(1),
+                    requestsDigest = reader.GetString(2), historyDigest = reader.GetString(3), claimsDigest = reader.GetString(4),
+                    requests = reader.GetInt32(5), events = reader.GetInt32(6) });
+            }
             return new
             {
                 contract = 1, database = "AsapReview", login = "asap_review_runtime", sqlMajorVersion = 16, sqlEdition = "Developer",
                 environment = "Review", deterministicProviders = true, deliveryMode = "capture",
-                titles, copies, outbox, rejectionTemplates = templates
+                titles, copies, outbox, rejectionTemplates = templates, settings
             };
     }
 }

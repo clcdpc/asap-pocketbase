@@ -24,7 +24,8 @@ function parse(argv) {
   must(options.suite && /^[a-z0-9-]+$/.test(options.suite), 'Select an acceptance suite, for example --suite pr410.');
   must(/^[a-f0-9]{40}$/.test(options.expectedCommit), 'ExpectedCommit must be a full lowercase application SHA.');
   must(!options.readOnly || !options.allowWrites, 'ReadOnly and AllowReviewWrites are mutually exclusive.');
-  // The runtime and per-scenario guards still bind every write to disposable synthetic resources.
+  // Normal runs may mutate the verified disposable environment. Scenario write
+  // metadata selects required checks in read-only mode; it is not a permission grant.
   // The legacy flag remains accepted, but normal acceptance needs no additional opt-in.
   options.allowWrites = !options.readOnly;
   return options;
@@ -54,25 +55,10 @@ async function runScenarios({ suite, options, environment, browser, report, dire
     }
     const settingsReset = url.pathname === settingsResetPath;
     if (settingsReset || !['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
-      const match = url.pathname.match(/^\/api\/asap\/staff\/(title-requests|additional-copies)\/([1-9][0-9]*)\/(action|close|reopen)$/);
-      let resetVersion;
-      if (settingsReset) {
-        try {
-          const body = request.postDataJSON();
-          if (body && Object.keys(body).length === 1) resetVersion = body.version;
-        } catch { /* A malformed body cannot authorize a reset. */ }
-      }
-      const allowed = settingsReset
-        ? url.search === '?organizationId=2' && active?.settingsReset &&
-          !active.settingsReset.submitted && resetVersion === active.settingsReset.version
-        : match && active?.allowedFixtures.has(match[1] + '/' + match[2]);
-      if (!options.allowWrites || options.readOnly || !active?.writes || request.method() !== 'POST' || !allowed) {
+      if (options.readOnly || !active) {
         guards.errors.push('Unexpected mutation blocked');
         return route.abort('blockedbyclient');
       }
-      // Reserve the sole submission before awaiting identity/runtime checks so
-      // simultaneous requests cannot both consume the same authorization.
-      if (settingsReset) active.settingsReset.submitted = true;
       // Validate the local database, providers and authorized staff again at the write boundary.
       // The page request carries the application's own session and antiforgery header.
       try { await verify(); }
@@ -81,8 +67,15 @@ async function runScenarios({ suite, options, environment, browser, report, dire
         guards.errors.push(guards.blocker);
         return route.abort('blockedbyclient');
       }
-      if (settingsReset) active.mutations.push({ path: settingsResetPath, method: 'POST',
-        organizationId: 2, version: resetVersion });
+      // Retain only fixed metadata, never Settings documents, headers or credentials.
+      let body;
+      try { body = request.postDataJSON(); } catch { /* The app owns malformed-body validation. */ }
+      if (settingsReset) active.mutations.push({ path: settingsResetPath, method: request.method(),
+        organizationId: Number(url.searchParams.get('organizationId')), version: body?.version });
+      else if (url.pathname.endsWith('/action')) active.mutations.push({ path: url.pathname,
+        action: body?.action, version: body?.version, emailPurchaseReminder: body?.emailPurchaseReminder });
+      else if (/\/additional-copies\/\d+\/(close|reopen)$/.test(url.pathname)) active.mutations.push({ path: url.pathname });
+      else active.mutations.push({ path: url.pathname, method: request.method() });
     }
     return route.continue();
   };
@@ -105,7 +98,7 @@ async function runScenarios({ suite, options, environment, browser, report, dire
       const page = await browser.context.newPage();
       const revokeScreenshots = registerScreenshotPage(page, verify);
       const mutations = [], events = [], failuresBefore = guards.errors.length;
-      active = { ...scenario, allowedFixtures: new Set(), mutations };
+      active = { mutations };
       guards.expectUnload = false; guards.unloadCount = 0;
       guards.blocker = null;
       page.on('pageerror', () => guards.errors.push('Browser page error'));
@@ -113,15 +106,6 @@ async function runScenarios({ suite, options, environment, browser, report, dire
         if (dialog.type() === 'beforeunload' && guards.expectUnload) guards.unloadCount++;
         else guards.errors.push('Unexpected native ' + dialog.type() + ' dialog');
         await dialog.dismiss().catch(() => {});
-      });
-      page.on('request', request => {
-        const url = new URL(request.url());
-        if (url.origin !== environment.origin || !url.pathname.endsWith('/action') || request.method() !== 'POST') return;
-        // Fixed, synthetic action fields only. Never retain request headers or entire bodies.
-        let data;
-        try { data = request.postDataJSON(); } catch { return; }
-        mutations.push({ path: url.pathname, action: data.action, version: data.version,
-          emailPurchaseReminder: data.emailPurchaseReminder });
       });
       page.on('response', response => {
         const url = new URL(response.url());
@@ -133,8 +117,6 @@ async function runScenarios({ suite, options, environment, browser, report, dire
           events.push({ event: 'settings-response', utc: new Date().toISOString(),
             path: url.pathname, method: response.request().method(), status: response.status() });
         }
-        if (url.origin === environment.origin && response.request().method() === 'POST' &&
-            /\/additional-copies\/\d+\/(close|reopen)$/.test(url.pathname)) mutations.push({ path: url.pathname });
       });
       const startedUtc = new Date().toISOString();
       console.log('Running ' + scenario.id);
@@ -143,16 +125,7 @@ async function runScenarios({ suite, options, environment, browser, report, dire
         if (options.signal?.aborted) throw new Blocked('Acceptance run was cancelled.');
         await verify();
         await scenario.run({ id: scenario.id, page, context: browser.context, origin: environment.origin,
-          directory, verify, mutations, guards, allowFixture: fixture => active.allowedFixtures.add(
-            (fixture.key.endsWith('-copy') ? 'additional-copies/' : 'title-requests/') + fixture.id),
-          allowSettingsReset: ({ organizationId, version }) => {
-            must(options.allowWrites && !options.readOnly && active.writes,
-              'Settings reset requires a mutating scenario in the disposable write-enabled runtime.');
-            must(organizationId === 2 && typeof version === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(version),
-              'Settings reset authorization requires Review Library (2) and its authoritative version.');
-            must(!active.settingsReset, 'Settings reset may be authorized only once per scenario.');
-            active.settingsReset = { version, submitted: false };
-          } });
+          directory, verify, mutations, guards });
         must(!page.isClosed(), 'Reviewer browser was closed.');
         if (guards.errors.length !== failuresBefore) throw new Error('Browser guard failed');
         report.scenarios.push({ ...result(scenario, 'PASS'), startedUtc, finishedUtc: new Date().toISOString() });

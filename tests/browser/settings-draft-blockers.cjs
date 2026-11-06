@@ -2,7 +2,6 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { chromium } = require('playwright');
 const { decideConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
 
 // Runs against the production host and the owning native test's isolated SQL
@@ -12,8 +11,12 @@ exports.verifySettingsDraftBlockers = async (page, args, report, ready, scan) =>
   const session = await (await context.request.get(`${args.baseOrigin}/api/asap/staff/session`)).json();
   const headers = { 'X-ASAP-Antiforgery': session.antiforgeryToken };
   const api = async (method, url, data, status = 200) => {
-    const response = await context.request[method](`${args.baseOrigin}${url}`, { headers, data });
-    assert.equal(response.status(), status, await response.text()); return response.json();
+    const response = await page.evaluate(async ({ method, url, data, headers }) => {
+      const response = await fetch(url, { method: method.toUpperCase(), headers: { ...headers, 'Content-Type': 'application/json' },
+        ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
+      return { status: response.status, text: await response.text() };
+    }, { method, url, data, headers });
+    assert.equal(response.status, status, response.text); return JSON.parse(response.text);
   };
   const read = () => api('get', `/api/asap/staff/settings?orgId=${args.scopeId}`);
   const post = async values => {
@@ -177,6 +180,7 @@ exports.verifySettingsDraftBlockers = async (page, args, report, ready, scan) =>
     let committed;
     const loseReceipt = async route => {
       if (route.request().method() !== 'PUT') return route.fallback();
+      await args.beforeCommit?.();
       const response = await route.fetch(); assert.equal(response.status(), 200); committed = await response.json();
       await route.fulfill({ status: 200, json: { ...committed, user: { ...committed.user, notificationEmail: 'unconfirmed@example.org' } } });
     };
@@ -282,7 +286,7 @@ exports.verifySettingsDraftBlockers = async (page, args, report, ready, scan) =>
     assert.equal(writes.length, beforeRetiredRetry);
     witness.retiredOwnerRecovered = true;
 
-    await verifyNative200(args, first.id, witness);
+    await (args.verifyNative200 || verifyNative200)(args, first.id, witness);
     assert.equal(witness.native200.length, 2);
     witness.noNavigationWrites = true;
   } finally {
@@ -296,6 +300,7 @@ exports.verifySettingsDraftBlockers = async (page, args, report, ready, scan) =>
 };
 
 async function verifyNative200(args, staffId, witness) {
+  const { chromium } = require('playwright');
   const extension = path.join(__dirname, 'native-zoom-extension');
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   for (const width of [1280, 1000]) {
