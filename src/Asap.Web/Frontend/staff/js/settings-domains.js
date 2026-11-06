@@ -119,7 +119,7 @@ function normalizeFormats(values) {
       version: stringId(property(value, 'version')),
       code: clean(property(value, 'code')) || `format_${index + 1}`,
       ownerOrganizationId: numeric(property(value, 'ownerOrganizationId'), 1),
-      label: clean(property(value, 'label')) || clean(property(value, 'code')) || `Format ${index + 1}`,
+      label: clean(property(value, 'label')) || 'Unresolved material format',
       sortOrder: numeric(property(value, 'sortOrder'), (index + 1) * 10),
       isEnabled: bool(property(value, 'isEnabled') ?? property(value, 'enabled'), true),
       messageBehavior: clean(property(value, 'messageBehavior')) || 'none',
@@ -605,12 +605,13 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     return button;
   }
 
-  function actions(index, total, move, remove, context = '') {
+  function actions(index, total, move, remove, context = '', kind = 'format rule') {
     const buttons = [
       command('chevron-up', context ? `Move ${context} up` : 'Move up', () => move(index, -1), index === 0),
       command('chevron-down', context ? `Move ${context} down` : 'Move down', () => move(index, 1), index === total - 1)
     ];
-    if (remove) buttons.push(command('trash-o', context ? `Delete ${context} format rule` : 'Delete', () => remove(index)));
+    if (remove) buttons.push(command('trash-o', context ? `Delete ${context}${kind ? ` ${kind}` : ''}` : 'Delete', () => remove(index)));
+    buttons.forEach((button, position) => { button.dataset.rowAction = ['up', 'down', 'delete'][position]; });
     return element('div', { className: 'settings-row-actions' }, buttons);
   }
 
@@ -670,7 +671,19 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   // Disclosure state never participates in the settings snapshot or payload.
   const expandedRuleCodes = new Set();
   const rulePanelIds = new Map();
-  const formatRuleDraftCodes = new WeakMap();
+  // Reserve allocations until this accepted snapshot is replaced, including
+  // deleted draft rows. A rename, redraw, failed save or retry never allocates.
+  const reservedDraftKeys = new Set();
+
+  function draftKey(prefix, existing) {
+    for (const value of existing) reservedDraftKeys.add(String(value || '').toLowerCase());
+    let key;
+    do {
+      key = `${prefix}${window.crypto.randomUUID().replaceAll('-', '')}`;
+    } while (reservedDraftKeys.has(key.toLowerCase()));
+    reservedDraftKeys.add(key.toLowerCase());
+    return key;
+  }
 
   function currentOrganizationId() {
     const value = property(state.data, 'orgId');
@@ -960,25 +973,41 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     dom.publication.replaceChildren();
     if (values.length === 0) dom.publication.append(element('p', { className: 'settings-empty', text: 'No publication options configured.' }));
     for (const [index, value] of values.entries()) {
-      const key = element('input', { type: 'text', value: value.id, 'data-domain-editable': 'true' });
-      const label = element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true' });
-      const enabled = element('input', { type: 'checkbox', checked: value.enabled, 'data-domain-editable': 'true' });
-      const row = element('div', { className: 'settings-editor-row settings-option-row', 'data-domain-row': 'true' }, [
-        field('Stable ID', key),
+      const label = element('input', { type: 'text', value: value.label, 'data-publication-field': 'label', 'data-domain-editable': 'true' });
+      const enabled = element('input', { type: 'checkbox', checked: value.enabled, 'data-publication-field': 'enabled', 'data-domain-editable': 'true' });
+      const row = element('div', { className: 'settings-editor-row settings-option-row', 'data-domain-row': 'true', 'data-option-id': value.id }, [
         field('Label', label),
         element('label', { className: 'settings-domain-check' }, [enabled, element('span', { text: 'Enabled' })]),
-        actions(index, values.length, (from, offset) => reorder('publication', from, offset), from => remove('publication', from))
+        actions(index, values.length, (from, offset) => reorder('publication', from, offset), from => remove('publication', from), 'publication option', '')
       ]);
+      const refreshNames = () => {
+        const context = `${clean(label.value) || 'Untitled'}, publication option ${index + 1}`;
+        label.setAttribute('aria-label', `Label for ${context}`);
+        enabled.setAttribute('aria-label', `Enabled for ${context}`);
+        const names = [`Move ${context} up`, `Move ${context} down`, `Delete ${context}`];
+        [...row.querySelectorAll('.settings-row-actions button')].forEach((button, position) => {
+          button.title = names[position];
+          button.setAttribute('aria-label', names[position]);
+        });
+      };
+      listen(label, 'input', refreshNames);
+      listen(label, 'change', refreshNames);
+      refreshNames();
       dom.publication.append(row);
     }
     setEditorControls('publication', dom.publication);
+    const inherited = !state.system && Boolean(dom.publicationUseSystem?.checked);
+    [...dom.publication.querySelectorAll('[data-domain-row]')].forEach((row, index) => {
+      row.querySelector('[data-row-action="up"]').disabled = inherited || index === 0;
+      row.querySelector('[data-row-action="down"]').disabled = inherited || index === values.length - 1;
+    });
   }
 
   function readPublication() {
     return [...(dom.publication?.querySelectorAll('[data-domain-row]') || [])].map((row, index) => ({
-      id: stringId(row.querySelector('input')?.value),
-      label: clean(row.querySelectorAll('input')[1]?.value),
-      enabled: Boolean(row.querySelector('input[type="checkbox"]')?.checked),
+      id: stringId(row.dataset.optionId),
+      label: clean(row.querySelector('[data-publication-field="label"]')?.value),
+      enabled: Boolean(row.querySelector('[data-publication-field="enabled"]')?.checked),
       sortOrder: (index + 1) * 10
     }));
   }
@@ -1067,21 +1096,19 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     if (values.length === 0) dom.formats.append(element('p', { className: 'settings-empty', text: 'No material formats configured.' }));
     for (const [index, value] of values.entries()) {
       const custom = value.ownerOrganizationId === currentOrganizationId() && !state.system;
-      const code = element('input', { type: 'text', value: value.code, readOnly: Boolean(value.id), 'data-domain-editable': 'true' });
-      const label = element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true' });
-      const enabled = element('input', { type: 'checkbox', checked: value.isEnabled, 'data-domain-editable': 'true' });
+      const label = element('input', { type: 'text', value: value.label, 'data-material-field': 'label', 'data-domain-editable': 'true' });
+      const enabled = element('input', { type: 'checkbox', checked: value.isEnabled, 'data-material-field': 'enabled', 'data-domain-editable': 'true' });
       const override = checkbox('Override', state.system || value.overridden, 'settings-inline-check settings-domain-override');
       override.input.className = 'settings-domain-override-toggle';
       const row = element('div', {
         className: 'settings-editor-row settings-format-row',
         'data-domain-row': 'true',
         'data-format-id': value.id || '',
+        'data-format-code': value.code,
         'data-format-owner': value.ownerOrganizationId,
         'data-format-version': value.version || '',
-        'data-format-sort-order': value.sortOrder,
-        'data-format-rule-code': formatRuleDraftCodes.get(value) ?? value.code
+        'data-format-sort-order': value.sortOrder
       }, [
-        field('Code', code),
         field('Label', label),
         element('label', { className: 'settings-domain-check' }, [enabled, element('span', { text: 'Shown' })]),
         custom || state.system ? null : override.wrapper,
@@ -1097,41 +1124,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       };
       listen(label, 'input', refreshNames);
       listen(label, 'change', refreshNames);
-      let ruleCode = row.dataset.formatRuleCode;
-      listen(code, 'change', () => {
-        const nextCode = clean(code.value);
-        const formats = readFormats();
-        if (code.readOnly || !nextCode || nextCode === ruleCode ||
-            formats.filter(format => format.code === nextCode).length !== 1 ||
-            state.ruleRosterCodes.includes(nextCode)) return;
-        // A duplicate draft may have survived a Material formats redraw. It
-        // must not acquire the rule belonging to the other format with that code.
-        const sharedCode = formats.some((format, otherIndex) => otherIndex !== index &&
-          format.code.toLowerCase() === ruleCode.toLowerCase());
-        const rule = !sharedCode && [...(dom.rules?.querySelectorAll('[data-rule-code]') || [])]
-          .find(item => item.dataset.ruleCode === ruleCode);
-        if (rule) {
-          if (!canRedrawRules()) return;
-          // Only unsaved formats have editable codes. Move their draft rule's
-          // identity without replacing controls or changing persisted codes.
-          rule.dataset.ruleCode = nextCode;
-          state.ruleRosterCodes = state.ruleRosterCodes.map(item => item === ruleCode ? nextCode : item);
-          for (const item of state.models.rules) {
-            if (item.code === ruleCode) item.code = nextCode;
-          }
-          if (expandedRuleCodes.delete(ruleCode)) expandedRuleCodes.add(nextCode);
-          if (rulePanelIds.has(ruleCode)) {
-            rulePanelIds.set(nextCode, rulePanelIds.get(ruleCode));
-            rulePanelIds.delete(ruleCode);
-          }
-          refreshRuleFormatName(rule);
-        }
-        ruleCode = nextCode;
-        row.dataset.formatRuleCode = nextCode;
-      });
       if (!state.system && !custom) {
         listen(override.input, 'change', () => {
           updateRowDisabled(row, !override.input.checked);
+          refreshNames();
           onChange();
         });
       }
@@ -1143,34 +1139,37 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   function removeFormat(index) {
     const values = readFormats();
     const item = values[index];
-    if (!item || !item.id || state.system || String(item.ownerOrganizationId) !== String(currentOrganizationId())) return;
-    state.deletedFormats.push({ id: item.id, version: item.version || '' });
+    if (!item || state.system || String(item.ownerOrganizationId) !== String(currentOrganizationId())) return;
+    if (!item.id && !canRedrawRules()) return;
+    if (item.id) state.deletedFormats.push({ id: item.id, version: item.version || '' });
     values.splice(index, 1);
     renderFormats(values);
+    if (!item.id) {
+      const rules = readRules().filter(rule => rule.code !== item.code);
+      state.ruleRosterCodes = state.ruleRosterCodes.filter(code => code !== item.code);
+      renderRules(rules);
+    }
+    (dom.formats.querySelectorAll('[data-domain-row]')[Math.min(index, values.length - 1)]
+      ?.querySelector('[data-material-field="label"]') || addButtons.formats)?.focus();
     onChange();
   }
 
   function readFormats() {
     return [...(dom.formats?.querySelectorAll('[data-domain-row]') || [])].map((row, index) => {
-      const inputs = [...row.querySelectorAll('input')];
       const override = row.querySelector('.settings-domain-override-toggle');
       const owner = numeric(row.dataset.formatOwner, 1);
-      const code = clean(inputs[0]?.value);
-      const result = {
+      const code = clean(row.dataset.formatCode);
+      return {
         id: stringId(row.dataset.formatId),
         version: stringId(row.dataset.formatVersion),
         code,
         ownerOrganizationId: owner,
-        label: clean(inputs[1]?.value) || code,
+        label: clean(row.querySelector('[data-material-field="label"]')?.value),
         sortOrder: numeric(row.dataset.formatSortOrder, (index + 1) * 10),
-        isEnabled: Boolean(row.querySelector('input[type="checkbox"]:not(.settings-domain-override-toggle)')?.checked),
+        isEnabled: Boolean(row.querySelector('[data-material-field="enabled"]')?.checked),
         overridden: state.system || owner === currentOrganizationId() || Boolean(override?.checked),
         reset: !state.system && owner !== currentOrganizationId() && Boolean(override) && !override.checked
       };
-      // Carry the rule association through intentional Material formats
-      // redraws without adding presentation metadata to snapshots or payloads.
-      formatRuleDraftCodes.set(result, row.dataset.formatRuleCode);
-      return result;
     });
   }
 
@@ -1179,54 +1178,31 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     dom.fields.replaceChildren();
     if (values.length === 0) dom.fields.append(element('p', { className: 'settings-empty', text: 'No custom fields configured.' }));
     for (const [index, value] of values.entries()) {
-      const keyInput = element('input', { type: 'text', value: value.key, 'data-domain-editable': 'true' });
       const row = element('div', {
         className: 'settings-editor-row settings-custom-field-row',
         'data-domain-row': 'true',
-        'data-field-id': value.id || ''
+        'data-field-id': value.id || '',
+        'data-field-key': value.key
       }, [
-        field('Stable key', keyInput),
-        field('Label', element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true' })),
+        field('Label', element('input', { type: 'text', value: value.label, 'data-custom-field': 'label', 'data-domain-editable': 'true' })),
         field('Type', select([
           { value: 'text', label: 'Text' },
           { value: 'textarea', label: 'Long text' },
           { value: 'select', label: 'Select' }
-        ], value.type, { 'data-domain-editable': 'true' })),
-        field('Help text', element('input', { type: 'text', value: value.helpText || '', 'data-domain-editable': 'true' })),
-        element('label', { className: 'settings-domain-check' }, [element('input', { type: 'checkbox', checked: value.enabled, 'data-domain-editable': 'true' }), element('span', { text: 'Enabled' })]),
+        ], value.type, { 'data-custom-field': 'type', 'data-domain-editable': 'true' })),
+        field('Help text', element('input', { type: 'text', value: value.helpText || '', 'data-custom-field': 'helpText', 'data-domain-editable': 'true' })),
+        element('label', { className: 'settings-domain-check' }, [element('input', { type: 'checkbox', checked: value.enabled, 'data-custom-field': 'enabled', 'data-domain-editable': 'true' }), element('span', { text: 'Enabled' })]),
         element('div', { className: 'settings-custom-options', 'data-options-editor': 'true' }),
         actions(index, values.length, (from, offset) => reorder('fields', from, offset), from => remove('fields', from))
       ]);
       const optionsEditor = row.querySelector('[data-options-editor]');
       renderFieldOptions(optionsEditor, value.options, value.type === 'select');
-      let originalKey = value.key;
-      listen(keyInput, 'change', event => {
-        const nextKey = clean(event.target.value);
-        if (!originalKey || !nextKey || nextKey === originalKey) return;
-        const previousKeys = new Set(readFields().map(item => item.key === nextKey ? originalKey : item.key));
-        if (!canRedrawRules(previousKeys)) return;
-        const rules = readRules();
-        if (rules.some(rule => Object.prototype.hasOwnProperty.call(rule.customFields, nextKey))) {
-          state.validationError = 'Custom field keys must remain unique across saved rules.';
-          return;
-        }
-        for (const rule of rules) {
-          if (Object.prototype.hasOwnProperty.call(rule.customFields, originalKey)) {
-            rule.customFields[nextKey] = rule.customFields[originalKey];
-            delete rule.customFields[originalKey];
-          }
-        }
-        state.models.rules = clone(rules);
-        originalKey = nextKey;
-        renderRules(rules);
-        onChange();
-      });
       listen(row.querySelector('select'), 'change', event => {
         optionsEditor.hidden = event.target.value !== 'select';
         onChange();
       });
       // Definition labels and enabled status affect the draft rule summary too.
-      for (const control of [row.querySelectorAll('input')[1], row.querySelector('input[type="checkbox"]')]) {
+      for (const control of [row.querySelector('[data-custom-field="label"]'), row.querySelector('[data-custom-field="enabled"]')]) {
         listen(control, 'input', () => refreshRuleDefinitions());
         listen(control, 'change', () => refreshRuleDefinitions());
       }
@@ -1239,17 +1215,16 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     container.hidden = !visible;
     container.replaceChildren(element('strong', { text: 'Select options' }));
     for (const [index, value] of values.entries()) {
-      const row = element('div', { className: 'settings-option-subrow', 'data-option-row': 'true' }, [
-        element('input', { type: 'text', value: value.id, 'data-domain-editable': 'true', 'aria-label': 'Option stable ID' }),
-        element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true', 'aria-label': 'Option label' }),
-        element('label', { className: 'settings-domain-check' }, [element('input', { type: 'checkbox', checked: value.enabled, 'data-domain-editable': 'true' }), element('span', { text: 'Enabled' })]),
+      const row = element('div', { className: 'settings-option-subrow', 'data-option-row': 'true', 'data-option-id': value.id }, [
+        element('input', { type: 'text', value: value.label, 'data-option-field': 'label', 'data-domain-editable': 'true', 'aria-label': 'Option label' }),
+        element('label', { className: 'settings-domain-check' }, [element('input', { type: 'checkbox', checked: value.enabled, 'data-option-field': 'enabled', 'data-domain-editable': 'true' }), element('span', { text: 'Enabled' })]),
         command('trash-o', 'Delete option', () => {
           const current = readFields();
-          current.find(item => item.options[index] === value);
           const parent = container.closest('[data-domain-row]');
           const fieldIndex = [...dom.fields.querySelectorAll('[data-domain-row]')].indexOf(parent);
           current[fieldIndex].options.splice(index, 1);
           renderFields(current);
+          focusFieldOption(current[fieldIndex].key, Math.min(index, current[fieldIndex].options.length - 1));
           onChange();
         })
       ]);
@@ -1260,26 +1235,35 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       const current = readFields();
       const parent = container.closest('[data-domain-row]');
       const fieldIndex = [...dom.fields.querySelectorAll('[data-domain-row]')].indexOf(parent);
-      current[fieldIndex].options.push({ id: `option_${current[fieldIndex].options.length + 1}`, label: 'New option', enabled: true, sortOrder: (current[fieldIndex].options.length + 1) * 10 });
+      const fieldValue = current[fieldIndex];
+      const accepted = state.models.fields.find(item => item.key === fieldValue.key)?.options || [];
+      fieldValue.options.push({ id: draftKey('option_', [...accepted, ...fieldValue.options].map(item => item.id)), label: 'New option', enabled: true, sortOrder: (fieldValue.options.length + 1) * 10 });
       renderFields(current);
+      focusFieldOption(fieldValue.key, fieldValue.options.length - 1);
       onChange();
     });
     container.append(add);
   }
 
+  function focusFieldOption(key, index) {
+    const row = [...dom.fields.querySelectorAll('[data-domain-row]')].find(item => item.dataset.fieldKey === key);
+    (row?.querySelectorAll('[data-option-field="label"]')[index] ||
+      row?.querySelector('[data-options-editor] > button'))?.focus();
+  }
+
   function readFields() {
     return [...(dom.fields?.querySelectorAll('[data-domain-row]') || [])].map((row, index) => ({
       id: stringId(row.dataset.fieldId),
-      key: clean(row.querySelectorAll('input')[0]?.value),
-      label: clean(row.querySelectorAll('input')[1]?.value),
-      type: row.querySelector('select')?.value || 'text',
-      helpText: clean(row.querySelectorAll('input')[2]?.value),
-      enabled: Boolean(row.querySelector('input[type="checkbox"]')?.checked),
+      key: clean(row.dataset.fieldKey),
+      label: clean(row.querySelector('[data-custom-field="label"]')?.value),
+      type: row.querySelector('[data-custom-field="type"]')?.value || 'text',
+      helpText: clean(row.querySelector('[data-custom-field="helpText"]')?.value),
+      enabled: Boolean(row.querySelector('[data-custom-field="enabled"]')?.checked),
       sortOrder: (index + 1) * 10,
       options: [...(row.querySelectorAll('[data-option-row]') || [])].map((option, optionIndex) => ({
-        id: stringId(option.querySelectorAll('input')[0]?.value),
-        label: clean(option.querySelectorAll('input')[1]?.value),
-        enabled: Boolean(option.querySelector('input[type="checkbox"]')?.checked),
+        id: stringId(option.dataset.optionId),
+        label: clean(option.querySelector('[data-option-field="label"]')?.value),
+        enabled: Boolean(option.querySelector('[data-option-field="enabled"]')?.checked),
         sortOrder: (optionIndex + 1) * 10
       }))
     }));
@@ -1315,12 +1299,20 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     }
   }
 
+  function ruleFormatLabel(code) {
+    const format = readFormats().find(item => item.code === code);
+    const label = format?.reset
+      ? property(array(property(systemConfig(state.data), 'formats')).find(item => property(item, 'code') === code), 'label')
+      : format?.label;
+    return clean(label) || 'Unresolved material format';
+  }
+
   function refreshRuleFormatName(row) {
-    const code = row.dataset.ruleCode;
-    const label = readFormats().find(format => format.code === code)?.label || code;
-    const context = `${label} (${code})`;
+    const label = ruleFormatLabel(row.dataset.ruleCode);
+    const rows = [...dom.rules.querySelectorAll('[data-rule-code]')];
+    const duplicates = rows.filter(item => ruleFormatLabel(item.dataset.ruleCode) === label);
+    const context = duplicates.length > 1 ? `${label}, format ${rows.indexOf(row) + 1}` : label;
     row.querySelector('.settings-rule-identity strong').textContent = label;
-    row.querySelector('.settings-rule-code').textContent = code;
     const toggle = row.querySelector('[data-rule-toggle]');
     toggle.setAttribute('aria-label', `${toggle.getAttribute('aria-expanded') === 'true' ? 'Collapse' : 'Expand'} ${context} format rules`);
     for (const [property, name] of [['messageBehavior', 'Message behavior'], ['message', 'Message']]) {
@@ -1352,6 +1344,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const focusedIndex = [...dom.rules.children].indexOf(focusedRow);
     const focusedCode = focusedRow?.dataset.ruleCode;
     const focusedName = focused?.getAttribute('aria-label');
+    const focusedAction = focused?.dataset.rowAction;
     const codes = new Set(values.map(value => value.code));
     for (const code of expandedRuleCodes) {
       if (!codes.has(code)) expandedRuleCodes.delete(code);
@@ -1362,17 +1355,16 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     dom.rules.replaceChildren();
     if (values.length === 0) dom.rules.append(element('p', { className: 'settings-empty', text: 'No format rules configured.' }));
     const customFields = readFields();
-    const formats = readFormats();
     for (const [index, value] of values.entries()) {
-      const formatLabel = formats.find(format => format.code === value.code)?.label || value.code;
-      const formatContext = `${formatLabel} (${value.code})`;
+      const formatLabel = ruleFormatLabel(value.code);
+      const formatContext = formatLabel;
       if (!rulePanelIds.has(value.code)) rulePanelIds.set(value.code, `format-rule-panel-${++nextRulePanelId}`);
       const panelId = rulePanelIds.get(value.code);
       const toggle = element('button', { type: 'button', className: 'settings-rule-toggle',
         'aria-controls': panelId, 'aria-describedby': `${panelId}-summary`, 'data-rule-toggle': 'true' }, [
         element('span', { className: 'settings-rule-chevron', 'aria-hidden': 'true', text: '›' }),
         element('span', { className: 'settings-rule-identity' }, [
-          element('strong', { text: formatLabel }), element('span', { className: 'settings-rule-code', text: value.code })
+          element('strong', { text: formatLabel })
         ]),
         element('span', { id: `${panelId}-summary`, className: 'settings-rule-summary', 'data-rule-summary': 'true',
           role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' })
@@ -1412,10 +1404,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
                 { value: 'optional', label: 'Optional' },
                 { value: 'required', label: 'Required' }
               ], current.mode, { 'data-custom-rule-property': 'mode', 'data-domain-editable': 'true',
-                'aria-label': `${fieldLabel} mode for ${value.code}` })),
+                'aria-label': `${fieldLabel} mode for ${formatContext}` })),
               field('Patron-facing label override', element('input', { type: 'text', value: current.labelOverride || '', placeholder: 'Label override',
                 'data-custom-rule-property': 'labelOverride', 'data-domain-editable': 'true',
-                'aria-label': `${fieldLabel} label override for ${value.code}` }))
+                'aria-label': `${fieldLabel} label override for ${formatContext}` }))
             ]);
           }))
         ])
@@ -1451,9 +1443,11 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     refreshRuleDefinitions();
     if (focusedRow) {
       const rows = [...dom.rules.querySelectorAll('[data-rule-code]')];
-      const row = rows.find(item => item.dataset.ruleCode === focusedCode) || rows[Math.min(focusedIndex, rows.length - 1)];
-      const action = [...(row?.querySelectorAll('.settings-row-actions button') || [])]
-        .find(button => !button.disabled && button.getAttribute('aria-label') === focusedName);
+      const retainedRow = rows.find(item => item.dataset.ruleCode === focusedCode);
+      const row = retainedRow || rows[Math.min(focusedIndex, rows.length - 1)];
+      const action = [...(retainedRow?.querySelectorAll('.settings-row-actions button') || [])]
+        .find(button => !button.disabled && (focusedAction
+          ? button.dataset.rowAction === focusedAction : button.getAttribute('aria-label') === focusedName));
       (action || row?.querySelector('[data-rule-toggle]') || addButtons.rules)?.focus();
     }
   }
@@ -1483,7 +1477,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     dom.claims.replaceChildren();
     const formats = readFormats().filter(item => item.id);
     const staff = array(property(state.data, 'autoClaimStaff') ?? property(state.data, 'staffUsers'));
-    const formatOptions = formats.map(item => ({ value: item.id, label: `${item.label} (${item.code})` }));
+    const formatOptions = formats.map(item => ({ value: item.id, label: item.label || 'Unresolved material format' }));
     for (const [index, value] of values.entries()) {
       const formatId = stringId(property(value, 'materialFormatId') ?? property(value, 'formatId'));
       const staffId = stringId(property(value, 'staffUserId') ?? property(value, 'staffId'));
@@ -1631,6 +1625,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         'data-template-sort-order': value.sortOrder ?? 0,
         'data-template-baseline-sort-order': value.sortOrder ?? 0,
         'data-template-id': stringId(value.id) || '',
+        'data-template-key': value.templateKey,
         'data-template-version': stringId(value.version) || '',
         'data-template-source-id': stringId(value.sourceTemplateId) || '',
         'data-template-kind': value.isCustom ? 'custom' : lineage ? 'lineage' : 'system',
@@ -1642,13 +1637,6 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         'data-template-inherited-subject': value.inheritedSubject || '',
         'data-template-inherited-body': value.inheritedBody || ''
       }, [
-        field('Template key', element('input', {
-          type: 'text',
-          className: 'template-key',
-          value: value.templateKey || '',
-          readOnly: lineage || Boolean(value.id),
-          'data-domain-editable': 'true'
-        })),
         field('Display name', element('input', {
           type: 'text',
           className: 'template-display-name',
@@ -1679,7 +1667,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         actions(index, values.length, (_, offset) => reorder('templates', templateRowIndex(row), offset), value.isCustom ? () => {
           const currentIndex = templateRowIndex(row);
           if (canRemoveTemplate(readTemplates()[currentIndex])) remove('templates', currentIndex);
-        } : null)
+        } : !value.id ? () => remove('templates', templateRowIndex(row)) : null)
       ]);
       row.dataset.templateBaselineSubject = row.querySelector('.template-subject').value;
       row.dataset.templateBaselineBody = row.querySelector('.template-body').value;
@@ -1756,7 +1744,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         id: stringId(row.dataset.templateId),
         version: stringId(row.dataset.templateVersion),
         sourceTemplateId: stringId(row.dataset.templateSourceId),
-        templateKey: clean(row.querySelector('.template-key')?.value),
+        templateKey: clean(row.dataset.templateKey),
         displayName: currentDisplayName,
         subject: currentSubject,
         body: currentBody,
@@ -1816,7 +1804,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       values.forEach((value, order) => { value.sortOrder = (order + 1) * 10; });
     }
     const focusedAction = document.activeElement?.getAttribute('aria-label');
+    const publicationAction = name === 'publication' ? document.activeElement?.dataset.rowAction : null;
     renderDomain(name, values);
+    if (name === 'publication') focusPublicationRow(next, publicationAction);
     if (name === 'fields') {
       renderRules(rules);
       focusFieldRow(next, focusedAction);
@@ -1834,6 +1824,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       state.ruleRosterCodes = state.ruleRosterCodes.filter(code => code !== removed.code);
     }
     renderDomain(name, values);
+    if (name === 'publication') focusPublicationRow(Math.min(index, values.length - 1));
     if (name === 'templates') {
       const rows = dom.templates.querySelectorAll('[data-domain-row]');
       (rows[Math.min(index, rows.length - 1)]?.querySelector('[data-template-toggle]') || addButtons.templates)?.focus();
@@ -1866,6 +1857,12 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const action = [...(row?.querySelectorAll('.settings-row-actions button') || [])]
       .find(button => !button.disabled && button.getAttribute('aria-label') === actionName);
     (action || row?.querySelector('input') || addButtons.fields)?.focus();
+  }
+
+  function focusPublicationRow(index, action) {
+    const row = dom.publication.querySelectorAll('[data-domain-row]')[index];
+    const target = action ? row?.querySelector(`[data-row-action="${action}"]:not(:disabled)`) : null;
+    (target || row?.querySelector('[data-publication-field="label"]') || addButtons.publication)?.focus();
   }
 
   function renderDomain(name, values) {
@@ -1942,28 +1939,47 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   }
 
   function validateCurrentFields() {
+    const requireControls = (row, selectors) => {
+      if (selectors.some(selector => row.querySelectorAll(selector).length !== 1)) {
+        throw new Error('The settings editor is incomplete. Reload settings before saving.');
+      }
+    };
+    for (const row of dom.publication.querySelectorAll('[data-domain-row]')) {
+      requireControls(row, ['input[data-publication-field="label"]', 'input[type="checkbox"][data-publication-field="enabled"]']);
+    }
+    for (const row of dom.formats.querySelectorAll('[data-domain-row]')) {
+      requireControls(row, ['input[data-material-field="label"]', 'input[type="checkbox"][data-material-field="enabled"]']);
+      if (!clean(row.dataset.formatCode)) throw new Error('The material-format identity is unavailable. Reload settings before saving.');
+    }
+    for (const row of dom.fields.querySelectorAll('[data-domain-row]')) {
+      requireControls(row, ['input[data-custom-field="label"]', 'select[data-custom-field="type"]',
+        'input[data-custom-field="helpText"]', 'input[type="checkbox"][data-custom-field="enabled"]']);
+      for (const option of row.querySelectorAll('[data-option-row]')) {
+        requireControls(option, ['input[data-option-field="label"]', 'input[type="checkbox"][data-option-field="enabled"]']);
+      }
+    }
     if (readSetRows(dom.creators, 'creator').some(value => !value)) {
       throw new Error('Remove or complete blank creator rows before saving.');
     }
     if (readPublication().some(option => !option.id || !option.label)) {
       throw new Error('Publication options require stable IDs and labels. Delete a row to remove it.');
     }
-    const blankKey = [...dom.templates.querySelectorAll('.template-key')].find(control => !control.value.trim());
-    if (blankKey) {
-      const message = 'Email templates require a stable key. Delete a row to remove it.';
-      onInvalidTemplate(blankKey, message);
-      throw new Error(message);
-    }
     const templateKeys = new Set(state.system ? BUILTIN_TEMPLATE_KEYS : []);
     for (const template of state.models.templates) {
       if (template.id && (state.system || template.isCustom)) templateKeys.add(template.templateKey.toLowerCase());
     }
     for (const row of dom.templates.querySelectorAll('[data-domain-row]')) {
+      requireControls(row, ['input.template-display-name', 'input.template-subject', 'textarea.template-body', 'input[type="checkbox"].template-enabled']);
+      const control = row.querySelector('.template-display-name');
+      const key = clean(row.dataset.templateKey)?.toLowerCase();
+      if (!key) {
+        const message = 'The email-template identity is unavailable. Reload settings before saving.';
+        onInvalidTemplate(control, message);
+        throw new Error(message);
+      }
       if (row.dataset.templateId) continue;
-      const control = row.querySelector('.template-key');
-      const key = control.value.trim().toLowerCase();
       if (templateKeys.has(key)) {
-        const message = 'This email template key is already used in this settings scope. Choose a different key.';
+        const message = 'The email-template identity is already used in this settings scope. Reload settings before saving.';
         onInvalidTemplate(control, message);
         throw new Error(message);
       }
@@ -2014,6 +2030,8 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       }
       if (name === 'rules') expandedRuleCodes.add(added.code);
       renderDomain(name, values);
+      if (name === 'publication') focusPublicationRow(values.length - 1);
+      if (name === 'formats') dom.formats.lastElementChild?.querySelector('[data-material-field="label"]')?.focus();
       if (name === 'templates') {
         const row = dom.templates.lastElementChild;
         row?.querySelector('[data-template-toggle]')?.click();
@@ -2042,7 +2060,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       : state.codeOverrideDraft ?? setValues('codes', false));
     onChange();
   });
-  bindAdd('publication', values => ({ id: `option_${values.length + 1}`, label: 'New option', enabled: true, sortOrder: (values.length + 1) * 10 }));
+  bindAdd('publication', values => ({
+    id: draftKey('option_', [...state.models.publication, ...values].map(item => item.id)),
+    label: 'New option', enabled: true, sortOrder: (values.length + 1) * 10
+  }));
   bindAdd('creators', values => 'New creator');
   listen(dom.codeSearch, 'input', renderCodeOptions);
   listen(dom.codeSearch, 'click', renderCodeOptions);
@@ -2111,20 +2132,15 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     return { id: null, key: `provider_${index}`, label: 'New provider', urlTemplate: '', isEnabled: false, overridden: true };
   });
   bindAdd('formats', values => {
-    const codes = new Set([...state.models.formats, ...values].map(value => value.code.toLowerCase()));
-    for (const code of state.ruleRosterCodes) codes.add(code.toLowerCase());
-    let index = values.length + 1;
-    while (codes.has(`custom_${index}`)) index += 1;
-    return { id: null, code: `custom_${index}`, ownerOrganizationId: currentOrganizationId(), label: 'New format', isEnabled: true, overridden: true };
+    const codes = [...state.models.formats, ...values].map(value => value.code).concat(state.ruleRosterCodes);
+    return { id: null, code: draftKey('custom_', codes), ownerOrganizationId: currentOrganizationId(), label: 'New format', isEnabled: true, overridden: true };
   });
   bindAdd('fields', values => {
-    const keys = new Set([...state.models.fields, ...values].map(value => value.key.toLowerCase()));
+    const keys = [...state.models.fields, ...values].map(value => value.key);
     for (const rule of state.models.rules) {
-      for (const key of Object.keys(rule.customFields)) keys.add(key.toLowerCase());
+      keys.push(...Object.keys(rule.customFields));
     }
-    let index = values.length + 1;
-    while (keys.has(`field_${index}`)) index += 1;
-    return { id: null, key: `field_${index}`, type: 'text', label: 'New field', enabled: true, options: [] };
+    return { id: null, key: draftKey('field_', keys), type: 'text', label: 'New field', enabled: true, options: [] };
   });
   bindAdd('rules', values => {
     const format = readFormats().find(item => !values.some(rule => rule.code === item.code));
@@ -2134,11 +2150,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   bindAdd('claims', values => ({ materialFormatId: readFormats()[0]?.id || '', staffUserId: '' }));
   function unusedTemplateKey(values) {
     // The DACPAC uses a case-insensitive collation for unique template keys.
-    const keys = new Set([...values, ...state.models.templates].map(value => String(value.templateKey || '').toLowerCase()));
+    const keys = [...values, ...state.models.templates].map(value => value.templateKey);
     const prefix = state.system ? 'rejection:template_' : 'rejection:custom_template_';
-    let index = 1;
-    while (keys.has(`${prefix}${index}`)) index += 1;
-    return `${prefix}${index}`;
+    return draftKey(prefix, keys);
   }
 
   bindAdd('templates', values => ({
@@ -2156,6 +2170,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     if (disposed) return;
     state.data = data || {};
     state.system = Boolean(system);
+    reservedDraftKeys.clear();
     expandedRuleCodes.clear();
     state.codeOverrideDraft = null;
     state.codeLookupPending = false;

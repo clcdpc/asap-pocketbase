@@ -471,6 +471,14 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-icon-button { width: 40px; height: 40px; padding: 0; color: var(--brand-dark); background: #fff; border: 1px solid #9aa5ae; border-radius: 4px; cursor: pointer; }
 .settings-icon-button:hover { background: #e2edf1; }
 .settings-editor-row > .settings-row-actions { grid-column: 1 / -1; }
+#publication-options-editor { container-type: inline-size; }
+#publication-options-editor .settings-option-row { grid-template-columns: minmax(0, 1fr); }
+#publication-options-editor .settings-option-row > .settings-row-actions { grid-column: auto; justify-content: flex-start; }
+#publication-options-editor .settings-row-actions button { flex: 0 0 40px; }
+#publication-options-editor :is(input, button):focus-visible { outline: 3px solid var(--brand-dark); outline-offset: 2px; }
+@container (min-width: 440px) {
+  #publication-options-editor .settings-option-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+}
 #external-search-provider-help { margin: 12px 0; }
 #external-search-provider-editor { container-type: inline-size; }
 #external-search-provider-editor .settings-provider-row { grid-template-columns: minmax(0, 1fr); }
@@ -505,7 +513,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-custom-options, .settings-rule-fields, .settings-rule-custom-fields { grid-column: 1 / -1; min-width: 0; }
 .settings-custom-options { display: grid; gap: 7px; padding-top: 3px; }
 .settings-custom-options > strong, .settings-rule-custom-fields > strong { color: var(--ink); font-size: .84rem; }
-.settings-option-subrow { display: grid; grid-template-columns: minmax(110px, .8fr) minmax(150px, 1fr) auto 40px; align-items: center; gap: 8px; min-width: 0; }
+.settings-option-subrow { display: grid; grid-template-columns: minmax(150px, 1fr) auto 40px; align-items: center; gap: 8px; min-width: 0; }
 .settings-option-subrow input { width: 100%; min-width: 0; }
 .settings-option-subrow > button { width: 40px; min-height: 40px; padding: 0; }
 #format-rules-editor { container-type: inline-size; }
@@ -517,7 +525,6 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 #format-rules-editor .settings-rule-chevron { font-size: 1.6rem; line-height: 1; text-align: center; }
 #format-rules-editor .settings-rule-toggle[aria-expanded="true"] .settings-rule-chevron { transform: rotate(90deg); }
 #format-rules-editor .settings-rule-identity { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; overflow-wrap: anywhere; }
-#format-rules-editor .settings-rule-code { color: var(--muted); font-size: .8rem; }
 #format-rules-editor .settings-rule-summary { grid-column: 2; color: var(--muted); font-size: .84rem; overflow-wrap: anywhere; }
 #format-rules-editor .settings-row-actions { margin-left: auto; }
 #format-rules-editor .settings-icon-button { width: 44px; height: 44px; flex: 0 0 44px; }

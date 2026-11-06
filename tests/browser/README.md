@@ -21,7 +21,7 @@ journeys use the Testing Kestrel fixtures:
   links and new submission/automatic claiming through HTTP and SQL.
 - `settings.cjs`: real Settings
   GET/editor POST/reload, ownership, override metadata and lossless identity;
-  the Campaign 2 super-admin/library-admin cases cover editable new keys,
+  the Campaign 2 super-admin/library-admin cases cover automatically allocated immutable draft keys,
   collisions, placeholder focus ownership, conditional fields and scope guards.
   The focused Format rules draft case seeds colliding generated format/field
   names, then creates a format and custom field in one global Save. It verifies

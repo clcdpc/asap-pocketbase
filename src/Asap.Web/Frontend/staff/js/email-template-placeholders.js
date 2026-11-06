@@ -57,7 +57,7 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
 
   function identity(owner) {
     const additional = owner.matches('.settings-template-row');
-    const key = additional ? owner.querySelector('.template-key')?.value.trim() || '' : owner.dataset.templateKey;
+    const key = owner.dataset.templateKey || '';
     const name = additional ? owner.querySelector('.template-display-name')?.value.trim() || 'New template'
       : owner.querySelector('legend')?.textContent.trim() || key;
     return { key, name, usage: additional ? 'additional' : 'builtin', kind: owner.dataset.templateKind || '',

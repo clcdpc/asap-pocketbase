@@ -265,7 +265,7 @@ async function verifyEmailTemplateCards({ page, scan, report }) {
     }
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    const addedKey = await added.locator('.template-key').inputValue();
+    const addedKey = await added.getAttribute('data-template-key');
     const rowHandle = await added.elementHandle();
     await added.locator('.template-body').evaluate(node => node.setSelectionRange(0, 0));
     const addedTrigger = added.locator('.template-body').locator('xpath=..').locator('.template-placeholder-trigger');
@@ -280,7 +280,7 @@ async function verifyEmailTemplateCards({ page, scan, report }) {
       await moved.locator('[aria-label="Move up"]').click();
     }
     assert.equal(await moved.evaluate((node, original) => node === original, rowHandle), true);
-    assert.equal(await moved.locator('.template-key').inputValue(), addedKey);
+    assert.equal(await moved.getAttribute('data-template-key'), addedKey);
     assert.equal(await moved.locator('.template-body').inputValue(), 'Body with {{title}}');
     assert.equal(await moved.locator('[data-template-toggle]').evaluate(node => node === document.activeElement), true);
     await retired.evaluate(node => node.click());

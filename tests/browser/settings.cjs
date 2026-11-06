@@ -117,15 +117,15 @@ async function verifyFormatRuleDraftNames(page) {
     const card = cards.nth(index), material = materials.nth(index);
     const toggle = card.locator('[data-rule-toggle]');
     const code = await card.getAttribute('data-rule-code');
-    const label = material.locator('input[type="text"]').nth(1);
+    const label = material.locator('[data-material-field="label"]');
     const override = material.locator('.settings-domain-override-toggle');
     originals.push({ index, label: await label.inputValue(), expanded: await toggle.getAttribute('aria-expanded'),
       override: await override.count() ? await override.isChecked() : null });
     if (await override.count()) await override.check();
     const control = await card.locator('[data-format-label="title"]').elementHandle();
     await label.fill('Shared label <draft>');
-    for (const name of [`Move Shared label <draft> (${code}) up`, `Move Shared label <draft> (${code}) down`,
-      `Delete Shared label <draft> (${code}) format rule`]) {
+    const context = index ? 'Shared label <draft>, format 2' : 'Shared label <draft>';
+    for (const name of [`Move ${context} up`, `Move ${context} down`, `Delete ${context} format rule`]) {
       const action = card.getByRole('button', { name, exact: true });
       assert.equal(await action.count(), 1);
       assert.equal(await action.getAttribute('title'), name);
@@ -138,7 +138,7 @@ async function verifyFormatRuleDraftNames(page) {
   assert.equal(new Set(names).size, names.length, 'Shared labels retain distinct header action names.');
   for (const original of originals) {
     const material = materials.nth(original.index);
-    await material.locator('input[type="text"]').nth(1).fill(original.label);
+    await material.locator('[data-material-field="label"]').fill(original.label);
     if (original.override !== null) await material.locator('.settings-domain-override-toggle').setChecked(original.override);
   }
 }
@@ -294,15 +294,17 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   assert.deepEqual(rawProvider(current, providerB), untouchedProvider, 'Untouched provider SQL row/version must survive sibling save.');
 
   await page.locator('#settings-nav-patron').click();
-  await page.locator(`#material-formats-editor [data-format-id="${formatA}"] input`).nth(1)
+  await page.locator(`#material-formats-editor [data-format-id="${formatA}"] [data-material-field="label"]`)
     .fill('Changed format A');
   payload = await saveSettings();
   assert.equal(payload.formats.find(item => item.id === formatB).reset, false);
   current = await read();
   assert.deepEqual(rawFormat(current, formatB), untouchedFormat, 'Untouched format SQL row/version must survive sibling save.');
   assert.deepEqual(rawOwned(current, sparseId), initialSparse, 'Untouched active owned SQL row/version must survive sibling save.');
+  assert.equal(await page.locator('#format-rules-editor [data-rule-code="' + codeA + '"] .settings-rule-identity strong').textContent(),
+    'Changed format A', 'Rule headings use the effective saved Library label.');
 
-  await page.locator(`#material-formats-editor [data-format-id="${customId}"] input`).nth(1)
+  await page.locator(`#material-formats-editor [data-format-id="${customId}"] [data-material-field="label"]`)
     .fill('Changed owned format');
   payload = await saveSettings();
   const savedCustom = payload.formats.find(item => item.id === customId);
@@ -393,7 +395,7 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
 
   const beforeFormatEdit = untouchedFormat;
   await page.locator('#settings-nav-patron').click();
-  await page.locator(`#material-formats-editor [data-format-id="${formatB}"] input`).nth(1)
+  await page.locator(`#material-formats-editor [data-format-id="${formatB}"] [data-material-field="label"]`)
     .fill('Changed pinned format B');
   await saveSettings();
   current = await read();
@@ -642,10 +644,9 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await page.waitForLoadState('networkidle');
     await ready(scope);
   };
-  // Value is a DOM property, so persisted and newly edited keys are found by
-  // their actual current values rather than an original value attribute.
+  // Retained identities locate cards independently of their current labels.
   const rowIndex = key => page.locator('#email-templates-editor [data-domain-row]').evaluateAll((rows, key) =>
-    rows.findIndex(row => row.querySelector('.template-key').value === key), key);
+    rows.findIndex(row => row.dataset.templateKey === key), key);
   const openCard = async control => {
     const card = control.locator('xpath=ancestor-or-self::*[contains(concat(" ",normalize-space(@class)," ")," settings-template-card ")][1]');
     const toggle = card.locator('[data-template-toggle]');
@@ -674,7 +675,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
         const popup = document.getElementById(node.getAttribute('aria-controls'));
         const control = node.closest('.settings-template-field').querySelector('input, textarea');
         return { scope: document.getElementById('settings-scope').value, version: document.getElementById('settings-version').value,
-          formInert: document.getElementById('settings-form').inert, key: card.querySelector('.template-key')?.value || card.dataset.templateKey,
+          formInert: document.getElementById('settings-form').inert, key: card.dataset.templateKey,
           kind: card.dataset.templateKind, expanded: card.querySelector('[data-template-toggle]').getAttribute('aria-expanded'),
           override: card.querySelector('.settings-template-override')?.checked, triggerDisabled: node.disabled,
           triggerExpanded: node.getAttribute('aria-expanded'), fieldDisabled: control.disabled, fieldReadOnly: control.readOnly,
@@ -734,13 +735,14 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await openPicker(page.locator('#email-submit-subject'));
     assert.deepEqual(await tokenKeys(), patronKeys);
     for (const key of ['rejection:template_1', 'rejection:template_3']) {
-      assert.equal(await (await row(key)).locator('.template-key').evaluate(input => input.readOnly), true);
+      assert.equal(await (await row(key)).locator('.template-key').count(), 0);
     }
     await page.locator('#add-email-template').click();
     let added = page.locator('#email-templates-editor [data-template-id=""]');
-    assert.equal(await added.locator('.template-key').inputValue(), 'rejection:template_2');
-    assert.equal(await added.locator('.template-key').isEditable(), true);
-    await added.locator('.template-key').fill('rejection:template_2');
+    const createdKey = await added.getAttribute('data-template-key');
+    assert.match(createdKey, /^rejection:template_[a-f0-9]{32}$/);
+    assert.equal(await added.locator('.template-key').count(), 0);
+    report.generatedSystemTemplateKey = createdKey;
     await added.locator('.template-display-name').fill('Campaign 2 added template');
     await added.locator('.template-subject').fill('É & title: ');
     await added.locator('.template-body').fill('First\nselected & last');
@@ -757,24 +759,24 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     assert.equal(await added.locator('.template-body').evaluate(element => document.activeElement === element), true);
     assert.equal(await added.locator('.template-body').evaluate(element => element.selectionStart), 15);
     const createdPayload = await saveSettings();
-    assert.equal(createdPayload.templates.find(item => item.templateKey === 'rejection:template_2').body, 'First\n{{title}} & last');
+    assert.equal(createdPayload.templates.find(item => item.templateKey === createdKey).body, 'First\n{{title}} & last');
     await reload('system');
     await page.locator('#settings-nav-templates').click();
-    added = await row('rejection:template_2');
-    assert.equal(await added.locator('.template-key').evaluate(input => input.readOnly), true);
+    added = await row(createdKey);
+    assert.equal(await added.getAttribute('data-template-key'), createdKey);
     assert.equal(await added.locator('.template-subject').inputValue(), 'É & title: ');
     const saved = await read('system');
-    const created = saved.stored.templates.find(item => item.templateKey === 'rejection:template_2' && item.organizationId === '1');
+    const created = saved.stored.templates.find(item => item.templateKey === createdKey && item.organizationId === '1');
     assert.equal(typeof created.id, 'string');
     assert.equal(created.body, 'First\n{{title}} & last');
     for (const original of initial.stored.templates) {
       assert.deepEqual(saved.stored.templates.find(item => item.id === original.id), original,
         'Creating an additional template must preserve every existing raw row/version.');
     }
-    const systemKeysBefore = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
-    const movingSystem = await row('rejection:template_2');
+    const systemKeysBefore = await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey));
+    const movingSystem = await row(createdKey);
     await movingSystem.locator('[aria-label="Move up"]').click();
-    const systemKeysAfter = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+    const systemKeysAfter = await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey));
     assert.notDeepEqual(systemKeysAfter, systemKeysBefore);
     const systemOrderPayload = await saveSettings();
     assert.equal(systemOrderPayload.templates.length, 1, 'A representable System move patches only its moved row.');
@@ -790,15 +792,15 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
         'System ordering preserves every sibling row, raw CRLF/whitespace value and rowversion.');
     }
     await reload('system'); await page.locator('#settings-nav-templates').click();
-    assert.deepEqual(await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value)), systemKeysAfter,
+    assert.deepEqual(await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey)), systemKeysAfter,
       'The System Move order survives the SQL-backed GET and full reload.');
     report.systemTemplateOrderingRoundTrip = true;
 
-    // A new UI row cannot use an existing key to upsert that source record.
+    // Corrupted retained identity cannot upsert an existing source record.
     const beforeRejected = await read('system');
     await page.locator('#add-email-template').click();
     const invalid = page.locator('#email-templates-editor [data-template-id=""]');
-    await invalid.locator('.template-key').fill('rejection:template_1');
+    await invalid.evaluate(node => { node.dataset.templateKey = 'rejection:template_1'; });
     await invalid.locator('.template-subject').fill('Duplicate');
     await invalid.locator('.template-body').fill('Duplicate body');
     await page.locator('#email-template-from-name').fill('Must roll back');
@@ -813,7 +815,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
       await page.locator('#settings-save').click();
       await invalid.locator('[role="alert"]').filter({ hasText: /already used/ }).waitFor();
       assert.equal(await page.locator('#settings-templates').isVisible(), true);
-      assert.equal(await invalid.locator('.template-key').evaluate(node => node === document.activeElement), true);
+      assert.equal(await invalid.locator('.template-display-name').evaluate(node => node === document.activeElement), true);
       assert.equal(await page.locator('#email-template-from-name').inputValue(), 'Must roll back', 'Validation preserves the sender draft.');
       assert.deepEqual(duplicatePosts, [], 'Duplicate UI validation runs before any mutation request.');
     } finally { page.off('request', trackDuplicatePost); }
@@ -907,7 +909,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await switchScope(library);
     await assertLibraryContext();
     await page.locator('#settings-nav-templates').click();
-    const inherited = await row('rejection:template_2');
+    const inherited = await row(createdKey);
     assert.equal(await inherited.locator('.template-subject').isDisabled(), true);
     await inherited.locator('.settings-template-override').check();
     await inherited.locator('.template-body').fill('Library body: ');
@@ -938,34 +940,46 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await openCard(page.locator('#email-submit-subject'));
     assert.equal(await page.locator('#email-submit-subject').isEditable(), true,
       'Returning from library inheritance must restore System built-in template editability.');
-    await (await row('rejection:template_2')).locator('.template-subject').fill('Updated System subject {{title}}');
+    await (await row(createdKey)).locator('.template-subject').fill('Updated System subject {{title}}');
     await saveSettings();
     const afterSystemEdit = await read(library);
     assert.deepEqual(afterSystemEdit.stored.templates.find(item => item.id === sparse.id), sparse,
       'System edits must preserve the exact sparse library row/version.');
     await switchScope(library);
     await page.locator('#settings-nav-templates').click();
-    assert.equal(await (await row('rejection:template_2')).locator('.template-subject').inputValue(), 'Updated System subject {{title}}');
-    assert.equal(await (await row('rejection:template_2')).locator('.template-body').inputValue(), 'Library body: {{title}}');
+    assert.equal(await (await row(createdKey)).locator('.template-subject').inputValue(), 'Updated System subject {{title}}');
+    assert.equal(await (await row(createdKey)).locator('.template-body').inputValue(), 'Library body: {{title}}');
     const badgeCounts = await page.locator('.settings-scope-badge').count();
     await switchScope('system'); await switchScope(library);
     assert.equal(await page.locator('.settings-scope-badge').count(), badgeCounts, 'Repeated scope changes must not duplicate indicators.');
     report.campaign2SystemAndInheritance = true;
   }
   await page.locator('#settings-nav-templates').click();
+  // Existing API identities can resemble built-in keys. Create those fixtures
+  // through the owning API; routine editors allocate their own immutable keys.
+  const compatibilityBaseline = await read(library);
+  const compatibilityTemplates = ['purchase_approved', 'suggestion_submitted', 'rejected'].map((key, index) => ({
+    sortOrder: Math.max(0, ...compatibilityBaseline.stored.templates.map(template => template.sortOrder || 0)) + (index + 1) * 10,
+    templateKey: key, isCustom: true, displayName: `Custom ${key}`, subject: `Manual ${key}`,
+    body: `Unchanged manual {{name}} content for ${key} & é`
+  }));
+  const compatibilityResponse = await page.evaluate(async ({ library, version, templates }) => {
+    const session = await (await fetch('/api/asap/staff/session')).json();
+    const response = await fetch('/api/asap/staff/settings', { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken
+    }, body: JSON.stringify({ orgId: library, version, templates }) });
+    return { status: response.status, body: await response.text() };
+  }, { library, version: compatibilityBaseline.version, templates: compatibilityTemplates });
+  assert.equal(compatibilityResponse.status, 200, compatibilityResponse.body);
+  await reload(library); await page.locator('#settings-nav-templates').click();
   const beforeCustomSave = await read(library);
   const builtinBeforeCustomSave = await page.locator('#settings-template-editor').evaluate(container =>
     [...container.querySelectorAll('[data-template-field]')].map(input => ({ id: input.id, value: input.value, disabled: input.disabled })));
   const customBodies = new Map();
   for (const key of ['purchase_approved', 'suggestion_submitted', 'rejected']) {
-    await page.locator('#add-email-template').click();
-    const custom = page.locator('#email-templates-editor [data-template-id=""]').last();
-    await custom.locator('.template-key').fill(key);
-    await custom.locator('.template-display-name').fill(`Custom ${key}`);
-    await custom.locator('.template-subject').fill(`Manual ${key}`);
+    const custom = await row(key);
     const body = `Unchanged manual {{name}} content for ${key} & é`;
     customBodies.set(key, body);
-    await custom.locator('.template-body').fill(body);
     await custom.locator('.template-body').focus();
     assert.equal(await custom.getAttribute('data-template-kind'), 'custom');
     assert.equal(await custom.locator('.template-placeholder-trigger').first().isDisabled(), true,
@@ -973,11 +987,11 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     assert.match(await custom.locator('.settings-template-preview-note').textContent(), /not verified/);
     assert.equal(await custom.locator('.template-body').inputValue(), body);
   }
-  const rejectionKey = 'REJECTION:campaign2_custom';
   await page.locator('#add-email-template').click();
   const upper = page.locator('#email-templates-editor [data-template-id=""]').last();
-  await upper.locator('.template-key').fill(rejectionKey);
-  await upper.locator('.template-display-name').fill('Case-insensitive named rejection');
+  const rejectionKey = await upper.getAttribute('data-template-key');
+  assert.match(rejectionKey, /^rejection:custom_template_[a-f0-9]{32}$/);
+  await upper.locator('.template-display-name').fill('Named rejection');
   await upper.locator('.template-subject').fill('Uppercase rejection {{title}}');
   await upper.locator('.template-body').fill('Upper & ');
   await selectRange(upper.locator('.template-body'), 8);
@@ -989,6 +1003,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   assert.equal(await upper.locator('.template-body').inputValue(), customBodies.get(rejectionKey));
   const customPayload = await saveSettings();
   for (const [key, body] of customBodies) {
+    if (key !== rejectionKey) continue;
     const submitted = customPayload.templates.find(item => item.templateKey === key && item.isCustom);
     assert.ok(submitted, `The custom ${key} row is submitted independently of built-in lineage.`);
     assert.equal(submitted.sourceTemplateId ?? null, null);
@@ -1022,7 +1037,8 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     assert.equal(stored.body, body);
     const custom = await row(key);
     assert.equal(await custom.getAttribute('data-template-kind'), 'custom');
-    assert.equal(await custom.locator('.template-key').evaluate(input => input.readOnly), true);
+    assert.equal(await custom.locator('.template-key').count(), 0);
+    assert.equal(await custom.getAttribute('data-template-key'), key);
     if (key === rejectionKey) {
       await openPicker(custom.locator('.template-body'));
       assert.deepEqual(await tokenKeys(), ['title']);
@@ -1050,9 +1066,9 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   assert.equal(customSaved.stored.templates.find(item => item.organizationId === library && item.templateKey === rawCustomKey).body, rawCustomBody);
   await reload(library); await page.locator('#settings-nav-templates').click();
   assert.equal(await (await row(rawCustomKey)).locator('.template-body').inputValue(), rawCustomBody.replace(/\r\n/g, '\n'));
-  const libraryOrderBefore = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+  const libraryOrderBefore = await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey));
   await (await row('rejected')).locator('[aria-label="Move up"]').click();
-  const libraryOrderAfter = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+  const libraryOrderAfter = await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey));
   assert.notDeepEqual(libraryOrderAfter, libraryOrderBefore);
   const libraryOrderPayload = await saveSettings();
   assert.equal(libraryOrderPayload.templates.length, 1, 'A Library move writes only its custom row, without creating lineage overrides.');
@@ -1068,7 +1084,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     } else assert.deepEqual(current, original, 'Library ordering preserves all inherited/custom siblings, raw content and rowversions.');
   }
   await reload(library); await page.locator('#settings-nav-templates').click();
-  assert.deepEqual(await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value)), libraryOrderAfter,
+  assert.deepEqual(await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey)), libraryOrderAfter,
     'Library custom ordering survives the SQL-backed GET and full reload.');
   customSaved = orderedLibrary;
   report.customTemplateOrderingRoundTrip = true;
@@ -1156,11 +1172,10 @@ async function runLibraryFormatRuleDrafts(page, args, report, saveSettings, read
 
   await page.locator('#add-material-format').click();
   const material = page.locator('#material-formats-editor [data-domain-row]').last();
-  const generatedCode = await material.locator('input').first().inputValue();
+  const generatedCode = await material.getAttribute('data-format-code');
   assert.notEqual(generatedCode.toLowerCase(), args.formatCode.toLowerCase());
-  const newCode = generatedCode + '_renamed';
-  await material.locator('input').first().fill(newCode);
-  await material.locator('input').nth(1).fill('New draft format');
+  const newCode = generatedCode;
+  await material.locator('[data-material-field="label"]').fill('New draft format');
   assert.equal(await existingControl.evaluate(node => node.isConnected && node.closest('[data-rule-code]').dataset.ruleCode), args.formatCode);
   await page.locator('#add-format-rule').click();
   const addedRule = page.locator(`#format-rules-editor [data-rule-code="${newCode}"]`);
@@ -1168,19 +1183,48 @@ async function runLibraryFormatRuleDrafts(page, args, report, saveSettings, read
 
   await page.locator('#add-custom-field').click();
   const definition = page.locator('#additional-fields-editor [data-domain-row]').last();
-  const generatedKey = await definition.locator('input').first().inputValue();
+  const generatedKey = await definition.getAttribute('data-field-key');
   assert.notEqual(generatedKey.toLowerCase(), savedKey.toLowerCase());
   await definition.locator('input[type="checkbox"]').uncheck();
   assert.equal(await addedRule.locator(`[data-custom-rule-key="${generatedKey}"] .settings-custom-rule-status`).innerText(),
     'Disabled field — not shown to patrons');
   await definition.locator('input[type="checkbox"]').check();
-  const newKey = generatedKey + '_renamed';
-  await definition.locator('input').first().fill(newKey);
-  await definition.locator('input').nth(1).fill('New draft field');
+  const newKey = generatedKey;
+  await definition.locator('[data-custom-field="label"]').fill('New draft field');
   const custom = addedRule.locator(`[data-custom-rule-key="${newKey}"]`);
   await custom.locator('select').selectOption('required');
   await custom.locator('input').fill('New rule witness');
   await existingControl.dispose();
+
+  await definition.locator('[data-custom-field="type"]').selectOption('select');
+  await definition.getByRole('button', { name: 'Add option', exact: false }).click();
+  await definition.locator('[data-option-field="label"]').last().fill('Same selection');
+  await definition.getByRole('button', { name: 'Add option', exact: false }).click();
+  await definition.locator('[data-option-field="label"]').last().fill('Same selection');
+  const optionIds = await definition.locator('[data-option-row]').evaluateAll(rows => rows.map(row => row.dataset.optionId));
+  assert.equal(new Set(optionIds).size, 2, 'Identical selection labels retain distinct values.');
+
+  await page.locator('#publication-options-use-system').uncheck();
+  const publication = page.locator('#publication-options-editor [data-domain-row]');
+  const inheritedPublicationIds = await publication.evaluateAll(rows => rows.map(row => row.dataset.optionId));
+  await page.locator('#add-publication-option').click();
+  const publicationKey = await publication.last().getAttribute('data-option-id');
+  await publication.last().locator('[data-publication-field="label"]').fill('Draft publication timing');
+  await publication.last().locator('[data-publication-field="enabled"]').uncheck();
+  await publication.last().locator('[data-row-action="up"]').press('Enter');
+  assert.equal(await page.evaluate(() => document.activeElement.closest('[data-domain-row]')?.dataset.optionId), publicationKey);
+  const publicationIds = await publication.evaluateAll(rows => rows.map(row => row.dataset.optionId));
+  assert.ok(inheritedPublicationIds.every(key => publicationIds.includes(key)));
+
+  await page.locator('#settings-nav-templates').click();
+  await page.locator('#add-email-template').click();
+  const namedTemplate = page.locator('#email-templates-editor [data-template-id=""]');
+  const templateKey = await namedTemplate.getAttribute('data-template-key');
+  await namedTemplate.locator('.template-display-name').fill('Draft rejection label');
+  await namedTemplate.locator('.template-subject').fill('Draft {{title}}');
+  await namedTemplate.locator('.template-body').fill('Body for {{title}}');
+  assert.equal(await namedTemplate.locator('.settings-template-preview-body').textContent(), 'Body for Example title');
+  assert.equal(await namedTemplate.locator('.template-placeholder-trigger').first().isEnabled(), true);
 
   // Creating the field and format in one POST exercises the real transaction's
   // intermediate SaveChanges, which can persist a stolen rule if collection is wrong.
@@ -1191,6 +1235,9 @@ async function runLibraryFormatRuleDrafts(page, args, report, saveSettings, read
     originalRule.customFields[savedKey]);
   assert.deepEqual(payload.formatRules.find(rule => rule.code === newCode).customFields[newKey],
     { mode: 'required', labelOverride: 'New rule witness' });
+  assert.deepEqual(payload.customFields.find(field => field.key === newKey).options.map(option => option.id), optionIds);
+  assert.ok(payload.patron.publicationOptions.some(option => option.id === publicationKey && !option.enabled));
+  assert.ok(payload.templates.some(template => template.templateKey === templateKey && template.isCustom));
   await page.reload({ waitUntil: 'networkidle' });
   await ready(args.scopeId);
   await page.locator('#settings-nav-patron').click();
@@ -1205,7 +1252,13 @@ async function runLibraryFormatRuleDrafts(page, args, report, saveSettings, read
   await addedRule.locator('[data-rule-toggle]').click();
   assert.equal(await custom.locator('select').inputValue(), 'required');
   assert.equal(await custom.locator('input').inputValue(), 'New rule witness');
-  report.formatRuleDrafts = { newCode, newKey, savedKey, roundTrip: true };
+  assert.deepEqual(saved.stored.customFields.find(field => field.key === newKey).options.map(option => option.id), optionIds);
+  assert.deepEqual(saved.stored.libraryOverride.publicationOptions.values.map(option => option.id), publicationIds);
+  assert.equal(saved.stored.templates.find(template => template.templateKey === templateKey)?.displayName, 'Draft rejection label');
+  assert.equal(await page.locator('#material-formats-editor [data-format-code="' + newCode + '"]').count(), 1);
+  assert.equal(await page.locator('#additional-fields-editor [data-field-key="' + newKey + '"]').count(), 1);
+  assert.equal(await addedRule.locator('.settings-rule-identity strong').textContent(), 'New draft format');
+  report.formatRuleDrafts = { newCode, newKey, savedKey, optionIds, publicationKey, templateKey, roundTrip: true };
 }
 
 async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettings, ready) {
@@ -2576,7 +2629,8 @@ async function main() {
     const availableAutoClaimFormats = await autoClaimSelects.nth(0).locator('option').evaluateAll(options =>
       options.filter(option => option.value).map(option => ({
         id: option.value,
-        code: option.textContent.trim().match(/\(([^()]*)\)$/)?.[1] || ''
+        code: [...document.querySelectorAll('#material-formats-editor [data-domain-row]')]
+          .find(row => row.dataset.formatId === option.value)?.dataset.formatCode || ''
       })));
     const systemAutoClaimCodes = new Set(['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook']);
     const autoClaimFormat = availableAutoClaimFormats.find(option => systemAutoClaimCodes.has(option.code) &&
@@ -2597,25 +2651,25 @@ async function main() {
     await page.locator('#settings-nav-patron').click();
     const fields = page.locator('#additional-fields-editor [data-domain-row]');
     await fields.first().waitFor({ state: 'visible' });
-    const originalKeys = await fields.evaluateAll(rows => rows.map(row => row.querySelector('input')?.value));
+    const originalKeys = await fields.evaluateAll(rows => rows.map(row => row.dataset.fieldKey));
     assert.ok(originalKeys.includes('authority_retired'), 'The seeded retired field should be present before adding a dynamic editor row.');
     await page.locator('#add-custom-field').click();
     const added = fields.last();
-    await added.locator('input').nth(0).fill('browser_select');
-    await added.locator('input').nth(1).fill('Browser choice');
+    const dynamicKey = await added.getAttribute('data-field-key');
+    await added.locator('[data-custom-field="label"]').fill('Browser choice');
     await added.locator('select').selectOption('select');
     const options = added.locator('[data-options-editor]');
     await options.getByRole('button', { name: /Add option/i }).click();
-    await options.locator('[data-option-row]').nth(0).locator('input').nth(0).fill('zeta');
-    await options.locator('[data-option-row]').nth(0).locator('input').nth(1).fill('Zeta');
+    await options.locator('[data-option-row]').nth(0).locator('[data-option-field="label"]').fill('Zeta');
     await options.getByRole('button', { name: /Add option/i }).click();
-    await options.locator('[data-option-row]').nth(1).locator('input').nth(0).fill('alpha');
-    await options.locator('[data-option-row]').nth(1).locator('input').nth(1).fill('Alpha');
+    await options.locator('[data-option-row]').nth(1).locator('[data-option-field="label"]').fill('Alpha');
+    const dynamicOptionIds = await options.locator('[data-option-row]').evaluateAll(rows => rows.map(row => row.dataset.optionId));
+    report.dynamicFieldIdentity = { key: dynamicKey, optionIds: dynamicOptionIds };
 
     const retiredRule = page.locator('#format-rules-editor [data-rule-code="book"] [data-custom-rule-key="authority_retired"]');
     assert.equal(await retiredRule.locator('[data-custom-rule-property="mode"]').inputValue(), 'optional');
     assert.equal(await retiredRule.locator('[data-custom-rule-property="labelOverride"]').inputValue(), 'Historical label');
-    const addedRule = page.locator('#format-rules-editor [data-rule-code="book"] [data-custom-rule-key="browser_select"]');
+    const addedRule = page.locator(`#format-rules-editor [data-rule-code="book"] [data-custom-rule-key="${dynamicKey}"]`);
     await page.locator('#format-rules-editor [data-rule-code="book"] [data-rule-toggle]').click();
     await addedRule.locator('[data-custom-rule-property="mode"]').selectOption('required');
     await addedRule.locator('[data-custom-rule-property="labelOverride"]').fill('Browser choice');
@@ -2634,14 +2688,14 @@ async function main() {
     assert.ok(postedPayload.autoClaimRules.some(rule => rule.materialFormatId === autoClaimFormatId &&
       rule.staffUserId === autoClaimStaffId && rule.active === true),
     'Saving the library auto-claim rule must submit the exact SQL bigint staff ID.');
-    const submittedField = postedPayload.customFields.find(field => field.key === 'browser_select');
+    const submittedField = postedPayload.customFields.find(field => field.key === dynamicKey);
     assert.ok(submittedField, 'The dynamically added custom field was missing from the submitted payload.');
-    assert.deepEqual(submittedField.options.map(option => option.id), ['zeta', 'alpha']);
+    assert.deepEqual(submittedField.options.map(option => option.id), dynamicOptionIds);
     const submittedRule = postedPayload.formatRules.find(rule => rule.code === 'book');
     assert.equal(submittedRule.customFields.authority_retired.mode, 'optional');
     assert.equal(submittedRule.customFields.authority_retired.labelOverride, 'Historical label');
-    assert.equal(submittedRule.customFields.browser_select.mode, 'required');
-    assert.equal(submittedRule.customFields.browser_select.labelOverride, 'Browser choice');
+    assert.equal(submittedRule.customFields[dynamicKey].mode, 'required');
+    assert.equal(submittedRule.customFields[dynamicKey].labelOverride, 'Browser choice');
     await page.locator('#settings-message').filter({ hasText: 'Settings saved.' }).waitFor();
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
@@ -2668,12 +2722,11 @@ async function main() {
     report.libraryPatronCodesRoundTrip = true;
     await page.locator('#settings-nav-patron').click();
     const reloadedFields = page.locator('#additional-fields-editor [data-domain-row]');
-    const reloadedKeys = await reloadedFields.evaluateAll(rows => rows.map(row => row.querySelector('input')?.value));
-    assert.ok(reloadedKeys.indexOf('authority_retired') < reloadedKeys.indexOf('browser_select'));
-    const reloadedDynamicField = reloadedFields.nth(reloadedKeys.indexOf('browser_select'));
+    const reloadedKeys = await reloadedFields.evaluateAll(rows => rows.map(row => row.dataset.fieldKey));
+    assert.ok(reloadedKeys.indexOf('authority_retired') < reloadedKeys.indexOf(dynamicKey));
+    const reloadedDynamicField = reloadedFields.nth(reloadedKeys.indexOf(dynamicKey));
     assert.deepEqual(await reloadedDynamicField
-      .locator('[data-option-row] input[aria-label="Option stable ID"]').evaluateAll(inputs => inputs.map(input => input.value)),
-    ['zeta', 'alpha']);
+      .locator('[data-option-row]').evaluateAll(rows => rows.map(row => row.dataset.optionId)), dynamicOptionIds);
     assert.equal(await retiredRule.locator('[data-custom-rule-property="mode"]').inputValue(), 'optional');
     assert.equal(await retiredRule.locator('[data-custom-rule-property="labelOverride"]').inputValue(), 'Historical label');
     assert.equal(await addedRule.locator('[data-custom-rule-property="mode"]').inputValue(), 'required');

@@ -55,7 +55,11 @@ test('format cards retain complete drafts and use the actual container width at 
       customFields: { note: { mode: 'required', labelOverride: 'Draft label' }, retired: { mode: 'required', labelOverride: 'Historical label' } } }));
     const fields = [true, false].map((enabled, index) => ({ id: String(index + 1), key: index ? 'retired' : 'note',
       type: 'text', label: index ? 'Retired description' : 'Custom label ' + 'long'.repeat(20), enabled, options: [] }));
-    const config = { publicationOptions: { exists: false, values: [] }, commonCreators: { exists: false, values: [] },
+    const config = { publicationOptions: { exists: true, values: [
+      { id: 'published', label: 'Published', enabled: true },
+      { id: 'forthcoming', label: 'Forthcoming', enabled: true },
+      { id: 'any-time', label: 'Any time', enabled: false }
+    ] }, commonCreators: { exists: false, values: [] },
       allowedPatronCodeIds: { exists: false, values: [] }, providers: [], formats, templates: [] };
     window.ruleChanges = 0;
     window.editors = createSettingsDomainEditors({ root, onChange: () => window.ruleChanges++ });
@@ -84,19 +88,19 @@ test('format cards retain complete drafts and use the actual container width at 
   const title = first.locator('[data-format-label="title"]');
   const material = page.locator('#material-formats-editor [data-domain-row]').first();
   await material.locator('.settings-domain-override-toggle').check();
-  const label = material.locator('input[type="text"]').nth(1);
+  const label = material.locator('[data-material-field="label"]');
   const retainedTitle = await title.elementHandle();
   await label.fill('Renamed Book <draft>');
   assert.equal(await first.locator('.settings-rule-identity strong').innerText(), 'Renamed Book <draft>');
-  assert.equal(await button.getAttribute('aria-label'), 'Collapse Renamed Book <draft> (book) format rules');
-  assert.equal(await title.getAttribute('aria-label'), 'Title patron-facing label for Renamed Book <draft> (book)');
+  assert.equal(await button.getAttribute('aria-label'), 'Collapse Renamed Book <draft> format rules');
+  assert.equal(await title.getAttribute('aria-label'), 'Title patron-facing label for Renamed Book <draft>');
   assert.equal(await retainedTitle.evaluate(node => node.isConnected), true);
   assert.deepEqual(await page.evaluate(() => [window.editors.collect().domainsChanged.formats, window.editors.collect().domainsChanged.rules]), [true, false]);
   await button.click();
   await label.fill('Collapsed Book');
-  assert.equal(await button.getAttribute('aria-label'), 'Expand Collapsed Book (book) format rules');
+  assert.equal(await button.getAttribute('aria-label'), 'Expand Collapsed Book format rules');
   await button.click();
-  assert.equal(await button.getAttribute('aria-label'), 'Collapse Collapsed Book (book) format rules');
+  assert.equal(await button.getAttribute('aria-label'), 'Collapse Collapsed Book format rules');
   await label.fill('Configured Book');
   await material.locator('.settings-domain-override-toggle').uncheck();
   assert.equal(await page.evaluate(() => window.editors.collect().changed), false);
@@ -105,12 +109,24 @@ test('format cards retain complete drafts and use the actual container width at 
   const author = first.locator('[data-format-field="author"]');
   await author.selectOption('required');
   assert.equal(await first.locator('[data-rule-summary]').innerText(), '3 required · 0 optional · 2 hidden');
-  await first.getByRole('button', { name: 'Move Configured Book (book) down', exact: true }).press('Enter');
+  await first.getByRole('button', { name: 'Move Configured Book down', exact: true }).press('Enter');
   const book = page.locator('#format-rules-editor [data-rule-code="book"]');
   assert.equal(await book.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true');
   assert.equal(await book.locator('[data-format-label="title"]').inputValue(), 'Unsaved title draft');
-  assert.equal(await page.evaluate(() => document.activeElement.isConnected && document.activeElement.getAttribute('aria-label')), 'Move Configured Book (book) down');
-  await book.getByRole('button', { name: 'Move Configured Book (book) up', exact: true }).click();
+  assert.equal(await page.evaluate(() => document.activeElement.isConnected && document.activeElement.getAttribute('aria-label')), 'Move Configured Book down');
+  await book.getByRole('button', { name: 'Move Configured Book up', exact: true }).click();
+  const publication = page.locator('#publication-options-editor');
+  const publicationRow = publication.locator('[data-option-id="published"]');
+  assert.equal(await publication.locator('input[type="text"]').count(), 3, 'Only the readable label is an input.');
+  assert.equal(await publicationRow.locator('[data-row-action="up"]').isDisabled(), true);
+  assert.equal(await publication.locator('[data-domain-row]').last().locator('[data-row-action="down"]').isDisabled(), true);
+  await publicationRow.locator('[data-publication-field="label"]').fill('Readable publication label');
+  await publicationRow.locator('[data-row-action="down"]').press('Enter');
+  assert.equal(await page.evaluate(() => document.activeElement.closest('[data-domain-row]')?.dataset.optionId), 'published');
+  assert.equal(await publicationRow.locator('[data-row-action="down"]').getAttribute('aria-label'),
+    'Move Readable publication label, publication option 2 down');
+  await publicationRow.locator('[data-row-action="up"]').press('Enter');
+  assert.equal(await publicationRow.locator('[data-publication-field="label"]').evaluate(node => node === document.activeElement), true);
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   for (const [name, width, height, zoom, columns, narrow] of [
     ['desktop', 1440, 1000, 1, 2, false], ['narrow-container', 1440, 1000, 1, 1, true],
@@ -120,11 +136,52 @@ test('format cards retain complete drafts and use the actual container width at 
     await nativeZoom(context, page, zoom);
     await page.locator('#format-rules-editor').evaluate((node, narrow) => { node.style.maxWidth = narrow ? '540px' : ''; }, narrow);
     const geometry = await formatRuleGeometry(page, columns);
+    geometry.publication = await publication.evaluate(node => {
+      const bounds = element => {
+        const r = element.getBoundingClientRect();
+        return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+      };
+      const row = node.querySelector('[data-domain-row]');
+      return { container: bounds(node), row: bounds(row),
+        label: bounds(row.querySelector('[data-publication-field="label"]')),
+        enabled: bounds(row.querySelector('.settings-domain-check')),
+        actions: bounds(row.querySelector('.settings-row-actions')),
+        controls: [...row.querySelectorAll('input, button')].map(bounds),
+        viewport: innerWidth, scrollWidth: document.documentElement.scrollWidth };
+    });
+    const p = geometry.publication;
+    assert.ok(p.scrollWidth <= p.viewport, name + ': publication reflow has no page overflow');
+    for (const control of p.controls) {
+      assert.ok(control.width > 0 && control.left >= p.row.left && control.right <= p.row.right,
+        name + ': publication controls fit their row: ' + JSON.stringify(p));
+    }
+    if (p.container.width >= 440) {
+      assert.ok(p.label.right <= p.enabled.left && p.enabled.right <= p.actions.left, name + ': Label | Enabled | actions');
+      assert.ok(Math.abs(p.label.bottom - p.actions.bottom) <= 1 && p.row.height <= 100,
+        name + ': publication uses one compact desktop row: ' + JSON.stringify(p));
+    } else {
+      assert.ok(p.enabled.top >= p.label.bottom && p.actions.top >= p.enabled.bottom,
+        name + ': publication wraps intentionally in a narrow container');
+    }
     await page.evaluate(axe);
     assert.deepEqual(await page.evaluate(async () => (await axe.run()).violations
       .filter(item => ['serious', 'critical'].includes(item.impact)).map(item => item.id)), [], name + ': axe');
     assert.equal(await page.evaluate(() => [...document.images].filter(image => image.getClientRects().length)
       .every(image => image.complete && image.naturalWidth > 0)), true);
+    const publicationLabel = publicationRow.locator('[data-publication-field="label"]');
+    await publicationLabel.focus(); await publicationLabel.press('Tab'); await page.keyboard.press('Shift+Tab');
+    geometry.publication.focus = await publicationLabel.evaluate(node => ({
+      focused: node === document.activeElement, visible: node.matches(':focus-visible'),
+      outline: getComputedStyle(node).outlineStyle, width: parseFloat(getComputedStyle(node).outlineWidth)
+    }));
+    assert.ok(geometry.publication.focus.focused && geometry.publication.focus.visible &&
+      geometry.publication.focus.outline !== 'none' && geometry.publication.focus.width >= 3, name + ': visible publication keyboard focus');
+    await publicationRow.evaluate(node => node.scrollIntoView({ block: 'center' }));
+    const publicationCdp = await context.newCDPSession(page);
+    try {
+      const capture = await publicationCdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      await fs.writeFile(path.join(directory, 'publication-' + name + '.png'), Buffer.from(capture.data, 'base64'));
+    } finally { await publicationCdp.detach(); }
     await first.evaluate(node => node.scrollIntoView({ block: 'start' }));
     const cdp = await context.newCDPSession(page);
     try {
@@ -150,24 +207,24 @@ test('format cards retain complete drafts and use the actual container width at 
   const panelId = await customCard.locator('[data-rule-toggle]').getAttribute('aria-controls');
   const customTitle = customCard.locator('[data-format-label="title"]');
   await customTitle.fill('Unsaved custom title');
-  const code = customMaterial.locator('input[type="text"]').first();
-  const draftCode = 'new"] #draft <tag>';
-  await code.fill(draftCode); await code.press('Tab');
-  await customMaterial.locator('input[type="text"]').nth(1).fill('Configured Book');
+  const draftCode = await customMaterial.getAttribute('data-format-code');
+  assert.match(draftCode, /^custom_[a-f0-9]{32}$/);
+  await customMaterial.locator('[data-material-field="label"]').fill('Configured Book');
   assert.equal(await retainedCustom.evaluate(node => node.isConnected), true);
   assert.equal(await customCard.getAttribute('data-rule-code'), draftCode);
   assert.equal(await customCard.locator('[data-rule-toggle]').getAttribute('aria-controls'), panelId);
   assert.equal(await customCard.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true');
   assert.equal(await customTitle.inputValue(), 'Unsaved custom title');
-  for (const name of [`Move Configured Book (${draftCode}) up`, `Move Configured Book (${draftCode}) down`,
-    `Delete Configured Book (${draftCode}) format rule`]) {
+  const position = await customCard.evaluate(node => [...node.parentElement.children].indexOf(node) + 1);
+  for (const name of [`Move Configured Book, format ${position} up`, `Move Configured Book, format ${position} down`,
+    `Delete Configured Book, format ${position} format rule`]) {
     assert.equal(await customCard.getByRole('button', { name, exact: true }).getAttribute('title'), name);
   }
-  await code.fill('book'); await code.press('Tab');
   await customMaterial.getByRole('button', { name: 'Move up', exact: true }).click();
-  const redrawnCode = page.locator('#material-formats-editor [data-format-id=""] input[type="text"]').first();
-  await redrawnCode.fill('recovered_after_reorder'); await redrawnCode.press('Tab');
-  assert.equal(await retainedCustom.evaluate(node => node.isConnected && node.dataset.ruleCode), 'recovered_after_reorder');
+  const redrawnMaterial = page.locator('#material-formats-editor [data-format-id=""]');
+  await redrawnMaterial.locator('[data-material-field="label"]').fill('Renamed after reorder');
+  assert.equal(await redrawnMaterial.getAttribute('data-format-code'), draftCode);
+  assert.equal(await retainedCustom.evaluate(node => node.isConnected && node.dataset.ruleCode), draftCode);
   assert.equal(await customCard.locator('[data-rule-toggle]').getAttribute('aria-controls'), panelId);
   assert.equal(await customTitle.inputValue(), 'Unsaved custom title');
   assert.equal(await page.evaluate(() => window.editors.collect().values.rules.some(rule => rule.code === 'book')), true);

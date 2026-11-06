@@ -256,21 +256,25 @@ const { JSDOM } = require('jsdom');
       configuredSystem: { ...completeSystem, templates: collisionRows }, templates: collisionRows } }, true);
     document.getElementById('add-email-template').click();
     const newRow = document.querySelector('#email-templates-editor [data-template-id=""]');
-    const newKey = newRow.querySelector('.template-key');
-    assert.strictEqual(newKey.value, 'rejection:template_2', 'Add must choose an unused key from nonsequential saved identities.');
-    assert.strictEqual(newKey.readOnly, false);
-    assert.strictEqual(newKey.hasAttribute('readonly'), false, 'Boolean false must not create a readonly attribute.');
-    newKey.value = 'rejection:editable_new_key';
-    assert.ok(systemEditors.collect().templates.some(item => item.templateKey === newKey.value));
+    const newKey = newRow.dataset.templateKey;
+    assert.match(newKey, /^rejection:template_[a-f0-9]{32}$/);
+    assert.strictEqual(newRow.querySelector('.template-key'), null, 'Identity has no routine input or accessible control.');
+    newRow.querySelector('.template-display-name').value = 'Renamed template';
+    assert.ok(systemEditors.collect().templates.some(item => item.templateKey === newKey && item.displayName === 'Renamed template'));
+    newRow.querySelector('[data-row-action="delete"]').click();
+    document.getElementById('add-email-template').click();
+    assert.notStrictEqual(document.querySelector('#email-templates-editor [data-template-id=""]').dataset.templateKey, newKey,
+      'A removed System draft does not lend its identity to a replacement.');
     for (const row of document.querySelectorAll('#email-templates-editor [data-template-id]:not([data-template-id=""])')) {
-      assert.strictEqual(row.querySelector('.template-key').readOnly, true);
+      assert.ok(row.dataset.templateKey);
+      assert.strictEqual(row.querySelector('.template-key'), null);
     }
     const casedKeys = collisionRows.map((item, index) => ({ ...item,
       templateKey: index === 0 ? 'REJECTION:TEMPLATE_1' : 'rejection:template_3' }));
     systemEditors.populate({ ...data, orgId: 'system', stored: { ...data.stored,
       configuredSystem: { ...completeSystem, templates: casedKeys }, templates: casedKeys } }, true);
     document.getElementById('add-email-template').click();
-    assert.strictEqual(document.querySelector('#email-templates-editor [data-template-id=""] .template-key').value, 'rejection:template_2');
+    assert.match(document.querySelector('#email-templates-editor [data-template-id=""]').dataset.templateKey, /^rejection:template_[a-f0-9]{32}$/);
     const orderRows = ['A', 'B', 'C', 'D', 'E', 'F'].map((key, index) => ({ ...systemTemplate,
       id: String(9007199254740993n + BigInt(index)), templateKey: `rejection:order_${key}`,
       body: '  Raw line one\r\nRaw line two  ', sortOrder: index < 4 ? 0 : (index - 3) * 100 }));
@@ -278,9 +282,9 @@ const { JSDOM } = require('jsdom');
       stored: { ...data.stored, configuredSystem: { ...completeSystem, templates: values.filter(item => item.organizationId === '1') },
         templates: [...values].reverse() } }, system);
     const orderKeys = () => [...document.querySelectorAll('#email-templates-editor [data-domain-row]')]
-      .map(row => row.querySelector('.template-key').value);
+      .map(row => row.dataset.templateKey);
     const orderRow = key => [...document.querySelectorAll('#email-templates-editor [data-domain-row]')]
-      .find(row => row.querySelector('.template-key').value === key);
+      .find(row => row.dataset.templateKey === key);
     populateOrdered([...orderRows].reverse());
     assert.deepStrictEqual(orderKeys(), orderRows.map(item => item.templateKey), 'Tied ranks use exact bigint identities.');
     assert.strictEqual(systemEditors.collect().domainsChanged.templates, false, 'Population does not normalize stored order values.');
@@ -337,18 +341,18 @@ const { JSDOM } = require('jsdom');
     populateOrdered([fixedA, fixedB, tiedCustom], false);
     document.getElementById('add-email-template').click();
     let duplicateCustom = document.querySelector('#email-templates-editor [data-template-id=""]');
-    duplicateCustom.querySelector('.template-key').value = tiedCustom.templateKey.toUpperCase();
+    duplicateCustom.dataset.templateKey = tiedCustom.templateKey.toUpperCase();
     assert.throws(() => systemEditors.collect(), /already used/, 'New custom rows cannot upsert another owned record.');
     duplicateCustom.querySelector('[aria-label="Delete"]').click();
     document.getElementById('add-email-template').click();
     duplicateCustom = document.querySelector('#email-templates-editor [data-template-id=""]');
-    duplicateCustom.querySelector('.template-key').value = fixedA.templateKey;
+    duplicateCustom.dataset.templateKey = fixedA.templateKey;
     assert.doesNotThrow(() => systemEditors.collect(), 'A Library custom key may share a System source key without claiming its lineage.');
     duplicateCustom.querySelector('[aria-label="Delete"]').click();
     orderRow(tiedCustom.templateKey).querySelector('[aria-label="Delete"]').click();
     document.getElementById('add-email-template').click();
     duplicateCustom = document.querySelector('#email-templates-editor [data-template-id=""]');
-    duplicateCustom.querySelector('.template-key').value = tiedCustom.templateKey;
+    duplicateCustom.dataset.templateKey = tiedCustom.templateKey;
     assert.throws(() => systemEditors.collect(), /already used/, 'A pending delete cannot be combined with an ambiguous same-key create.');
     systemEditors.dispose();
 
@@ -359,8 +363,9 @@ const { JSDOM } = require('jsdom');
     const identityEditors = module.createSettingsDomainEditors({ root: systemRoot });
     identityEditors.populate({ ...data, effective: { ...data.effective, formats: [format] },
       stored: { ...data.stored, formats: [format], configuredSystem: { ...completeSystem, providers: [provider] } } }, false);
-    assert.strictEqual(document.querySelector('#material-formats-editor input').readOnly, true,
-      'Persisted library-owned material-format codes are immutable too.');
+    assert.strictEqual(document.querySelector('#material-formats-editor [data-domain-row]').dataset.formatCode, format.code);
+    assert.strictEqual(document.querySelector('#material-formats-editor').textContent.includes('Code'), false,
+      'Persisted library-owned material-format codes are retained without an editable control.');
     identityEditors.populate({ ...data, orgId: 'system', stored: { ...data.stored,
       configuredSystem: { ...completeSystem, providers: [provider] } },
       effective: { ...data.effective, externalSearchProviders: [provider] } }, true);

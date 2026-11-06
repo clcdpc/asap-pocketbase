@@ -426,7 +426,7 @@ async function flush() {
       displayName: `Raw ${key}`, sortOrder: 50 + index * 10, version: `raw-${key}` })));
     assert.strictEqual(await controller.load({ silent: true }), true);
     const additionalB = [...document.querySelectorAll('#email-templates-editor [data-domain-row]')]
-      .find(row => row.querySelector('.template-key').value === 'rejection:raw_B');
+      .find(row => row.dataset.templateKey === 'rejection:raw_B');
     additionalB.querySelector('[data-template-toggle]').click();
     for (const field of additionalB.querySelectorAll('.settings-template-field')) {
       const fieldTrigger = field.querySelector('.template-placeholder-trigger');
@@ -452,7 +452,7 @@ async function flush() {
     assert.deepStrictEqual(saved[5].templates, [{ templateKey: 'rejection:raw_B', sortOrder: 49 }],
       'System ordering omits every untouched sibling and raw text field.');
     for (let attempt = 0; attempt < 30 && controller.hasPendingMutation(); attempt++) await flush();
-    assert.deepStrictEqual([...document.querySelectorAll('#email-templates-editor .template-key')].map(control => control.value),
+    assert.deepStrictEqual([...document.querySelectorAll('#email-templates-editor [data-domain-row]')].map(row => row.dataset.templateKey),
       ['rejection:raw_B', 'rejection:raw_A'], 'The saved rank reconstructs the order on accepted GET population.');
     assert.deepStrictEqual(additionalTemplates.map(item => item.body), [template.body, template.body]);
 
@@ -461,8 +461,8 @@ async function flush() {
       const acceptedTemplates = JSON.stringify(additionalTemplates);
       document.getElementById('add-email-template').click();
       const duplicate = document.querySelector('#email-templates-editor [data-template-id=""]');
-      const key = duplicate.querySelector('.template-key');
-      key.value = duplicateKey;
+      const key = duplicate.querySelector('.template-display-name');
+      duplicate.dataset.templateKey = duplicateKey;
       key.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
       duplicate.querySelector('.template-subject').value = 'Duplicate subject';
       duplicate.querySelector('.template-body').value = 'Duplicate body';
@@ -481,7 +481,7 @@ async function flush() {
       assert.strictEqual(fromName, acceptedSender);
       assert.strictEqual(JSON.stringify(additionalTemplates), acceptedTemplates);
       assert.strictEqual(senderDraft.value, 'Must not save duplicate sender', 'Validation preserves the unsaved sibling draft.');
-      key.value = `${duplicateKey}_corrected`;
+      duplicate.dataset.templateKey = `${duplicateKey}_corrected`;
       key.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
       assert.strictEqual(key.hasAttribute('aria-invalid'), false);
       assert.strictEqual(duplicate.querySelector('[role="alert"]').textContent, '');

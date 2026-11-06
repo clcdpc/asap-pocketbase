@@ -74,6 +74,27 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(fieldKey, evidence.GetProperty("savedKey").GetString());
             var newCode = evidence.GetProperty("newCode").GetString()!;
             var newKey = evidence.GetProperty("newKey").GetString()!;
+            var publicationKey = evidence.GetProperty("publicationKey").GetString()!;
+            var templateKey = evidence.GetProperty("templateKey").GetString()!;
+            Assert.AreEqual(1, await ReadCountWithParameterAsync("""
+                SELECT COUNT(*) FROM [asap].[PublicationOption]
+                WHERE [OrganizationId] = @library AND [OptionKey] = @key
+                  AND [Label] = N'Draft publication timing' AND [IsEnabled] = 0;
+                """, ("@library", libraryId), ("@key", publicationKey)));
+            Assert.AreEqual(1, await ReadCountWithParameterAsync("""
+                SELECT COUNT(*) FROM [asap].[EmailTemplate]
+                WHERE [OrganizationId] = @library AND [TemplateKey] = @key AND [IsCustom] = 1
+                  AND [SourceTemplateId] IS NULL AND [DisplayName] = N'Draft rejection label';
+                """, ("@library", libraryId), ("@key", templateKey)));
+            foreach (var option in evidence.GetProperty("optionIds").EnumerateArray())
+            {
+                Assert.AreEqual(1, await ReadCountWithParameterAsync("""
+                    SELECT COUNT(*) FROM [asap].[PatronCustomFieldOption] optionRow
+                    JOIN [asap].[PatronCustomField] field ON field.[Id] = optionRow.[PatronCustomFieldId]
+                    WHERE field.[LibraryOrganizationId] = @library AND field.[FieldKey] = @key
+                      AND optionRow.[OptionKey] = @option AND optionRow.[Label] = N'Same selection';
+                    """, ("@library", libraryId), ("@key", newKey), ("@option", option.GetString()!)));
+            }
             Assert.AreEqual(1, await ReadCountWithParameterAsync("""
                 SELECT COUNT(*) FROM [asap].[MaterialFormatCustomFieldRule] ruleRow
                 JOIN [asap].[MaterialFormat] format ON format.[Id] = ruleRow.[MaterialFormatId]
@@ -104,6 +125,9 @@ public sealed partial class PatronJourneyTests
                     (SELECT [Id] FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = @library);
                 DELETE FROM [asap].[PatronCustomField] WHERE [LibraryOrganizationId] = @library;
                 DELETE FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId] = @library;
+                DELETE FROM [asap].[EmailTemplate] WHERE [OrganizationId] = @library;
+                DELETE FROM [asap].[PublicationOption] WHERE [OrganizationId] = @library;
+                DELETE FROM [asap].[PublicationOptionSet] WHERE [OrganizationId] = @library;
                 DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] = @library;
                 DELETE FROM [asap].[Organization] WHERE [Id] = @library;
                 """, ("@library", libraryId));
