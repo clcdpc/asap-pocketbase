@@ -59,7 +59,7 @@ reruns and final receipt reconciliation do not add review passes.
 | Issue (implementation order) | Implementation | Pass 1 | Pass 2 | Focused tests | Status |
 | --- | --- | --- | --- | --- | --- |
 | #461 Hidden identities/readable labels | `7be87eb`, `583de79`, `2990e78` | Luna MAX: 3 findings fixed | Astra HIGH + Terra MAX: clipping and history-witness gap fixed | Retained editor/collision tests; real SQL/browser save/recovery/history; desktop/mobile/native200 | Technically qualified; final integration pending |
-| #462 Add rule feedback | Pending | Pending | Pending | Pending | Pending |
+| #462 Add rule feedback | `423c352`, `7b2cd22` | Luna MAX: 1 test gap fixed | Luna MAX: independent browser matrix, no findings | Retained domain/browser matrix and real-SQL Add/save/reload pass | Technically qualified; final integration pending |
 | #465 Common creator rows | Pending | Pending | Pending | Pending | Pending |
 | #463 Direct edit/inheritance | Pending | Pending | Pending | Pending | Pending |
 | #466 Blocking draft navigation | Pending | Pending | Pending | Pending | Pending |
@@ -103,6 +103,29 @@ Detailed receipts outside Git:461-results.json,461-pass1-results.json,
 461-pass2-remediation-results.json and their raw TRX/SQL/PNG companions under
 the shared evidence root below. The visual report's initial `passed` refers to
 its asserted publication scenarios, not its separately reported clipping defect.
+
+### #462 evidence
+
+Add rule uses the existing eligible-format factory. Empty and exhausted states
+disable the action and provide visible live feedback; availability refreshes
+after format/rule renders, before focus restoration, and on stale activation.
+Successful additions retain expansion, focus, dirty-state and stable identity
+without saving or creating formats. The focused domain file and retained
+Chromium matrix pass, as does the one discovered rebuilt real-SQL Add-rule
+save/reload journey, including the #461 recovery/history checks.
+
+Pass 1 (fresh Luna MAX) found no functional defect and one missing material-
+format removal transition. The test-only correction passes: exhausted -> add
+eligible format -> delete it before creating a rule -> disabled/explained, with
+original identities/accordion and clean snapshot restored, no POST. Pass 2
+(different fresh Luna MAX context) independently executed a scratch browser
+matrix for empty/exhausted, one/multiple eligible, duplicate readable labels with
+distinct keys, forced stale/repeated activation, rule/format removal/recreation,
+System/library, drafts, focus and mobile. No actionable defect; no serious or
+critical axe finding, page error, external request or implicit POST; mobile
+scroll width matches viewport. No tracked instrumentation. SQL save/reload was
+separate initial evidence, not claimed by this static probe. Human AT remains
+separate. Receipts: `462-*` and `462-pass2/report.md` / matrix JSON / PNGs.
 
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
