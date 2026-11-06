@@ -459,6 +459,23 @@ The guard now pins this task's verified `be9c7af` baseline; CI implementation,
 resources and authorization are unchanged. The complete rerun passes 83/83 with
 zero failures/skips; both receipts are retained.
 
+The next six-suite invocation on `2871d1d` passed 47/48 required scenarios.
+`i390` passed 4/4 and `pr410` 21/21; the only failure was S1's old zero-scroll
+expectation on the first inherited patron-code edit. The measured ownership
+status grew from 19.016px to 32px while native-200 input position stayed within
+0.016px. Selection checks now allow only that measured reflow, retaining exact
+zero scroll when status height is unchanged and all focus/visibility guards.
+The expanded source browser file passes 2/2 across ten System/library picker
+states and twelve provider states. This follow-up changes acceptance fixtures
+and documentation only; application code is unchanged from `2871d1d`.
+
+Relayed user guidance selects `i390`, `s1` and `pr410` for #471's format,
+inheritance/layout and shared draft/navigation risks. The already-running extra
+`i403`, `d1` and `q1` suites were allowed to finish (6/6, 6/6 and 5/5); they are
+additional evidence, not automatic requirements. Only S1 needs another run for
+its changed fixture. Unchanged successful suites are not repeated without a
+specific risk; final required CI still verifies all three complete populations.
+
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.
 Complex implementation uses Sol MAX; focused implementation and Pass 1 use

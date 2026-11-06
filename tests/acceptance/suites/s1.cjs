@@ -106,7 +106,18 @@ async function pickerLayout(t, scope, name) {
   await input.press('Enter');
   assert.ok((await selected(t.page)).includes('17'), 'Enter selects the highlighted code');
   assert.equal(await input.inputValue(), '');
-  assert.equal((await pickerGeometry(t.page, { open: false })).scrollY, choosing.scrollY, 'Selection preserves focus and page position');
+  const chosen = await pickerGeometry(t.page, { open: false });
+  const reflow = chosen.inheritanceHeight - choosing.inheritanceHeight;
+  const scroll = chosen.scrollY - choosing.scrollY;
+  // The first direct edit adds ownership/reset content above the picker. Allow
+  // only that measured reflow; focus and unobstructed visibility remain required.
+  if (reflow === 0) assert.equal(scroll, 0, 'Selection preserves page position without ownership reflow');
+  else {
+    assert.ok(scroll >= Math.min(0, reflow) - 1 && scroll <= Math.max(0, reflow) + 1,
+      'Selection scroll is bounded by ownership status reflow');
+    assert.ok(Math.abs(chosen.input.top + scroll - choosing.input.top - reflow) <= 1,
+      'Ownership status accounts for the picker position change');
+  }
   await t.page.getByRole('button', { name: 'Remove Branch use card (17)', exact: true }).click();
   await message.fill(originalMessage);
   if (scope === '2') await discard(t);

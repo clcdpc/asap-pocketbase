@@ -113,6 +113,7 @@ async function pickerGeometry(page, { open = true, active = true } = {}) {
       footer: footer ? rect(footer) : null,
       footerContent: footer ? [...footer.querySelectorAll('strong, span, button')]
         .filter(node => node.getClientRects().length).map(node => ({ ...rect(node), reachable: visible(node) })) : [],
+      inheritanceHeight: document.querySelector('#patron-codes-inherit-field')?.getBoundingClientRect().height || 0,
       clipping, scrollX, scrollY, pageOverflow: document.documentElement.scrollWidth > innerWidth
     };
   });

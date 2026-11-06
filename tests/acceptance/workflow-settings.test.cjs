@@ -11,7 +11,7 @@ const frontend = path.resolve(__dirname, '../../src/Asap.Web/Frontend');
 
 // Focused browser regression with the shipped DOM/CSS/editor and a deterministic
 // catalog. Real SQL-backed scope and read-only behavior stay in the S1 suite.
-test('patron-code picker clears the sticky footer at native zoom and limited heights', async t => {
+test('system and inherited patron-code pickers clear the footer at native zoom and limited heights', async t => {
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'asap-picker-layout-'));
   const extension = path.resolve(__dirname, '../browser/native-zoom-extension');
   const context = await chromium.launchPersistentContext(profile, {
@@ -48,9 +48,11 @@ test('patron-code picker clears the sticky footer at native zoom and limited hei
     for (const tab of root.querySelectorAll('[role="tab"]')) tab.setAttribute('aria-selected', String(tab.id === 'settings-nav-workflow'));
     const config = { allowedPatronCodeIds: { exists: true, values: [1, 77] }, providers: [], formats: [], templates: [] };
     window.editors = createSettingsDomainEditors({ root });
-    window.editors.populate({ orgId: 'system', stored: { configuredSystem: config }, effective: {},
+    window.pickerData = { stored: { configuredSystem: config, libraryOverride: {
+      allowedPatronCodeIds: { exists: false, values: [] }, providers: [], formats: [], templates: []
+    } }, effective: {},
       patronCodeChoices: Array.from({ length: 16 }, (_, index) => ({ id: index + 2,
-        description: index === 15 ? 'Wrapping description with a very long word ' + 'patron'.repeat(22) : 'Branch card ' + index })) }, true);
+        description: index === 15 ? 'Wrapping description with a very long word ' + 'patron'.repeat(22) : 'Branch card ' + index })) };
     const footer = root.querySelector('.settings-save-bar');
     footer.classList.add('attention');
     root.querySelector('#settings-save-title').textContent = 'Unsaved changes';
@@ -58,7 +60,9 @@ test('patron-code picker clears the sticky footer at native zoom and limited hei
     root.querySelector('#settings-reset').hidden = false;
   });
   const input = page.locator('#patron-code-picker');
-  for (const [width, height, zoom] of [[1440, 1000, 2], [1280, 900, 1.5], [1440, 1000, 1], [390, 844, 1], [720, 340, 1]]) {
+  const sizes = [[1440, 1000, 2], [1280, 900, 1.5], [1440, 1000, 1], [390, 844, 1], [720, 340, 1]];
+  for (const [system, width, height, zoom] of [true, false].flatMap(system => sizes.map(size => [system, ...size]))) {
+    await page.evaluate(system => window.editors.populate({ ...window.pickerData, orgId: system ? 'system' : '2' }, system), system);
     await page.setViewportSize({ width, height });
     await nativeZoom(context, page, zoom);
     await page.locator('#patron-code-eligibility-message').focus();
@@ -109,7 +113,16 @@ test('patron-code picker clears the sticky footer at native zoom and limited hei
     const choosing = await pickerGeometry(page);
     const chosen = await input.getAttribute('aria-activedescendant');
     await input.press('Enter');
-    assert.equal((await pickerGeometry(page, { open: false })).scrollY, choosing.scrollY, 'Choosing a suggestion does not jump the page');
+    const selected = await pickerGeometry(page, { open: false });
+    const reflow = selected.inheritanceHeight - choosing.inheritanceHeight;
+    const scroll = selected.scrollY - choosing.scrollY;
+    if (reflow === 0) assert.equal(scroll, 0, 'Choosing a suggestion preserves page position without ownership reflow');
+    else {
+      assert.ok(scroll >= Math.min(0, reflow) - 1 && scroll <= Math.max(0, reflow) + 1,
+        'Selection scroll is bounded by ownership status reflow');
+      assert.ok(Math.abs(selected.input.top + scroll - choosing.input.top - reflow) <= 1,
+        'Ownership status accounts for the picker position change');
+    }
     const chip = page.locator('#patron-codes-editor [data-code-id="' + chosen.replace('patron-code-option-', '') + '"]');
     assert.equal(await chip.count(), 1);
     await chip.getByRole('button').click();
