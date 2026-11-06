@@ -27,7 +27,7 @@ scope; format rows also retain their own version.
 | Additional custom templates (library-owned records) | Library IsCustom rows; no system source; rejection: keys are referenced by workflow selectors. System may also create additional system templates. | No inheritance gate; library custom rows can be moved/deleted. | Preserve owned template keys, history and rejection references through inherited resets. Keep authorized ordinary editing, no misleading inheritance status/reset. |
 | Common creators (whole-list override) | `{ exists, values }` from CommonCreatorSet/Term; absent set inherits; present empty set intentionally overrides with empty list. | Use system list checkbox disables inherited rows/add; Show common creators independently hides/disables options. | Full list or explicit null; one group status/reset, direct edits/add/move/delete prepare the list override. Reset removes library set/terms, not custom fields/formats/templates. |
 | Allowed patron codes (whole-set override) | `{ exists, values }` from PatronCodeEligibilitySet/Member; present empty set differs from absent. Current empty-selection runtime policy allows all. | Use system IDs checkbox and searchable token picker. Require eligible patron code is independent. | Full integer set or null; preserve unknown IDs/choice failures and stale lookup guards. One group status/reset and direct selection editing. No invented per-code inheritance. |
-| Publication options (whole-list override) | `{ exists, values }` from PublicationOptionSet/Option; OptionKey is public selection identity; present empty list differs from missing override. | Use system options checkbox disables rows/add; IDs/labels/enabled/order edited. | Whole list or null. Group status/reset, direct changes prepare entire override. Retain each OptionKey internally; resetting list intentionally removes library choices, without rewriting historical request selections. |
+| Publication options (whole-list override) | `{ exists, values }` from PublicationOptionSet/Option; OptionKey is the retained editor/collection identity. The Patron select keeps its existing label-valued contract; present empty list differs from missing override. | Use system options checkbox disables rows/add; IDs/labels/enabled/order edited. | Whole list or null. Group status/reset, direct changes prepare entire override. Retain each OptionKey internally; resetting list intentionally removes library choices, without rewriting historical request selections. |
 | External providers (per-item override, nullable columns) | Effective provider with `overridden`, system ID/key; raw ExternalSearchProviderOverride by library/provider ID. Nullable enabled/label/URL columns. | Dynamic Override checkbox gates each provider; reset:true/overridden:false removes that item's override. System owns provider creation. | Preserve ID/key/sort metadata. Item status/reset and direct edits; equal-value changes must not silently remove a saved override. Library cannot create a provider. Existing feature Enabled remains. |
 | Material formats (per-item override plus library-owned records) | Effective formats with ownerOrganizationId/overridden/version; raw systemOverride references materialFormatId. Library custom format rows are owned records. | Dynamic Override checkbox for shared formats; owned formats editable directly; library can add/delete custom formats only. | Keep code/ID/owner/version. Item status/reset only for shared formats; preserve custom rows and historical references. Existing Shown is feature visibility. Format rule settings share this item's nullable override columns. |
 | Format-rule built-in fields (same format override columns) | Message behavior/text and title/author/identifier/publication mode/label are MaterialFormat/MaterialFormatOverride properties, not separately owned rule entities. Title remains required. | Already directly editable in accordion; no separate inheritance checkbox. Existing updates compare effective values and preserve existing equal-value raw overrides on no-op, but a change back to system can currently clear a column implicitly. | Add explicit supported field/item reset/status without fabricating separate ownership. Material formats and Format rules must coordinate edits/resets to the same override. Preserve code association, expansion state, rule roster and completeness checks. |
@@ -475,6 +475,25 @@ inheritance/layout and shared draft/navigation risks. The already-running extra
 additional evidence, not automatic requirements. Only S1 needs another run for
 its changed fixture. Unchanged successful suites are not repeated without a
 specific risk; final required CI still verifies all three complete populations.
+
+### Retained browser contract checkpoint
+
+Forced Full CI `42254558260` on `2b6e54a` passed 74/74 frontend files and
+1,439/1,439 non-browser .NET/SQL cases, with zero skips. Browser execution
+passed 44/47; three retained fixtures still expected full unchanged Patron
+reposting, generic publication Move up naming, or technical Override checkboxes.
+The required gate failed and publication did not run. Receipts are retained at
+`ci/42254558260/` outside Git.
+
+The corrected format-only test includes all Patron values in its unchanged SQL
+snapshot. The presentation test uses the row action marker and verifies generated
+publication identities through the move. Remediation checks direct editing,
+keyboard reset/Discard and zero implicit Settings writes for five named fields.
+The first focused run passed the format and presentation cases (2/3); its new
+remediation assertion needed to await the completed Discard reload. The explicit
+No changes/ready-form wait fixes that harness race, and the final owning case
+passes 1/1. Release build: zero warnings/errors. These are test/documentation
+changes only; final revision-wide CI results remain in the consolidated PR.
 
 Implementation/reviewer models are selected explicitly on each child agent.
 Orchestration remains in the parent Codex session, as in the #438 record.

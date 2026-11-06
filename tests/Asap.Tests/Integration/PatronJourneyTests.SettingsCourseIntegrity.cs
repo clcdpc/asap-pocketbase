@@ -29,13 +29,12 @@ public sealed partial class PatronJourneyTests
         using (var initial = await ReadSettingsDocumentAsync(client, "system"))
         {
             var stored = initial.RootElement.GetProperty("stored");
-            unrelatedBefore = SerializeSystemSettingsOutsideSubmittedPatronAndFormats(stored);
+            unrelatedBefore = SerializeSystemSettingsOutsideFormats(stored);
             var patron = stored.GetProperty("patron");
             originalLoginPrompt = patron.GetProperty("loginPrompt").GetString();
             originalLoginNote = patron.GetProperty("loginNote").GetString();
             originalSuggestionFormNote = patron.GetProperty("suggestionFormNote").GetString();
         }
-        var postedPatronValues = new Dictionary<string, string?>(StringComparer.Ordinal);
         try
         {
             var repositoryRoot = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
@@ -89,10 +88,8 @@ public sealed partial class PatronJourneyTests
                 var payload = request.RootElement;
                 Assert.AreEqual("system", payload.GetProperty("orgId").GetString());
                 var patron = payload.GetProperty("patron");
-                foreach (var property in patron.EnumerateObject())
-                {
-                    postedPatronValues.Add(property.Name, property.Value.GetString());
-                }
+                Assert.AreEqual(0, patron.EnumerateObject().Count(),
+                    "A format-only System edit must omit unchanged Patron values from its sparse patch.");
                 var bookRule = payload.GetProperty("formatRules").EnumerateArray()
                     .Single(item => item.GetProperty("code").GetString() == "book");
                 Assert.IsFalse(bookRule.TryGetProperty("customFields", out _),
@@ -111,17 +108,9 @@ public sealed partial class PatronJourneyTests
             Assert.IsFalse(originalFormat.RowVersion.SequenceEqual(savedFormat.RowVersion),
                 "The actual editor POST must persist the System format rule in SQL.");
             using var saved = await ReadSettingsDocumentAsync(client, "system");
-            var savedPatron = saved.RootElement.GetProperty("stored").GetProperty("patron");
-            Assert.IsGreaterThan(0, postedPatronValues.Count,
-                "The System editor must submit its patron text values along with the format rule.");
-            foreach (var (key, value) in postedPatronValues)
-            {
-                Assert.AreEqual(value, savedPatron.GetProperty(key).GetString(),
-                    $"Stored System patron value '{key}' must match the value submitted by the actual editor.");
-            }
             Assert.AreEqual(unrelatedBefore,
-                SerializeSystemSettingsOutsideSubmittedPatronAndFormats(saved.RootElement.GetProperty("stored")),
-                "Saving one System format rule must preserve unrelated System settings.");
+                SerializeSystemSettingsOutsideFormats(saved.RootElement.GetProperty("stored")),
+                "Saving one System format rule must preserve all Patron values and other unrelated System settings.");
         }
         finally
         {
@@ -609,13 +598,12 @@ public sealed partial class PatronJourneyTests
         return rows;
     }
 
-    private static string SerializeSystemSettingsOutsideSubmittedPatronAndFormats(JsonElement stored)
+    private static string SerializeSystemSettingsOutsideFormats(JsonElement stored)
     {
         var snapshot = JsonNode.Parse(stored.GetRawText())!.AsObject();
         snapshot.Remove("formats");
         snapshot.Remove("configuredSystem");
         snapshot.Remove("formatRules");
-        snapshot.Remove("patron");
         return snapshot.ToJsonString();
     }
 

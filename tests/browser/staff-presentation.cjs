@@ -611,8 +611,17 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
                       await page.locator(button).click();
                     }
                     await auditSpacing(`${state}-rows-added`);
-                    const move = page.locator('#publication-options-editor [data-domain-row]').last().getByRole('button', { name: 'Move up', exact: true });
-                    if (await move.isEnabled()) { await move.click(); await auditSpacing(`${state}-rows-reordered`); }
+                    const publications = page.locator('#publication-options-editor [data-domain-row]');
+                    const order = await publications.evaluateAll(rows => rows.map(row => row.dataset.optionId));
+                    const move = publications.last().locator('[data-row-action="up"]');
+                    assert.match(await move.getAttribute('aria-label'), /^Move .+ up$/, 'Publication moves retain row-specific names.');
+                    if (await move.isEnabled()) {
+                      await move.click();
+                      [order[order.length - 2], order[order.length - 1]] = [order.at(-1), order.at(-2)];
+                      assert.deepEqual(await publications.evaluateAll(rows => rows.map(row => row.dataset.optionId)), order,
+                        'Moving a publication option preserves its generated identity and moves the intended row.');
+                      await auditSpacing(`${state}-rows-reordered`);
+                    }
                     await discardSpacingDraft();
                   }
                 }
