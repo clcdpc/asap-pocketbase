@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   label-new-issue:
+    if: ${{ !contains(github.event.issue.labels.*.name, 'meta-issue') }}
     runs-on: ubuntu-latest
     steps:
       - name: Mark newly opened issue for triage
