@@ -52,8 +52,20 @@ const { JSDOM } = require('jsdom');
       leapPatronUrlPattern: 'https://leap.example.test/{{patronId}}', patronId: 7001 };
     assert.equal(researchRecordUrl(recordResearch, 'bib', '9001'), 'https://leap.example.test/9001');
     assert.equal(researchRecordUrl(recordResearch, 'patron'), 'https://leap.example.test/7001');
+    assert.equal(researchRecordUrl({ ...recordResearch, leapPatronUrlPattern: 123 }, 'patron'), '');
+    for (const token of ['patron-id', 'patronId']) {
+      const patronResearch = { patronId: 7001, leapPatronUrlPattern: `https://leap.example.test/patron/{{${token}}}` };
+      assert.equal(researchRecordUrl(patronResearch, 'patron'), 'https://leap.example.test/patron/7001');
+      const value = researchRecordValue('<unsafe patron label>', patronResearch, 'patron');
+      assert.equal(value.textContent, '<unsafe patron label>');
+      assert.equal(value.querySelector('unsafe'), null);
+      assert.equal(value.target, '_blank'); assert.equal(value.rel, 'noopener noreferrer');
+    }
     assert.equal(researchRecordUrl({ ...recordResearch, patronId: null }, 'patron'), '');
     assert.equal(researchRecordUrl({ ...recordResearch, patronId: 'bad' }, 'patron'), '');
+    for (const patronId of [0, -1, 2147483648]) {
+      assert.equal(researchRecordUrl({ ...recordResearch, patronId }, 'patron'), '');
+    }
     assert.equal(researchRecordUrl(recordResearch, 'bib', 0), '');
     const recordLink = researchRecordValue('<unsafe patron label>', recordResearch, 'patron');
     assert.equal(recordLink.tagName, 'A'); assert.equal(recordLink.textContent, '<unsafe patron label>');
@@ -74,9 +86,11 @@ const { JSDOM } = require('jsdom');
       ]
     });
     assert.deepEqual([...links.querySelectorAll('a')].map(link => link.textContent),
-      ['Open BIB in LEAP', 'Open patron in LEAP', 'Title source', 'Identifier source']);
-    assert.equal(links.querySelectorAll('a')[2].href, 'https://search.example.test/?q=A%20%26%20B%20%2F%20C');
-    assert.equal(links.querySelectorAll('a')[3].href, 'https://search.example.test/?id=978%201');
+      ['Open BIB in LEAP', 'Title source', 'Identifier source']);
+    assert.equal(links.querySelectorAll('a')[1].href, 'https://search.example.test/?q=A%20%26%20B%20%2F%20C');
+    assert.equal(links.querySelectorAll('a')[2].href, 'https://search.example.test/?id=978%201');
+    assert.equal(links.querySelector('a[href*="patron"]'), null,
+      'The lower editor row leaves patron navigation beside patron context.');
 
     renderResearchLinks(links, { ...request, bibid: 'not-a-bib' }, {
       leapBibUrlPattern: 'https://leap.example.test/bib/{{bibid}}', externalSearchProviders: []

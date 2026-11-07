@@ -15,6 +15,8 @@ const research = { patronId: 41007, leapBibUrlPattern: 'https://example.org/bib/
   ] };
 const buttons = root => [...root.querySelectorAll('.action-bar > button')];
 const button = (root, label) => buttons(root).find(n => n.textContent.trim() === label);
+const detailValue = (root, label) => [...root.querySelectorAll('.detail-grid div')]
+  .find(row => row.querySelector('dt')?.textContent.trim() === label)?.querySelector('dd');
 
 async function setup(ui, initial = source, options = {}) {
   const { createDetailHost } = await ui.load('detail-host');
@@ -36,7 +38,7 @@ async function setup(ui, initial = source, options = {}) {
       calls.push({ path, init });
       if (options.send) { const custom = options.send(path, init); if (custom !== undefined) return custom; }
       if (init.method) return new Promise(resolve => { pending = resolve; });
-      if (path.includes('research-configuration')) return research;
+      if (path.includes('research-configuration')) return options.researchConfiguration ?? research;
       if (path.includes('assignment-candidates')) return { candidates: [{ id: '20', displayName: 'Reviewer' }] };
       if (path.includes('rejection-templates')) return { items: [] };
       return path.includes('/title-requests/') ? current : {};
@@ -232,6 +234,12 @@ async function setup(ui, initial = source, options = {}) {
       const plus = patron.querySelector('.grid-new-suggestion');
       assert.ok(plus); assert.equal(plus.previousElementSibling.textContent, 'Synthetic Reviewer');
       assert.equal(t.root.querySelectorAll('.grid-new-suggestion').length, 1);
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a').href, 'https://example.org/patron/41007');
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a').href, 'https://example.org/patron/41007');
+      for (const link of [detailValue(t.root, 'Patron').querySelector('a'), detailValue(t.root, 'Barcode').querySelector('a')]) {
+        assert.equal(link.target, '_blank'); assert.equal(link.rel, 'noopener noreferrer');
+      }
+      assert.equal(t.root.querySelector('.polaris-edit-tools').textContent.includes('Open patron in LEAP'), false);
       plus.click(); assert.deepEqual(t.quick[0], [source.barcode, plus, source.id]);
       const stalePlus = plus;
       await t.show({ ...source, id: '92', barcode: ' ' });
@@ -278,7 +286,7 @@ async function setup(ui, initial = source, options = {}) {
       assert.equal(t.root.querySelector('.research-section'), null);
       assert.equal(row.previousElementSibling.querySelector('input').getAttribute('inputmode'), 'numeric');
       assert.match(row.nextElementSibling.textContent, /Publication timing/);
-      assert.deepEqual([...row.querySelectorAll('a')].map(n => n.textContent), ['Open BIB in LEAP', 'Open patron in LEAP', 'First', 'Second']);
+      assert.deepEqual([...row.querySelectorAll('a')].map(n => n.textContent), ['Open BIB in LEAP', 'First', 'Second']);
       assert.doesNotMatch(row.textContent, /Catalog and research links/);
       for (const a of row.querySelectorAll('a')) { assert.equal(a.target, '_blank'); assert.equal(a.rel, 'noopener noreferrer'); }
       for (const [label, value, link] of [['Title', 'New & café', 'title?q=New%20%26%20caf%C3%A9'],
@@ -293,8 +301,82 @@ async function setup(ui, initial = source, options = {}) {
       t.lookups[0].apply({ bibId: 789, title: 'Catalog' }, { bibId: 789 });
       assert.ok([...row.querySelectorAll('a')].some(a => a.href.endsWith('/bib/789')));
       t.root.querySelector('.request-save-footer .secondary-button').click(); await settle();
-      assert.equal(t.root.querySelectorAll('.polaris-edit-tools a').length, 4, 'Revert retains one populated links row');
+      assert.equal(t.root.querySelectorAll('.polaris-edit-tools a').length, 3, 'Revert retains one populated links row');
       assert.ok(t.root.querySelector('a[href$="/bib/123"]'));
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    let release;
+    const t = await setup(ui, source, { send: path => path.includes('research-configuration?requestId=91')
+      ? new Promise(resolve => { release = resolve; }) : undefined });
+    try {
+      const titleInput = [...t.root.querySelectorAll('.edit-form label')]
+        .find(label => label.firstElementChild.textContent === 'Title').querySelector('input');
+      titleInput.value = 'Unsaved title draft';
+      titleInput.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+      titleInput.focus();
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a'), null);
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a'), null);
+      const retainedNameText = detailValue(t.root, 'Patron').textContent;
+      release(research); await settle();
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a').href, 'https://example.org/patron/41007');
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a').href, 'https://example.org/patron/41007');
+      assert.equal(detailValue(t.root, 'Patron').textContent, retainedNameText);
+      assert.equal(titleInput.value, 'Unsaved title draft');
+      assert.equal(document.activeElement, titleInput, 'Accepted research refresh retains editor focus.');
+      assert.equal(titleInput.isConnected, true, 'Accepted research refresh does not rebuild the dirty editor.');
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    let release;
+    const t = await setup(ui, source, { send: path => path.includes('research-configuration?requestId=91')
+      ? new Promise(resolve => { release = resolve; }) : undefined });
+    try {
+      const titleInput = [...t.root.querySelectorAll('.edit-form label')]
+        .find(label => label.firstElementChild.textContent === 'Title').querySelector('input');
+      titleInput.value = 'Retained draft & focus';
+      titleInput.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+      titleInput.focus();
+      release({ ...research, leapPatronUrlPattern: 123 }); await settle();
+
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a'), null,
+        'A non-string patron pattern remains plain text.');
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a'), null);
+      const links = [...t.root.querySelectorAll('.polaris-edit-tools a')];
+      assert.deepEqual(links.map(link => link.textContent), ['Open BIB in LEAP', 'First', 'Second']);
+      assert.equal(links[0].href, 'https://example.org/bib/123');
+      assert.equal(t.root.querySelector('.polaris-edit-tools a[href*="/patron/"]'), null);
+      assert.ok([...t.root.querySelectorAll('.polaris-edit-tools button')]
+        .some(control => control.textContent.trim() === 'Search Polaris catalog'));
+      assert.equal(titleInput.value, 'Retained draft & focus');
+      assert.equal(titleInput.isConnected, true);
+      assert.equal(document.activeElement, titleInput,
+        'Malformed patron metadata does not interrupt accepted config or move editor focus.');
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    const initialResearch = { ...research, patronId: 62001,
+      leapPatronUrlPattern: 'https://initial.example.org/patron/{{patronId}}' };
+    let release;
+    const t = await setup(ui, { ...source, research: initialResearch }, { send: path => path.includes('research-configuration?requestId=91')
+      ? new Promise(resolve => { release = resolve; }) : undefined });
+    try {
+      const nameLink = detailValue(t.root, 'Patron').querySelector('a');
+      const barcodeLink = detailValue(t.root, 'Barcode').querySelector('a');
+      assert.equal(nameLink.href, 'https://initial.example.org/patron/62001');
+      assert.equal(barcodeLink.href, nameLink.href);
+      nameLink.focus();
+      release({ ...research, patronId: null, leapPatronUrlPattern: 'javascript:open({{patronId}})' });
+      await settle();
+      assert.strictEqual(detailValue(t.root, 'Patron').querySelector('a'), nameLink,
+        'An unresolved later configuration preserves the useful DTO link.');
+      assert.strictEqual(detailValue(t.root, 'Barcode').querySelector('a'), barcodeLink);
+      assert.equal(document.activeElement, nameLink, 'A still-correct focused DTO link is not replaced.');
+      assert.equal(nameLink.target, '_blank'); assert.equal(nameLink.rel, 'noopener noreferrer');
+      assert.equal(t.root.querySelector('.polaris-edit-tools').textContent.includes('Open patron in LEAP'), false);
     } finally { t.dispose(); }
   });
 
@@ -305,9 +387,51 @@ async function setup(ui, initial = source, options = {}) {
     try {
       await t.show({ ...source, id: '92', libraryOrgId: 3, title: 'Other library' });
       const links = [...t.root.querySelectorAll('.polaris-edit-tools a')].map(n => n.href);
-      release({ externalSearchProviders: [{ label: 'Stale', urlTemplate: 'https://stale.example.org/{{title}}' }] }); await settle();
+      const upperLinks = [detailValue(t.root, 'Patron').querySelector('a').href,
+        detailValue(t.root, 'Barcode').querySelector('a').href];
+      release({ patronId: 99999, leapPatronUrlPattern: 'https://stale.example.org/patron/{{patron-id}}',
+        externalSearchProviders: [{ label: 'Stale', urlTemplate: 'https://stale.example.org/{{title}}' }] }); await settle();
       assert.deepEqual([...t.root.querySelectorAll('.polaris-edit-tools a')].map(n => n.href), links);
+      assert.deepEqual([detailValue(t.root, 'Patron').querySelector('a').href,
+        detailValue(t.root, 'Barcode').querySelector('a').href], upperLinks);
       assert.equal(ui.get('#request-dialog-title').textContent, 'Other library');
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    let release;
+    const t = await setup(ui, source, { send: path => path.includes('research-configuration?requestId=91')
+      ? new Promise(resolve => { release = resolve; }) : undefined });
+    try {
+      t.identity.accept({ ...actor, id: '21', authenticationEmail: 'replacement@example.org' });
+      release(research); await settle();
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a'), null,
+        'A response for a retired actor cannot attach patron links.');
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a'), null);
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    let release;
+    const t = await setup(ui, source, { send: path => path.includes('research-configuration?requestId=91')
+      ? new Promise(resolve => { release = resolve; }) : undefined });
+    try {
+      t.controller.invalidate();
+      release(research); await settle();
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a'), null,
+        'An aborted research load cannot attach patron links.');
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a'), null);
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    const t = await setup(ui, source, { send: path => path.includes('research-configuration?requestId=91')
+      ? Promise.reject(new Error('research configuration unavailable')) : undefined });
+    try {
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a'), null);
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a'), null);
+      assert.equal(buttons(t.root).some(control => control.textContent.trim() === 'Already own'), true,
+        'A failed research lookup leaves the editor and catalog workflow available.');
     } finally { t.dispose(); }
   });
 

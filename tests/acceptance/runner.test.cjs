@@ -11,6 +11,15 @@ const { parse, run, runScenarios } = require('./run.cjs');
 const { screenshot, registerScreenshotPage } = require('./helpers/accessibility.cjs');
 const appSha = 'a'.repeat(40), toolSha = 'b'.repeat(40);
 const repository = path.resolve(__dirname, '../..');
+test('Requests cleanup suite preserves its issue map and guarded mutation owner', () => {
+  const suite = require('./suites/i479.cjs');
+  assert.equal(suite.id, 'i479');
+  assert.equal(suite.scenarios.length, 6);
+  assert.deepEqual(suite.scenarios.filter(s => s.writes).map(s => s.id), ['i479-mutation-retention']);
+  assert.ok(suite.scenarios.every(s => s.requirements.some(r => /#45[78]|#476/.test(r))));
+  assert.ok(suite.human.some(row => row[1].includes('#398')));
+  assert.ok(suite.uncovered.some(row => row[0] === 'i479-native-identity-and-invalid-links'));
+});
 test('confirmation failure is observed while its trigger is still pending', async () => {
   const { decideConfirmation } = require('../browser/confirmation.cjs');
   const page = { locator: () => ({ waitFor: async () => { throw new Error('Synthetic confirmation unavailable'); } }) };

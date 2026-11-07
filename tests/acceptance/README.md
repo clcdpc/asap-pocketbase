@@ -1,5 +1,28 @@
 # ASAP automated acceptance
 
+The targeted `i479` suite covers Requests cleanup (#457, #476 and #458).
+Run `./scripts/review/Invoke-AsapReview.ps1 -Pr 480 -Suite i479` from this
+tooling checkout. Six scenarios cover 84 Claims/status/scope cells against
+authoritative SQL-backed rows, both queues, replacement/refresh/reload,
+15 desktop/mobile/native-200 queue layouts, accessible filter names and focus,
+contained scrolling, upper patron-name/barcode links without the lower duplicate,
+research draft updates, six injected unavailable/unsafe patron-link cases and
+guarded Close/Reopen follow-up refresh retention.
+Only the mutation-retention scenario writes, through the existing D1 fixture and
+confirmation helper. `-ReadOnly` skips that required scenario and exits incomplete.
+The suite adds no fixture, auth endpoint, provider call or mutation permission.
+The disposable default omits LEAP patterns. The link scenarios inject valid or
+invalid patterns into real initial/later read responses while keeping the SQL
+fixture's patron identity; they do not claim persisted provider configuration.
+
+The retained `shared-claims.cjs` native SQL/browser owner and focused frontend
+tests additionally own actor isolation, delayed old-actor reads, Profile fallback
+and preference saves. `leap-consumers.cjs` and focused research/details tests own
+delayed valid-link upgrade cases. Those are declared gaps
+in this single-reviewer runner suite, not fabricated execution. Exact LEAP hrefs,
+new-tab and safe-rel semantics are verified locally; no external LEAP navigation
+is attempted. Human visual/screen-reader acceptance remains under #398.
+
 The focused `i471` suite checks Settings identities and history, Add rule,
 inheritance, compact rows, draft blockers and save recovery using disposable SQL.
 Run from this tooling checkout against an immutable application commit:

@@ -13,7 +13,10 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 (async () => {
   const fixture = JSON.parse(await fs.readFile(path.join(artifacts, 'fixture.json'), 'utf8'));
   const headers = actor => ({ 'X-ASAP-Test-Staff-Id': actor.id, 'X-ASAP-Test-Tenant-Id': actor.tenantId, 'X-ASAP-Test-Staff-Email': actor.email });
-  const report = { states: [], nativeZoom: [], external: [], errors: [], reads: [], mutation: false, ordinaryScope: false, modalReturn: null };
+  const report = {
+    states: [], nativeZoom: [], external: [], errors: [], reads: [], mutation: false, ordinaryScope: false, modalReturn: null,
+    controlledClientFilterProjection: { taggedRequestId: fixture.mutationId, similarRequestId: fixture.mutationId, databaseWrites: false }
+  };
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   const browser = await chromium.launch({ headless: true });
   let nextRead = null;
@@ -36,6 +39,14 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       assert.equal(await page.getByRole('tab', { name: expected[index], exact: true }).count(), 1);
       assert.equal(await page.locator(`#status-tabs [data-status="${stages[index]}"] .status-count`).evaluate(node => node.classList.contains('quiet')), totals[index] === 0);
     }
+    assert.deepEqual(await page.locator('#status-count-state').evaluate(node => ({
+      text: node.textContent,
+      role: node.getAttribute('role'),
+      live: node.getAttribute('aria-live'),
+      display: getComputedStyle(node).display,
+      height: node.getBoundingClientRect().height
+    })), { text: '', role: 'status', live: 'polite', display: 'none', height: 0 },
+    'Ready feedback is empty and reserves no helper spacing.');
   };
   const unknown = async (page, loading) => {
     const expected = labels.map(label => `${label} (count ${loading ? 'loading' : 'unavailable'})`);
@@ -43,17 +54,38 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       .map(tab => tab.getAttribute('aria-label'))) === JSON.stringify(expected), expected);
     assert.deepEqual(await countNames(page), expected);
     assert.match(await page.locator('#status-count-state').textContent(), loading ? /Counts loading/ : /Counts unavailable/);
+    assert.ok(await page.locator('#status-count-state').evaluate(node => node.getBoundingClientRect().height > 0),
+      'Loading and unavailable feedback remains visible.');
+  };
+  const refreshFocus = async (page, expected, label) => {
+    assert.deepEqual(await page.locator('#refresh-queue').evaluate(node => ({
+      active: node === document.activeElement,
+      visible: node.matches(':focus-visible'),
+      disabled: node.disabled
+    })), { active: expected, visible: expected, disabled: false }, label);
+  };
+  const focusRefreshByKeyboard = async page => {
+    await page.locator('#request-search').focus();
+    for (let index = 0; index < 4; index++) await page.keyboard.press('Tab');
+    await refreshFocus(page, true, 'Refresh is reached with visible keyboard focus.');
   };
   const scan = async (page, name, visible = null) => {
     await page.evaluate(axe);
     const result = await page.evaluate(async () => ({
       violations: (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)),
       overflow: document.documentElement.scrollWidth > innerWidth,
-      countHelpVisible: document.querySelector('#status-count-help').getClientRects().length > 0,
+      countStateMatches: (() => {
+        const node = document.querySelector('#status-count-state'), state = node.textContent.trim();
+        return state ? node.getClientRects().length > 0 : getComputedStyle(node).display === 'none' && node.getBoundingClientRect().height === 0;
+      })(),
+      danglingDescriptions: [...document.querySelectorAll('[aria-describedby]')].flatMap(node =>
+        (node.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean)
+          .filter(id => !document.getElementById(id)).map(id => ({ node: node.id || node.tagName, id }))),
       images: [...document.images].filter(node => node.getClientRects().length).every(node => node.complete && node.naturalWidth > 0)
     }));
     assert.deepEqual(result.violations, [], `${name}: axe`); assert.equal(result.overflow, false, `${name}: document overflow`);
-    assert.equal(result.countHelpVisible, true, `${name}: count/filter help is visible`);
+    assert.equal(result.countStateMatches, true, `${name}: count feedback matches its state without empty spacing`);
+    assert.deepEqual(result.danglingDescriptions, [], `${name}: no aria-describedby reference is dangling`);
     assert.equal(result.images, true, `${name}: images`); report.states.push({ name, ...result });
     // Axe can scroll the tab strip while inspecting its other buttons.
     if (visible) await visible.scrollIntoViewIfNeeded();
@@ -65,22 +97,101 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await context.route('**/api/asap/staff/title-requests?*', async route => {
       report.reads.push(route.request().url());
       const control = nextRead; nextRead = null;
-      if (!control) return route.continue();
-      if (control.mode === 'failed') return route.fulfill({ status: 503, contentType: 'application/json', body: '{"message":"Deterministic count read failure"}' });
-      if (control.mode === 'malformed') return route.fulfill({ status: 200, contentType: 'application/json', body: '{"scope":"44201"}' });
+      if (control?.mode === 'failed') return route.fulfill({ status: 503, contentType: 'application/json', body: '{"message":"Deterministic count read failure"}' });
+      if (control?.mode === 'malformed') return route.fulfill({ status: 200, contentType: 'application/json', body: '{"scope":"44201"}' });
       const response = await route.fetch();
-      control.started.resolve();
-      await control.release.promise;
-      try { await route.fulfill({ response }); }
+      const body = await response.json();
+      if (!response.ok() || !Array.isArray(body.items)) return route.fulfill({ response });
+      // Deterministic UI-only projection: the authorized SQL row exercises Tag and Similarity filters.
+      const tagged = { ...body, items: body.items.map(item => {
+        const target = String(item.id) === fixture.mutationId;
+        return { ...item, workflowTags: target ? ['Browser tag'] : [],
+          relatedRequests: { ...(item.relatedRequests || {}), count: target ? 1 : 0 } };
+      }) };
+      if (control) {
+        control.started.resolve();
+        await control.release.promise;
+      }
+      try { await route.fulfill({ response, json: tagged }); }
       catch (error) { if (!/closed|canceled|cancelled|invalid interception/i.test(error.message)) throw error; }
-      finally { control.completed.resolve(); }
+      finally { control?.completed.resolve(); }
     });
     const holdRead = mode => (nextRead = { mode, started: deferred(), release: deferred(), completed: deferred() });
     const page = await context.newPage();
     await page.goto(`${baseURL}/staff/?stage=suggestion&scope=${fixture.library}`);
     await counts(page, fixture.libraryCounts);
     assert.equal(await page.locator('#queue-title').evaluate(node => document.activeElement === node), false, 'Startup counts preserve native initial focus.');
-    await page.locator('#claim-filter').selectOption('all');
+    const search = page.locator('#request-search'), claim = page.locator('#claim-filter');
+    const tag = page.locator('#tag-filter'), similarity = page.locator('#similar-filter');
+    const visibleIds = locator => locator.evaluateAll(nodes => nodes.map(node => node.dataset.requestId));
+    await search.focus(); await page.keyboard.press('Tab');
+    const claimFocus = await claim.evaluate(node => ({ active: node === document.activeElement, visible: node.matches(':focus-visible') }));
+    assert.deepEqual(claimFocus, { active: true, visible: true }, 'Claims receives visible keyboard focus.');
+    await page.keyboard.press('Home');
+    await page.waitForFunction(() => document.querySelector('#claim-filter').value === 'all' &&
+      document.querySelector('#queue-summary').textContent === '28 suggestion requests' &&
+      document.querySelectorAll('#request-grid tbody .request-title-link').length === 25);
+    const firstPageIds = await visibleIds(page.locator('#request-grid tbody .request-title-link'));
+    assert.equal(firstPageIds.length, 25);
+    assert.equal(new Set(firstPageIds).size, 25, 'All shows 25 distinct first-page Suggestions.');
+    await page.keyboard.press('End');
+    await page.waitForFunction(() => document.querySelector('#claim-filter').value === 'unclaimed' &&
+      document.querySelector('#queue-summary').textContent === '28 suggestion requests' &&
+      document.querySelectorAll('#request-grid tbody .request-title-link').length === 25 &&
+      [...document.querySelectorAll('#request-grid tbody .claim-label')].every(node => node.textContent.trim() === 'Unclaimed'));
+    assert.equal(await claim.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
+    assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), firstPageIds,
+      'Unclaimed matches the same 25 visible IDs as All; 28 total Suggestions are available.');
+    await counts(page, fixture.libraryCounts);
+    await page.keyboard.press('ArrowUp');
+    await page.waitForFunction(() => document.querySelector('#claim-filter').value === 'mine' &&
+      document.querySelector('#queue-summary').textContent === '0 suggestion requests');
+    assert.equal(await claim.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
+    await page.locator('#request-grid .gridjs-notfound').waitFor({ state: 'visible' });
+    assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), [],
+      'Mine has no matching rows in the unclaimed SQL fixture.');
+    await counts(page, fixture.libraryCounts);
+    await page.keyboard.press('Home');
+    await page.waitForFunction(() => document.querySelector('#claim-filter').value === 'all' &&
+      document.querySelector('#queue-summary').textContent === '28 suggestion requests' &&
+      document.querySelectorAll('#request-grid tbody .request-title-link').length === 25);
+    assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), firstPageIds,
+      'All restores the exact first-page ID set.');
+    await counts(page, fixture.libraryCounts);
+    await page.keyboard.press('Tab');
+    const tagFocus = await tag.evaluate(node => ({ active: node === document.activeElement, visible: node.matches(':focus-visible') }));
+    assert.deepEqual(tagFocus, { active: true, visible: true }, 'Tag receives visible keyboard focus.');
+    await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(id => document.querySelector('#tag-filter').value === 'Browser tag' &&
+      document.querySelector('#queue-summary').textContent === '1 suggestion request' &&
+      document.querySelectorAll('#request-grid .request-title-link').length === 1 &&
+      document.querySelector('#request-grid .request-title-link')?.dataset.requestId === id, fixture.mutationId);
+    assert.equal(await tag.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
+    await counts(page, fixture.libraryCounts);
+    await page.keyboard.press('Home');
+    await page.waitForFunction(() => document.querySelector('#tag-filter').value === 'all' &&
+      document.querySelector('#queue-summary').textContent === '28 suggestion requests' &&
+      document.querySelectorAll('#request-grid tbody .request-title-link').length === 25);
+    assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), firstPageIds,
+      'All tags restores the exact first-page ID set.');
+    await counts(page, fixture.libraryCounts);
+    await page.keyboard.press('Tab');
+    const similarityFocus = await similarity.evaluate(node => ({ active: node === document.activeElement, visible: node.matches(':focus-visible') }));
+    assert.deepEqual(similarityFocus, { active: true, visible: true }, 'Similarity receives visible keyboard focus.');
+    await page.keyboard.press('Home'); await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(id => document.querySelector('#similar-filter').value === 'similar' &&
+      document.querySelector('#queue-summary').textContent === '1 suggestion request' &&
+      document.querySelectorAll('#request-grid .request-title-link').length === 1 &&
+      document.querySelector('#request-grid .request-title-link')?.dataset.requestId === id, fixture.mutationId);
+    assert.equal(await similarity.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
+    await counts(page, fixture.libraryCounts);
+    await page.keyboard.press('Home');
+    await page.waitForFunction(() => document.querySelector('#similar-filter').value === 'all' &&
+      document.querySelector('#queue-summary').textContent === '28 suggestion requests' &&
+      document.querySelectorAll('#request-grid tbody .request-title-link').length === 25);
+    assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), firstPageIds,
+      'All similarity restores the exact first-page ID set.');
+    await counts(page, fixture.libraryCounts);
     await page.waitForFunction(() => document.querySelectorAll('#request-grid tbody .request-title-link').length === 25);
     await page.getByRole('button', { name: 'Next', exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll('#request-grid tbody .request-title-link').length === 3);
@@ -89,11 +200,6 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await page.waitForFunction(() => document.querySelector('#queue-summary').textContent === '0 suggestion requests');
     await counts(page, fixture.libraryCounts);
     await page.locator('#request-search').fill('');
-    await page.locator('#claim-filter').selectOption('mine'); await counts(page, fixture.libraryCounts);
-    await page.locator('#claim-filter').selectOption('all');
-    await page.locator('#similar-filter').selectOption('similar'); await counts(page, fixture.libraryCounts);
-    await page.locator('#similar-filter').selectOption('all');
-    assert.match(await page.locator('#status-count-help').textContent(), /all requests in the selected library scope/);
     await scan(page, 'counts-desktop');
 
     const beforeTabs = report.reads.length;
@@ -101,10 +207,15 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await suggestion.focus(); await page.keyboard.press('End');
     const closed = page.getByRole('tab', { name: 'Closed (3)', exact: true });
     await page.waitForFunction(() => document.querySelector('#status-tabs [data-status="closed"]').getAttribute('aria-selected') === 'true');
-    assert.equal(await closed.evaluate(node => document.activeElement === node), true);
-    await page.keyboard.press('ArrowRight');
-    await page.waitForFunction(() => document.querySelector('#status-tabs [data-status="suggestion"]').getAttribute('aria-selected') === 'true');
-    assert.equal(await suggestion.evaluate(node => document.activeElement === node), true);
+    assert.equal(await closed.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
+    for (const stage of ['hold_placed', 'pending_hold', 'outstanding_purchase', 'suggestion']) {
+      await page.keyboard.press('ArrowLeft');
+      await page.waitForFunction(stage => document.querySelector(`#status-tabs [data-status="${stage}"]`)?.getAttribute('aria-selected') === 'true', stage);
+      const tab = page.locator(`#status-tabs [data-status="${stage}"]`);
+      assert.equal(await tab.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true,
+        `${stage}: keyboard status selection retains visible focus.`);
+      await counts(page, fixture.libraryCounts);
+    }
     assert.deepEqual(await page.locator('#status-tabs [data-status]').evaluateAll(tabs => tabs.map(tab => tab.tabIndex)), [0, -1, -1, -1, -1]);
     assert.equal(report.reads.length, beforeTabs, 'Tab selection uses the already complete dataset.');
 
@@ -116,8 +227,15 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     held.release.resolve(); await held.completed.promise; await counts(page, fixture.libraryCounts);
     assert.equal(await suggestion.evaluate(node => node === document.activeElement), true, 'Counts refresh preserves deliberate tab focus.');
     for (const mode of ['failed', 'malformed']) {
-      holdRead(mode); await page.locator('#refresh-queue').click(); await unknown(page, false); await scan(page, `counts-${mode}`);
-      await page.locator('#refresh-queue').click(); await counts(page, fixture.libraryCounts);
+      await focusRefreshByKeyboard(page);
+      holdRead(mode); await page.keyboard.press('Enter'); await unknown(page, false); await scan(page, `counts-${mode}`);
+      await refreshFocus(page, true, `${mode} failure returns visible focus to Refresh.`);
+      const retry = holdRead('hold');
+      await page.keyboard.press('Enter'); await retry.started.promise; await unknown(page, true);
+      assert.equal(await page.locator('#queue-title').evaluate(node => node === document.activeElement), true,
+        'A keyboard retry hands focus to the queue heading while Refresh is disabled.');
+      retry.release.resolve(); await retry.completed.promise; await counts(page, fixture.libraryCounts);
+      await refreshFocus(page, true, 'A successful keyboard retry returns visible focus to Refresh.');
     }
     const obsolete = holdRead('hold');
     await page.locator('#refresh-queue').click(); await obsolete.started.promise;

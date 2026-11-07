@@ -49,7 +49,12 @@ journeys use the Testing Kestrel fixtures:
   overlay and persistent scrollbars. CSS zoom is automated reflow evidence;
   it does not establish human browser-zoom acceptance.
 - `leap-consumers.cjs`: native-ID links in queues, details and verified patron
-  context, safe plain-text fallbacks and a separate malformed-response probe.
+  context, upper patron links resolved after a missing snapshot, no duplicate
+  lower patron action, safe plain-text fallbacks and a separate malformed-response probe.
+- `shared-claims.cjs`: all four retained Claims choices and exact SQL-backed
+  rows across both queues, every status, two libraries and two staff identities;
+  Profile defaults, detail/navigation/refresh, claim mutation, same-session reload,
+  delayed prior-account reads and safe malformed/disabled-storage fallbacks.
 - `saved-email-test.cjs`: saved sender/recipient/mode context, draft guards,
   one click through the normal automatic worker and recording Postmark adapter,
   durable status/reference reload and scoped Operations handoff. No live mail.

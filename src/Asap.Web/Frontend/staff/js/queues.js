@@ -162,7 +162,7 @@ function focusPort({ grid, label, fallback, sessionIdentity, getContext, copy, s
   };
 }
 
-export function createTitleQueue({ root, sessionIdentity, getContext, announce,
+export function createTitleQueue({ root, sessionIdentity, claimsFilter, getContext, announce,
   onOpen, onScopeIntent, onStatusIntent, onScopeAccepted, onLibraries, onRefreshed, onRendered,
   onNewSuggestion = null, polarisLookup = null, onCatalogCommitted = () => {},
   resolveScope = () => getContext().scope,
@@ -177,7 +177,6 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     tag: root.querySelector('#tag-filter'),
     similar: root.querySelector('#similar-filter'),
     similarField: root.querySelector('#similar-filter-field'),
-    queueAutomation: root.querySelector('#queue-automation'),
     refresh: root.querySelector('#refresh-queue'),
     summary: root.querySelector('#queue-summary'),
     grid: root.querySelector('#request-grid'),
@@ -197,6 +196,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     sessionIdentity.isCurrent(state.loadedOwner);
   const reads = createLatestLoad();
   const events = new window.AbortController();
+  const claimsControl = claimsFilter.bind(dom.claim, () => renderGrid());
   let disposed = false, acceptingScope = false, targetGeneration = 0, lookupContext = null;
   const gridAccessibility = new window.MutationObserver(() => {
     const wrapper = dom.grid.querySelector('.gridjs-wrapper');
@@ -204,7 +204,6 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     wrapper.tabIndex = 0;
     wrapper.setAttribute('role', 'region');
     wrapper.setAttribute('aria-label', 'Title requests');
-    wrapper.setAttribute('aria-describedby', 'request-table-help');
     for (const header of wrapper.querySelectorAll('thead th')) {
       const button = header.querySelector('button.gridjs-sort');
       if (!button) continue;
@@ -295,6 +294,15 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     if (disposed || !owner) return false;
     const load = reads.begin('queue');
     const sequence = ++state.sequence;
+    const focusContext = getContext();
+    const focusAnchor = root.querySelector('#queue-title');
+    const restoreRefresh = document.activeElement === dom.refresh && focusContext.activeView === 'queue' && focusAnchor?.isConnected;
+    let focusMoved = false;
+    const moved = () => { focusMoved = true; };
+    if (restoreRefresh) {
+      focusAnchor.focus();
+      document.addEventListener('focusin', moved);
+    }
     // A canceled authoritative reload still requires a read on navigation, while
     // accepted rows remain usable to open fresh details during that reload.
     state.refreshRequired = true;
@@ -322,11 +330,19 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
           !options.silent && !isAbortError(error) && error.status !== 401) announce(error.message || 'Requests could not be loaded.', 'error');
       return false;
     } finally {
+      document.removeEventListener('focusin', moved);
       if (typeof clearLoading === 'function') clearLoading();
       if (!disposed && load.isCurrent()) {
         dom.refresh.disabled = false;
         if (state.countState === 'loading') state.countState = 'unavailable';
         renderCounts();
+      }
+      const currentContext = getContext();
+      if (restoreRefresh && !focusMoved && !disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) &&
+          focusContext.activeView === 'queue' && currentContext.activeView === 'queue' &&
+          currentContext.scope === focusContext.scope && currentContext.status === focusContext.status &&
+          focusAnchor.isConnected && dom.refresh.isConnected && document.activeElement === focusAnchor) {
+        dom.refresh.focus();
       }
       reads.finish('queue', load.token);
     }
@@ -335,6 +351,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   function setLibraries(libraries) { if (!disposed) populateLibraries(dom.scope, libraries, getContext().scope); }
   function setStaff(staff) {
     if (disposed) return;
+    claimsControl.setStaff(staff);
     if (!sessionIdentity.isCurrent(state.loadedOwner)) retireProjection();
     dom.scopeField.hidden = staff?.role !== 'super_admin';
     dom.scope.replaceChildren(element('option', { value: getContext().scope, text: staff?.role === 'super_admin' ? 'All libraries' : 'My library' }));
@@ -346,7 +363,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     dom.search.value = '';
     dom.tag.value = 'all';
     dom.similar.value = 'all';
-    dom.claim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
+    claimsControl.sync();
   }
 
   function retireProjection() {
@@ -391,7 +408,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
 
   function filteredRequests() {
     const query = dom.search.value.trim().toLocaleLowerCase();
-    const claim = dom.claim.value;
+    const claim = claimsFilter.value();
     const tag = dom.tag.value;
     const similarity = dom.similar.value;
     return state.requests.filter(request => {
@@ -417,16 +434,6 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   function scopeForLibraryOrAll(libraryOrgId) {
     const libraryScope = String(libraryOrgId);
     return [...dom.scope.options].some(option => option.value === libraryScope) ? libraryScope : 'all';
-  }
-
-  function workflowLabel(request) {
-    const workflow = request.workflowContext;
-    if (!workflow) return 'Unavailable';
-    if (getContext().status === 'suggestion') return timeoutLabel(workflow.outstandingTimeoutEnabled, workflow.outstandingTimeoutDays);
-    if (getContext().status === 'outstanding_purchase') return workflow.autoPromote ? 'On' : 'Off';
-    if (getContext().status === 'pending_hold') return timeoutLabel(workflow.pendingHoldTimeoutEnabled, workflow.pendingHoldTimeoutDays);
-    if (getContext().status === 'hold_placed') return timeoutLabel(workflow.holdPickupTimeoutEnabled, workflow.holdPickupTimeoutDays);
-    return '—';
   }
 
   function queueColumns() {
@@ -544,6 +551,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
 
   function renderGrid({ preservePage = false } = {}) {
     if (disposed) return;
+    if (state.loadedOwner && !sessionIdentity.isCurrent(state.loadedOwner)) { retireProjection(); return; }
     closeLookup();
     const owner = sessionIdentity.preferences();
     onRendered();
@@ -551,15 +559,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
     dom.summary.textContent = state.stale ? 'Requests unavailable. Refresh to load current requests.'
       : `${requests.length} ${statusLabel(getContext().status).toLocaleLowerCase()} request${requests.length === 1 ? '' : 's'}`;
     dom.empty.hidden = state.stale || requests.length !== 0;
-    if (state.stale) {
-      dom.queueAutomation.textContent = getContext().status === 'closed' ? '' : 'Workflow rules will appear with requests in this stage.';
-      return;
-    }
-    const stageRequests = state.requests.filter(request => request.status === getContext().status);
-    dom.queueAutomation.textContent = getContext().status === 'closed' ? ''
-      : getContext().scope === 'all' ? 'Workflow rules follow each request’s library; open Details to review.'
-      : stageRequests.length ? `${({ suggestion: 'Suggestion timeout', outstanding_purchase: 'Auto promotion', pending_hold: 'Pending timeout', hold_placed: 'Pickup timeout' })[getContext().status]}: ${workflowLabel(stageRequests[0])}.`
-        : 'Workflow rules will appear with requests in this stage.';
+    if (state.stale) return;
     const definitions = queueColumns();
     const rows = requests.map(request => definitions.map(column => column.value(request)));
     const currentPage = state.grid?.page() ?? 0;
@@ -606,7 +606,7 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
   bindStatusTabs(dom.statusTabs, 'status', onStatusIntent, events.signal);
   renderCounts();
   dom.search.addEventListener('input', renderGrid, { signal: events.signal });
-  for (const input of [dom.claim, dom.tag, dom.similar]) input.addEventListener('change', renderGrid, { signal: events.signal });
+  for (const input of [dom.tag, dom.similar]) input.addEventListener('change', renderGrid, { signal: events.signal });
   return {
     refresh, prepare, invalidate, markStale, render: renderGrid, resetFilters: resetQueueFilters, setStaff, setLibraries,
     isReady,
@@ -636,14 +636,14 @@ export function createTitleQueue({ root, sessionIdentity, getContext, announce,
       }
       if (next.scope !== previous.scope) { resetQueueFilters(); retireProjection(); }
     },
-    preferencesChanged() { if (disposed) return; dom.claim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all'; renderGrid(); },
+    preferencesChanged() { if (disposed) return; claimsControl.sync(); renderGrid(); },
     clear: retireProjection,
-    signedOut: retireProjection,
-    dispose() { if (disposed) return; disposed = true; gridAccessibility.disconnect(); events.abort(); invalidate(); state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
+    signedOut() { if (disposed) return; claimsControl.setStaff(null); retireProjection(); },
+    dispose() { if (disposed) return; disposed = true; claimsControl.dispose(); gridAccessibility.disconnect(); events.abort(); invalidate(); state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
   };
 }
 
-export function createCopyQueue({ root, sessionIdentity, getContext, announce,
+export function createCopyQueue({ root, sessionIdentity, claimsFilter, getContext, announce,
   onOpen, onScopeIntent, onStatusIntent, onScopeAccepted, onLibraries, onRefreshed, onRendered, recovery,
   resolveScope = () => getContext().scope,
   request = authorizedJson }) {
@@ -661,9 +661,10 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
     additionalCopyCreateReviewSummary: root.querySelector('#additional-copy-create-review-summary'),
     additionalCopyCreateReviewDone: root.querySelector('#additional-copy-create-review-done'),
   };
-  const state = { additionalCopies: [], additionalCopyGrid: null, loadedContext: null, stale: true };
+  const state = { additionalCopies: [], additionalCopyGrid: null, loadedContext: null, loadedOwner: null, stale: true };
   const reads = createLatestLoad();
   const events = new window.AbortController();
+  const claimsControl = claimsFilter.bind(dom.additionalCopyClaim, () => renderAdditionalCopyGrid());
   const openers = new WeakMap();
   let disposed = false, acceptingScope = false, targetGeneration = 0, renderGeneration = 0;
   const columns = [
@@ -684,18 +685,19 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
       const scope = owner.role === 'super_admin' ? context.scope : String(owner.organizationId);
       const result = await request(`/api/asap/staff/additional-copies?scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(context.additionalCopyStatus)}`, { signal: load.signal });
       if (!live()) return null;
-      return { scope: result.scope, isCurrent: live, accept: () => acceptResult(result) };
+      return { scope: result.scope, isCurrent: live, accept: () => acceptResult(result, owner) };
     } finally { reads.finish('queue-target', load.token); }
   }
 
-  function acceptResult(result, evidence = null) {
-    if (disposed) return false;
+  function acceptResult(result, owner, evidence = null) {
+    if (disposed || !sessionIdentity.isCurrent(owner) || result.scope !== getContext().scope) return false;
     state.additionalCopies = Object.freeze(Array.isArray(result.items) ? result.items.map(item => Object.freeze({ ...item })) : []);
     state.loadedContext = Object.freeze({ scope: result.scope, status: getContext().additionalCopyStatus });
+    state.loadedOwner = owner;
     state.stale = false;
     if (sessionIdentity.actor()?.role === 'super_admin') { setLibraries(result.availableLibraries); onLibraries(result.availableLibraries); }
     const reviewReady = evidence && recovery.loaded(evidence, { scope: result.scope, status: result.status });
-    if (reviewReady) { dom.additionalCopySearch.value = ''; dom.additionalCopyClaim.value = 'all'; }
+    if (reviewReady) dom.additionalCopySearch.value = '';
     renderAdditionalCopyGrid(); onRefreshed({ items: state.additionalCopies, context: state.loadedContext });
     return reviewReady;
   }
@@ -721,7 +723,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
       if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner) || context.scope !== getContext().scope || context.additionalCopyStatus !== getContext().additionalCopyStatus) return false;
       acceptingScope = true;
       try { onScopeAccepted(result.scope); } finally { acceptingScope = false; }
-      const reviewReady = acceptResult(result, evidence);
+      const reviewReady = acceptResult(result, owner, evidence);
       if (!options.silent && reviewReady) announce('Open additional-copy tasks loaded. Review the matching tasks and acknowledge the review before trying again.');
       return true;
     } catch (error) {
@@ -738,6 +740,8 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   function setLibraries(libraries) { if (!disposed) populateLibraries(dom.additionalCopyScope, libraries, getContext().scope); }
   function setStaff(staff) {
     if (disposed) return;
+    claimsControl.setStaff(staff);
+    if (!sessionIdentity.isCurrent(state.loadedOwner)) retireProjection();
     dom.additionalCopyScopeField.hidden = staff?.role !== 'super_admin';
     dom.additionalCopyScope.replaceChildren(element('option', { value: getContext().scope, text: staff?.role === 'super_admin' ? 'All libraries' : 'My library' }));
     resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); dom.additionalCopyCreateReview.hidden = true;
@@ -746,13 +750,14 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   function resetAdditionalCopyFilters() {
     if (disposed) return;
     dom.additionalCopySearch.value = '';
-    dom.additionalCopyClaim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all';
+    claimsControl.sync();
   }
 
   function retireProjection() {
     if (disposed) return;
     state.additionalCopies = [];
     state.loadedContext = null;
+    state.loadedOwner = null;
     state.stale = true;
     if (!acceptingScope) invalidate();
     state.additionalCopyGrid?.destroy?.();
@@ -776,7 +781,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
 
   function filteredAdditionalCopies() {
     const query = dom.additionalCopySearch.value.trim().toLocaleLowerCase();
-    const claim = dom.additionalCopyClaim.value;
+    const claim = claimsFilter.value();
     return state.additionalCopies.filter(request => {
       const mine = request.claimedByStaffUserId === sessionIdentity.preferences()?.id;
       const unclaimed = !request.claimedByStaffUserId;
@@ -847,6 +852,7 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
 
   function renderAdditionalCopyGrid() {
     if (disposed) return;
+    if (state.loadedOwner && !sessionIdentity.isCurrent(state.loadedOwner)) { retireProjection(); return; }
     const generation = ++renderGeneration;
     const owner = sessionIdentity.preferences();
     onRendered();
@@ -864,6 +870,10 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
         matching.length === 0
           ? `Creation for BIB ${uncertainCreation.bibid} could not be confirmed. No matching open task is visible yet. Review the list before retrying; a retry will use the original request version so a completed earlier creation cannot be duplicated.`
           : `Creation for BIB ${uncertainCreation.bibid} could not be confirmed. Review the ${matching.length} matching open task${matching.length === 1 ? '' : 's'} for this library before creating another: ${ids}.`;
+      const visible = new Set(filteredAdditionalCopies().map(item => item.id));
+      if (matching.some(item => !visible.has(item.id))) {
+        dom.additionalCopyCreateReviewSummary.append(' Some matching tasks are hidden by the current filters. Choose All claims and clear the search to review the complete list.');
+      }
     }
     const requests = filteredAdditionalCopies();
     dom.additionalCopySummary.textContent = state.stale ? 'Additional-copy tasks unavailable. Refresh to load current tasks.'
@@ -916,7 +926,6 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   }, { signal: events.signal });
   bindStatusTabs(dom.additionalCopyStatusTabs, 'copyStatus', onStatusIntent, events.signal);
   dom.additionalCopySearch.addEventListener('input', renderAdditionalCopyGrid, { signal: events.signal });
-  dom.additionalCopyClaim.addEventListener('change', renderAdditionalCopyGrid, { signal: events.signal });
   dom.additionalCopyCreateReviewDone.addEventListener('click', () => {
     if (!recovery.acknowledge()) return;
     renderAdditionalCopyGrid(); dom.additionalCopyRefresh.focus();
@@ -924,22 +933,22 @@ export function createCopyQueue({ root, sessionIdentity, getContext, announce,
   }, { signal: events.signal });
   return {
     refresh, prepare, invalidate, render: renderAdditionalCopyGrid, resetFilters: resetAdditionalCopyFilters, setStaff, setLibraries,
-    isReady: context => !state.stale && state.loadedContext?.scope === context.scope && state.loadedContext?.status === context.additionalCopyStatus,
+    isReady: context => !state.stale && state.loadedContext?.scope === context.scope && state.loadedContext?.status === context.additionalCopyStatus && sessionIdentity.isCurrent(state.loadedOwner),
     find: id => state.additionalCopies.find(item => item.id === id),
     markStale,
     focusReturn: id => focusPort({ grid: () => dom.additionalCopyGrid, label: `Open additional-copy task ${id}`, fallback: dom.additionalCopyRefresh, sessionIdentity, getContext, copy: true }),
     activate({ previous }) { if (disposed) return; if (previous !== 'additional-copies') resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); },
     deactivate: invalidate,
-    refreshOnEntry() { if (state.stale || state.loadedContext?.scope !== getContext().scope || state.loadedContext?.status !== getContext().additionalCopyStatus) return refresh(); },
+    refreshOnEntry() { if (state.stale || !sessionIdentity.isCurrent(state.loadedOwner) || state.loadedContext?.scope !== getContext().scope || state.loadedContext?.status !== getContext().additionalCopyStatus) return refresh(); },
     contextChanged(next, previous) {
       if (disposed) return;
       dom.additionalCopyScope.value = next.scope;
       if (next.additionalCopyStatus !== previous.additionalCopyStatus) { resetAdditionalCopyFilters(); updateAdditionalCopyStatusTabs(); retireProjection(); }
       if (next.scope !== previous.scope) { resetAdditionalCopyFilters(); retireProjection(); }
     },
-    preferencesChanged() { if (disposed) return; dom.additionalCopyClaim.value = sessionIdentity.preferences()?.defaultMineUnclaimedFilter ? 'mine_unclaimed' : 'all'; if (state.loadedContext) renderAdditionalCopyGrid(); },
+    preferencesChanged() { if (disposed) return; claimsControl.sync(); if (state.loadedContext) renderAdditionalCopyGrid(); },
     clear: retireProjection,
-    signedOut() { if (disposed) return; invalidate(); state.additionalCopies = []; state.loadedContext = null; state.additionalCopyGrid?.destroy?.(); state.additionalCopyGrid = null; dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid); dom.additionalCopyCreateReview.hidden = true; },
-    dispose() { if (disposed) return; disposed = true; events.abort(); invalidate(); state.additionalCopyGrid?.destroy?.(); state.additionalCopyGrid = null; dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid); state.additionalCopies = []; }
+    signedOut() { if (disposed) return; claimsControl.setStaff(null); retireProjection(); dom.additionalCopyCreateReview.hidden = true; },
+    dispose() { if (disposed) return; disposed = true; claimsControl.dispose(); events.abort(); invalidate(); state.additionalCopyGrid?.destroy?.(); state.additionalCopyGrid = null; dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid); state.additionalCopies = []; }
   };
 }
