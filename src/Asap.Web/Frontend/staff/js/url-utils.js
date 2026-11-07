@@ -63,11 +63,14 @@ export function requestedOperationalScopeFromUrl(href) {
   return readUrl(href).searchParams.get('scope') || '';
 }
 
-const operationsParameters = ['opSection', 'runScope', 'emailScope', 'auditScope', 'auditSearch', 'auditCategory', 'auditFrom', 'auditThrough', 'auditActor', 'auditSort', 'auditPage'];
+const emailFields = ['search', 'status', 'type', 'from', 'through', 'sort', 'page', 'reference'];
+const operationsParameters = ['opSection', 'runScope', 'emailScope', 'emailTestScope', ...emailFields.map(field => `email${field[0].toUpperCase()}${field.slice(1)}`), 'auditScope', 'auditSearch', 'auditCategory', 'auditFrom', 'auditThrough', 'auditActor', 'auditSort', 'auditPage'];
 
 export function requestedOperationsContextFromUrl(href) {
   const params = readUrl(href).searchParams;
-  return { section: params.get('opSection') || 'workflow', runScope: params.get('runScope') || '', emailScope: params.get('emailScope') || '',
+  return { section: params.get('opSection') || 'workflow', runScope: params.get('runScope') || '', emailScope: params.get('emailScope') || '', testScope: params.get('emailTestScope') || '',
+    email: { scope: params.get('emailScope') || '', ...Object.fromEntries(emailFields
+      .map(field => [field, params.get(`email${field[0].toUpperCase()}${field.slice(1)}`) || ''])) },
     audit: Object.fromEntries(['scope', 'search', 'category', 'from', 'through', 'actor', 'sort', 'page']
       .map(field => [field, params.get(`audit${field[0].toUpperCase()}${field.slice(1)}`) || ''])) };
 }
@@ -77,6 +80,9 @@ export function applyOperationsContext(url, context) {
   if (!context) return;
   url.searchParams.set('opSection', context.section || 'workflow');
   for (const field of ['runScope', 'emailScope']) if (context[field]) url.searchParams.set(field, context[field]);
+  if (context.testScope) url.searchParams.set('emailTestScope', context.testScope);
+  if (context.email?.scope) url.searchParams.set('emailScope', context.email.scope);
+  for (const field of emailFields) if (context.email?.[field]) url.searchParams.set(`email${field[0].toUpperCase()}${field.slice(1)}`, String(context.email[field]));
   for (const [field, value] of Object.entries(context.audit || {})) {
     if (value && ['scope', 'search', 'category', 'from', 'through', 'actor', 'sort', 'page'].includes(field)) {
       url.searchParams.set(`audit${field[0].toUpperCase()}${field.slice(1)}`, String(value));

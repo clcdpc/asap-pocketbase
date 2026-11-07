@@ -67,6 +67,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(fixture.Actor.Id, outbox!.RecipientStaffUserId);
             Assert.AreEqual(2, outbox.AuthorizationOrganizationId);
             Assert.AreEqual("staff_authorization_sensitive", outbox.DeliveryClass);
+            await AssertRequestMailEvidenceAsync(outbox, source.Id, "additional_copy_reminder");
         }
         Assert.AreEqual(0, fixture.Provider.CreateCommands.Count);
         Assert.AreEqual(0, fixture.Provider.Calls.Count(call => call.Operation == TestingPolarisOperation.PatronHolds));
@@ -560,7 +561,7 @@ public sealed partial class PatronJourneyTests
         public async ValueTask DisposeAsync()
         {
             await using var context = await Contexts.CreateDbContextAsync();
-            await context.EmailOutbox.Where(item => item.RecipientStaffUserId == Actor.Id).ExecuteDeleteAsync();
+            await DeleteOwnedEmailFixtureAsync(context, context.EmailOutbox.Where(item => item.RecipientStaffUserId == Actor.Id));
             await context.AdditionalCopyRequests.Where(item => item.SourceTitleRequestId == Source.Id).ExecuteDeleteAsync();
             await context.HoldPlacementOperations.Where(item => item.TitleRequestId == Source.Id).ExecuteDeleteAsync();
             await context.TitleRequests.Where(item => item.Id == Source.Id).ExecuteDeleteAsync();

@@ -13,6 +13,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   getFocusReturn, refreshQueue, queueSequence, rememberOpened, forgetUnavailable, onReceipt, clearReceipt,
   refreshCurrentStaff = async () => null,
   onNewSuggestion = null,
+  onOpenEmailOperation = null,
   request: send = authorizedJson }) {
   const reads = createLatestLoad(), configurations = new Map();
   let lease = null, actor = null, current = null, returnFocus = null, activeAttempt = null;
@@ -488,6 +489,15 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     renderRevision = revision;
     const scope = drafts;
     const live = () => isPresentationCurrent(mounted, owner) && renderRevision === revision && current === snapshot;
+    const activityNavigation = {
+      actorRole: owner?.role,
+      actorOrganizationId: owner?.organizationId,
+      onOpenEmailOperation: typeof onOpenEmailOperation === 'function' ? email => {
+        if (!live()) return Promise.resolve(false);
+        return onOpenEmailOperation(Object.freeze({ operationReference: email?.operationReference,
+          operationsScope: email?.operationsScope, isCurrent: live }));
+      } : null
+    };
     const footerRoot = element('div', { className: 'request-footer-slot' });
     const panels = new Map(), tabs = new Map();
     let updatePatronResearch = () => {};
@@ -681,7 +691,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     if (request.holdOperation) detailsPanel.append(workflows.buildHold());
     const tablist = element('div', { className: 'request-detail-tabs', role: 'tablist', 'aria-label': 'Request detail sections' });
     const middle = element('div', { className: 'request-middle' });
-    for (const [name, label, panel] of [['details', 'Details', detailsPanel], ['activity', 'Activity', renderActivity(request.activity)], ['related', 'Related requests', related]]) {
+    for (const [name, label, panel] of [['details', 'Details', detailsPanel], ['activity', 'Activity', renderActivity(request.activity, activityNavigation)], ['related', 'Related requests', related]]) {
       panel.id = `request-${request.id}-${name}`;
       panel.setAttribute('role', 'tabpanel'); panel.tabIndex = 0;
       panel.setAttribute('aria-labelledby', `${panel.id}-tab`);
@@ -710,7 +720,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     void editor.loadResearch();
   }
 
-  function renderActivity(activity) {
+  function renderActivity(activity, navigation = {}) {
     const section = element('section', { className: 'request-activity', 'aria-label': 'Request activity' });
     section.append(element('h3', { text: 'Activity' }));
     if (!Array.isArray(activity) || activity.length === 0) {
@@ -718,26 +728,105 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       return section;
     }
     const list = element('ol');
-    const eventId = value => (typeof value === 'string' && /^-?\d+$/.test(value) || Number.isSafeInteger(value)) ? BigInt(value) : null;
-    const ordered = activity.map((item, index) => ({ item, index,
-      timestamp: typeof item.created === 'string' && Number.isFinite(Date.parse(item.created)) ? Date.parse(item.created) : -Infinity,
+    const eventId = value => typeof value === 'string' && /^[1-9]\d*$/.test(value) &&
+      (value.length < 19 || value.length === 19 && value <= '9223372036854775807') ? BigInt(value)
+      : Number.isSafeInteger(value) && value > 0 ? BigInt(value) : null;
+    const sourceOf = item => typeof item?.source === 'string' && item.source ? item.source : 'request_event';
+    const displayId = item => typeof item?.id === 'string' ? item.id
+      : Number.isSafeInteger(item?.id) ? String(item.id) : '';
+    const ordinal = (left, right) => left < right ? -1 : left > right ? 1 : 0;
+    const ordered = activity.map((value, index) => {
+      const item = value && typeof value === 'object' ? value : {};
+      const created = typeof item.created === 'string' ? item.created : '';
+      const timestamp = Number.isFinite(Date.parse(created)) ? Date.parse(created) : -Infinity;
       // SQL timestamps retain seven fractional digits; Date.parse keeps only
       // milliseconds. Compare the remaining ticks before treating times as tied.
-      ticks: (String(item.created).match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/)?.[1] || '').padEnd(7, '0').slice(3, 7),
-      id: eventId(item.id) }));
+      const fraction = created.match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/)?.[1] || '';
+      return { item, index, source: sourceOf(item), identity: `${sourceOf(item)}:${displayId(item)}`,
+        timestamp, ticks: fraction.padEnd(7, '0').slice(3, 7), id: eventId(item.id), rawId: displayId(item) };
+    });
     ordered.sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp > b.timestamp ? -1 : 1;
       if (a.timestamp !== -Infinity && a.ticks !== b.ticks) return a.ticks > b.ticks ? -1 : 1;
+      const sourceOrder = ordinal(a.source, b.source);
+      if (sourceOrder) return sourceOrder;
       if (a.id !== null && b.id !== null && a.id !== b.id) return a.id > b.id ? -1 : 1;
-      // A total ordering avoids comparison cycles when valid and invalid IDs
-      // are interspersed; unknown IDs retain their original relative order.
       if ((a.id === null) !== (b.id === null)) return a.id === null ? 1 : -1;
+      if (a.id === null && b.id === null) {
+        const rawIdOrder = ordinal(a.rawId, b.rawId);
+        if (rawIdOrder) return rawIdOrder;
+      }
+      // Original indices make unknown or duplicate DTO identities a total,
+      // stable order without mutating the frozen API array.
       return a.index - b.index;
     });
-    for (const { item } of ordered) {
+    const timestampLabels = { transition: 'Recorded', created: 'Created', last_attempt: 'Last attempt',
+      sent: 'Sent', suppressed: 'Suppressed', recorded: 'Recorded' };
+    const deliveryModeLabels = { file: 'File capture; no live email sent', postmark: 'Postmark',
+      postmark_sandbox: 'Postmark sandbox', non_delivery: 'Non-delivery transport; no live email sent', unknown: 'Delivery mode unknown' };
+    const isCanonicalReference = value => typeof value === 'string' && /^[1-9]\d*$/.test(value) &&
+      (value.length < 19 || value.length === 19 && value <= '9223372036854775807');
+    const isCanonicalLibrary = value => typeof value === 'string' && /^[1-9]\d{0,9}$/.test(value) &&
+      (value.length < 10 || value <= '2147483647') && value !== '1';
+    const canNavigate = email => typeof navigation.onOpenEmailOperation === 'function' &&
+      isCanonicalReference(email?.operationReference) && isCanonicalLibrary(email?.operationsScope) &&
+      (navigation.actorRole === 'super_admin' || navigation.actorRole === 'admin' &&
+        String(navigation.actorOrganizationId) === email.operationsScope);
+    for (const entry of ordered) {
+      const { item, source, identity } = entry;
+      if (source === 'email_event' || source === 'email_summary') {
+        const email = item.email && typeof item.email === 'object' ? item.email : {};
+        const itemType = text(email.messageType, 'Email type not recorded');
+        const outcome = text(email.outcomeLabel, 'Outcome not recorded');
+        const reference = typeof email.operationReference === 'string' ? email.operationReference : '';
+        const timestampKind = typeof email.timestampKind === 'string' ? email.timestampKind : '';
+        const timestampLabel = timestampLabels[timestampKind] || 'Recorded time (meaning unavailable)';
+        const timestampValid = typeof item.created === 'string' && Number.isFinite(Date.parse(item.created));
+        const timeValue = timestampValid ? dateTime(item.created) : 'Time not recorded';
+        const deliveryMode = deliveryModeLabels[email.deliveryMode] || 'Delivery mode unknown';
+        const row = element('li', { className: 'request-activity-email', 'data-source': source,
+          'data-activity-id': identity, 'data-event-id': displayId(item) }, [
+          element('strong', { text: itemType }),
+          element('span', { className: 'request-email-outcome', text: outcome })
+        ]);
+        const fields = element('dl', { className: 'request-email-fields' });
+        const addEmailField = (label, value) => fields.append(element('div', {}, [
+          element('dt', { text: label }), element('dd', { text: value })
+        ]));
+        addEmailField('Intended recipient', text(email.intendedRecipient, 'Recipient not recorded'));
+        addEmailField('Delivery mode', deliveryMode);
+        if (email.reason !== null && email.reason !== undefined && String(email.reason).trim()) {
+          addEmailField('Recorded reason', String(email.reason));
+        } else if (['suppressed', 'failed_no_send', 'ambiguous', 'lease_expired_ambiguous',
+          'recorded_failed', 'recorded_suppressed'].includes(email.outcome)) {
+          addEmailField('Recorded reason', 'Reason not recorded');
+        }
+        row.append(fields);
+        row.append(element('small', { className: 'request-email-recorded-time' }, [
+          element('span', { text: `${timestampLabel}: ` }),
+          timestampValid ? element('time', { datetime: item.created, text: timeValue }) : element('span', { text: timeValue })
+        ]));
+        if (email.isRecordedSummary === true) {
+          row.append(element('p', { className: 'request-email-history-note',
+            text: 'Recorded summary; earlier email activity may be incomplete.' }));
+        }
+        const referenceLine = element('p', { className: 'request-email-reference' });
+        if (reference) {
+          referenceLine.append(element('span', { text: 'Email operations reference: ' }), element('code', { text: reference }));
+          if (canNavigate(email)) {
+            referenceLine.append(element('button', { type: 'button', className: 'secondary-button request-email-reference-link',
+              'aria-label': `Open email operation ${reference}`, onclick: () => {
+                void navigation.onOpenEmailOperation(email);
+              } }, 'View in Email operations'));
+          }
+        } else referenceLine.append(element('span', { text: 'Email operations reference not recorded.' }));
+        row.append(referenceLine);
+        list.append(row);
+        continue;
+      }
       const type = text(item.eventType, 'Event').replaceAll('_', ' ');
       const actor = item.actorName || (item.actorType === 'system' ? 'System' : 'Actor not recorded');
-      list.append(element('li', { 'data-event-id': String(item.id) }, [
+      list.append(element('li', { 'data-source': source, 'data-activity-id': identity, 'data-event-id': displayId(item) }, [
         element('strong', { text: type }),
         element('span', { text: item.message ? ` ${item.message}` : '' }),
         element('small', { text: `${actor} · ${dateTime(item.created)}` })

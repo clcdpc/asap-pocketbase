@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { fixture } = require('./helpers/staff-controller.cjs');
+const { fixture, emailHistoryPage } = require('./helpers/staff-controller.cjs');
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
 const staff = (id = 'admin', role = 'super_admin', organizationId = 1) => ({ id, role, organizationId,
   tenantId: 'tenant', authenticationEmail: `${id}@example.org`, version: 'v1' });
@@ -105,6 +105,7 @@ const response = (rows = [row('9007199254740995')], extra = {}) => ({ code: 'ok'
       request: async url => { reads.push(url);
         if (url.includes('/staff/audit')) return response();
         if (url.endsWith('/organizations')) return { data: [{ id: 2, name: 'Library', organizationCodeId: 2, isActive: true }] };
+        if (new URL(url, 'https://localhost').pathname.endsWith('/email-operations')) return emailHistoryPage({ items: [] }, url);
         return { items: [] };
       } });
     controller.setStaff(owner); controller.activate(); await controller.refresh();
@@ -115,7 +116,7 @@ const response = (rows = [row('9007199254740995')], extra = {}) => ({ code: 'ok'
     await controller.openEmailScope(1); assert.equal(get('#email-view-scope').value, 'system');
     assert.equal(get('#operations-scope').value, 'all', 'Email view scope does not redirect a workflow command');
     assert.equal(get('#operations-email-tab').getAttribute('aria-selected'), 'true');
-    assert.ok(reads.some(url => url === '/api/asap/staff/email-operations?organizationId=1'));
+    assert.ok(reads.some(url => new URL(url, 'https://localhost').searchParams.get('scope') === 'system'));
     await controller.openStaffAuditScope(null); assert.equal(get('#audit-scope').value, 'all'); assert.equal(get('#audit-category').value, 'staff');
     assert.equal(dom.window.document.activeElement, get('#audit-search'));
     assert.equal(routes.at(-1).audit.scope, 'all');
@@ -165,6 +166,7 @@ const response = (rows = [row('9007199254740995')], extra = {}) => ({ code: 'ok'
           if (pending) { const wait = pending; pending = null; await wait; }
           if (fail) throw new Error('Queue unavailable');
         }
+        if (new URL(url, 'https://localhost').pathname.endsWith('/email-operations')) return emailHistoryPage({ items: [] }, url);
         return url.endsWith('/organizations') ? { data: [] } : { items: [] };
       } });
     controller.setStaff(owner); controller.activate(); await controller.refresh();

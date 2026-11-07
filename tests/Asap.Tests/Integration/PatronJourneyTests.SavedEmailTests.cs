@@ -174,7 +174,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("pending")]
     [DataRow("sent")]
     [DataRow("suppressed")]
-    public async Task SavedEmailTestCurrentReferenceRemainsReadableBeyondFailedFirstLogLimit(string status)
+    public async Task SavedEmailTestCurrentReferenceRemainsReadableOutsideFilteredHistoryPage(string status)
     {
         const int scope = 382939;
         var staff = await CreateSavedEmailActorAsync();
@@ -218,10 +218,12 @@ public sealed partial class PatronJourneyTests
                 }
                 await context.SaveChangesAsync();
             }
-            using var list = await client.GetAsync($"/api/asap/staff/email-operations?organizationId={scope}");
+            using var list = await client.GetAsync($"/api/asap/staff/email-operations?organizationId={scope}&status=failed&page=2");
             using var listed = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
             var rows = listed.RootElement.GetProperty("items").EnumerateArray().ToArray();
-            Assert.HasCount(500, rows, "The ordinary query remains bounded and failed-first.");
+            Assert.HasCount(25, rows, "History pages remain bounded while exact recovery ignores the selected page and filters.");
+            Assert.AreEqual(501L, listed.RootElement.GetProperty("count").GetInt64());
+            Assert.AreEqual(2, listed.RootElement.GetProperty("page").GetInt32());
             Assert.IsTrue(rows.All(row => row.GetProperty("status").GetString() == "failed"));
             Assert.IsFalse(rows.Any(row => row.GetProperty("id").GetString() == id));
             foreach (var path in new[]

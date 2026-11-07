@@ -249,10 +249,11 @@
         <section id="operations-email-panel" role="tabpanel" aria-labelledby="operations-email-tab" hidden>
           <div class="section-heading">
             <div><h2 id="email-operations-title">Email operations</h2><p>Review queued messages and recorded sending outcomes.</p></div>
-            <label id="email-view-scope-field" class="compact-field" hidden><span>View scope</span><select id="email-view-scope"></select></label>
           </div>
         <fieldset id="operations-email-test" class="settings-fieldset" data-settings-ignore="true">
           <legend>Test email</legend>
+          <label id="email-test-scope-field" class="compact-field" hidden><span>Test settings scope</span><select id="email-test-scope" aria-describedby="email-test-scope-help"></select></label>
+          <p id="email-test-scope-help" class="field-help">History filters do not change the saved settings used by this test.</p>
           <div data-email-test="context"></div>
           <div class="form-actions">
             <button id="send-test-email" data-email-test="send" class="secondary-button" type="button">Send test email</button>
@@ -263,7 +264,21 @@
             <p>Client retirement does not cancel a delayed server request. A message may still arrive. Keep these references for operator review during this browser session.</p><ul></ul>
           </details>
         </fieldset>
-          <div id="email-operations-table" class="operations-table email-operations-table" role="region" aria-label="Email operations log" aria-live="polite" tabindex="0"></div>
+          <form id="email-filters" class="audit-filters" role="search" aria-label="Email history filters">
+            <label class="audit-search"><span>Search history</span><input id="email-search" type="search" maxlength="200" placeholder="Exact reference, type, or safe outcome detail"></label>
+            <label id="email-view-scope-field"><span>View scope</span><select id="email-view-scope"></select></label>
+            <label><span>Status</span><select id="email-status"><option value="">All statuses</option><option value="pending">Queued</option><option value="sending">Submitting</option><option value="sent">Recorded acceptance or capture</option><option value="failed">Failed or unconfirmed</option><option value="suppressed">Suppressed</option></select></label>
+            <label><span>Type</span><select id="email-type"></select></label>
+            <label><span>Created From</span><input id="email-from" type="date"></label>
+            <label><span>Created Through</span><input id="email-through" type="date"></label>
+            <label><span>Sort</span><select id="email-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
+            <div class="audit-filter-footer"><button id="email-clear" class="secondary-button" type="button">Clear filters</button><span id="email-timezone" class="operations-meta"></span></div>
+          </form>
+          <div id="email-reference-context" class="status-message" hidden><span id="email-reference-value"></span> <button id="email-reference-clear" class="secondary-button" type="button">Clear reference</button></div>
+          <p id="email-history-status" class="status-message" role="status" aria-live="polite"></p>
+          <strong id="email-count" aria-live="polite"></strong>
+          <div id="email-operations-table" class="operations-table email-operations-table" role="region" aria-label="Email operations log" tabindex="0"></div>
+          <div class="audit-pagination"><span id="email-page" class="operations-meta"></span><div><button id="email-prev" class="secondary-button" type="button" aria-label="Previous email history page" disabled>Previous</button><button id="email-next" class="secondary-button" type="button" aria-label="Next email history page" disabled>Next</button></div></div>
         </section>
         <section id="operations-audit-panel" role="tabpanel" aria-labelledby="operations-audit-tab" hidden>
           <h2>Administration audit</h2><p class="operations-description">Find changes to staff access, settings, and library participation.</p>

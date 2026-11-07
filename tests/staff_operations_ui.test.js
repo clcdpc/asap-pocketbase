@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { JSDOM } = require('jsdom');
+const { emailHistoryPage } = require('./helpers/staff-controller.cjs');
 
 const root = path.resolve(__dirname, '..');
 const source = path.join(root, 'src', 'Asap.Web', 'Frontend');
@@ -153,10 +154,11 @@ function operationResult(url) {
         return response(200, titleRequestPayload(scope));
       }
       if (url.includes('/email-operations') && !url.includes('/retry') && !url.includes('/test')) {
-        const scope = new URL(`https://localhost${url}`).searchParams.get('organizationId') || 'all';
+        const query = new URL(url, 'https://localhost').searchParams;
+        const scope = query.get('scope') || query.get('organizationId') || 'all';
         const pending = operationsReads.get(`email:${scope}`);
         if (pending) return pending.promise;
-        return response(200, emailPayload);
+        return response(200, emailHistoryPage({ libraries: organizations.filter(item => item.id > 1 && item.organizationCodeId === 2), ...emailPayload }, url));
       }
       if (url.includes('/api/asap/staff/email-readiness')) {
         return response(200, { state: 'ready' });
@@ -228,6 +230,10 @@ function operationResult(url) {
       'another deliberate run receives a fresh durable identity');
     const emailScope = document.getElementById('email-view-scope');
     emailScope.value = '2'; emailScope.dispatchEvent(new dom.window.Event('change'));
+    await settle();
+    assert.equal(document.getElementById('email-test-scope').value, '1', 'history scope does not rebind the test panel');
+    const testScope = document.getElementById('email-test-scope');
+    testScope.value = '2'; testScope.dispatchEvent(new dom.window.Event('change'));
     await settle();
     document.getElementById('send-test-email').click();
     await settle();

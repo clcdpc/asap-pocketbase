@@ -32,8 +32,8 @@ public sealed partial class PatronJourneyTests
         var serverRequestCancellation = new CancellationTokenSource();
         var clientCancellation = new CancellationTokenSource();
         var innerContexts = rootFactory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
-        var faultingContexts = new PostCommitRefreshFaultingDbContextFactory(innerContexts);
-        var dispatcher = new PostCommitRefreshCancelAndArmDispatcher(serverRequestCancellation, faultingContexts);
+        var faultingContexts = new PostCommitRefreshFaultingDbContextFactory(innerContexts, serverRequestCancellation);
+        var dispatcher = new PostCommitRefreshArmDispatcher(faultingContexts);
         var capturedLogs = new PostCommitRefreshLogProvider();
         long titleRequestId = 0;
         long copySourceRequestId = 0;
@@ -177,7 +177,7 @@ public sealed partial class PatronJourneyTests
             }
 
             Assert.IsTrue(serverRequestCancellation.IsCancellationRequested,
-                "The deterministic dispatcher canceled the server-side request token after committing its outbox row.");
+                "The armed optional detail refresh canceled the server-side request token immediately before its recorded post-commit fault.");
             Assert.IsFalse(clientCancellation.IsCancellationRequested,
                 "This witness keeps the HTTP client live; it does not claim that a disconnected client receives a response.");
             Assert.IsTrue(dispatcher.EnqueuedIds.Count > 0, "The post-commit dispatcher must be reached.");
@@ -360,7 +360,8 @@ public sealed partial class PatronJourneyTests
     }
 
     private sealed class PostCommitRefreshFaultingDbContextFactory(
-        IDbContextFactory<AsapDbContext> inner) : IDbContextFactory<AsapDbContext>
+        IDbContextFactory<AsapDbContext> inner,
+        CancellationTokenSource serverRequestCancellation) : IDbContextFactory<AsapDbContext>
     {
         private int armed;
         private int failureWasThrown;
@@ -394,13 +395,16 @@ public sealed partial class PatronJourneyTests
             {
                 return;
             }
+            // Dispatch arms this only after commit. Let the detail reader honor
+            // entry cancellation, then inject cancellation and the actual fault
+            // together at its first optional database-context boundary.
+            serverRequestCancellation.Cancel();
             Volatile.Write(ref failureWasThrown, 1);
             throw Failure ?? new InvalidOperationException("The optional detail refresh fault was not recorded.");
         }
     }
 
-    private sealed class PostCommitRefreshCancelAndArmDispatcher(
-        CancellationTokenSource serverRequestCancellation,
+    private sealed class PostCommitRefreshArmDispatcher(
         PostCommitRefreshFaultingDbContextFactory contexts) : IEmailOutboxDispatcher
     {
         private int armed;
@@ -414,7 +418,6 @@ public sealed partial class PatronJourneyTests
             if (Interlocked.Exchange(ref armed, 1) == 0)
             {
                 contexts.ArmFailure();
-                serverRequestCancellation.Cancel();
             }
         }
     }

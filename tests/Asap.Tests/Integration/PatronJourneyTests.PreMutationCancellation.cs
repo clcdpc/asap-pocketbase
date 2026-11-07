@@ -250,8 +250,7 @@ public sealed partial class PatronJourneyTests
             await DeleteCommittedOutboxIdsAsync(dispatcher.EnqueuedIds);
             await using (var cleanup = await contextFactory.CreateDbContextAsync())
             {
-                await cleanup.EmailOutbox.Where(item => item.BusinessKey == assignmentBusinessKey)
-                    .ExecuteDeleteAsync();
+                await DeleteOwnedEmailFixtureAsync(cleanup, cleanup.EmailOutbox.Where(item => item.BusinessKey == assignmentBusinessKey));
             }
             await DeleteBibOwnershipRequestsAsync([seeded.Id]);
             await RestoreCancellationEmailSettingsAsync(emailSettings);
@@ -353,11 +352,10 @@ public sealed partial class PatronJourneyTests
             await DeleteCommittedOutboxIdsAsync(dispatcher.EnqueuedIds);
             await using (var cleanup = await contextFactory.CreateDbContextAsync())
             {
-                await cleanup.EmailOutbox.Where(item =>
+                await DeleteOwnedEmailFixtureAsync(cleanup, cleanup.EmailOutbox.Where(item =>
                         item.RecipientStaffUserId == actor.Id && item.BusinessKey != null &&
                         (item.BusinessKey.StartsWith("additional-copy-reminder:") ||
-                         item.BusinessKey.StartsWith("additional-copy-assignment:")))
-                    .ExecuteDeleteAsync();
+                         item.BusinessKey.StartsWith("additional-copy-assignment:"))));
                 var taskIds = await cleanup.AdditionalCopyRequests.AsNoTracking()
                     .Where(item => item.SourceTitleRequestId == seeded.SourceRequestId)
                     .Select(item => item.Id).ToArrayAsync();

@@ -100,6 +100,7 @@ public sealed partial class PatronJourneyTests
             var outbox = await verify.EmailOutbox.AsNoTracking().SingleAsync(item => item.BusinessKey == $"title-hold-placed:{seeded.Id}:1");
             Assert.AreEqual(deliverable ? "patron-x@example.org" : null, outbox.ToAddress);
             Assert.AreEqual(deliverable ? "pending" : "suppressed", outbox.Status);
+            await AssertRequestMailEvidenceAsync(outbox, seeded.Id, "hold_placed");
             Assert.AreEqual(deliverable ? 1 : 0, outboxDispatcher.EnqueuedIds.Count);
             await service.RecoverBackgroundOperationAsync(operationId, null, CancellationToken.None);
             Assert.AreEqual(1, scripted.CreateCount);
@@ -269,8 +270,8 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await using var cleanup = await contexts.CreateDbContextAsync();
-            await cleanup.EmailOutbox.Where(item => item.BusinessKey != null &&
-                (item.BusinessKey.StartsWith($"rejection:{seeded.Id}:") || item.BusinessKey.Contains($":{seeded.Id}:"))).ExecuteDeleteAsync();
+            await DeleteOwnedEmailFixtureAsync(cleanup, cleanup.EmailOutbox.Where(item => item.BusinessKey != null &&
+                (item.BusinessKey.StartsWith($"rejection:{seeded.Id}:") || item.BusinessKey.Contains($":{seeded.Id}:"))));
             await DeleteRequestAsync(seeded.Id);
         }
     }

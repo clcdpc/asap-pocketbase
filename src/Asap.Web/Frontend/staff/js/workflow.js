@@ -142,6 +142,15 @@ export function createWorkflowApp() {
     getFocusReturn: (id, opener) => titleQueue.focusReturn(id, opener), refreshQueue: options => titleQueue.refresh(options), queueSequence: titleQueue.sequence,
     rememberOpened: shell.rememberOpened, forgetUnavailable: shell.forgetUnavailable,
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),
+    onOpenEmailOperation: async intent => {
+      const owner = sessionIdentity.preferences();
+      if (!sessionIdentity.isCurrent(owner) || typeof intent?.isCurrent !== 'function' || !intent.isCurrent()) return false;
+      if (!await navigation.switchView('operations') || !sessionIdentity.isCurrent(owner) ||
+          navigation.context().activeView !== 'operations') return false;
+      // Accepted navigation deliberately disposes the source detail. Its old
+      // lease is checked before departure; the destination owns reads afterward.
+      return operations.openEmailReference(intent);
+    },
     onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) })
   });
   const suggestion = createSuggestionController({ root: get('#staff-suggestion-dialog'), trigger: get('#new-suggestion'), sessionIdentity, polarisLookup, announce,

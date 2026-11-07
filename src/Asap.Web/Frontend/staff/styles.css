@@ -273,6 +273,8 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 #operations-email-test dd { margin: 0; overflow-wrap: anywhere; }
 #operations-email-test .form-actions { align-self: center; margin: 0; }
 #operations-email-test > p, #operations-email-test > details { grid-column: 1 / -1; }
+#email-test-scope-field { grid-column: 1 / -1; margin-bottom: 10px; }
+#email-test-scope { min-width: 0; max-width: 100%; }
 .operations-sections { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: 20px 0 24px; }
 .operations-sections button { min-height: 46px; padding: 12px 18px; color: var(--muted); background: transparent; border: 0; border-bottom: 3px solid transparent; cursor: pointer; }
 .operations-sections button[aria-selected="true"] { color: var(--brand-dark); border-bottom-color: var(--brand-dark); font-weight: 700; }
@@ -877,6 +879,18 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .request-middle { flex: 1; min-height: 0; overflow-y: auto; }
 .request-middle > [role="tabpanel"] { min-width: 0; padding: 12px 20px 20px; }
 .request-middle .request-activity { margin: 0; padding: 0; border: 0; }
+.request-middle .request-activity li.request-activity-email { display: grid; gap: 6px; min-width: 0; max-width: 100%; margin: 8px 0; padding: 12px; border: 1px solid var(--line); border-left: 3px solid var(--brand-dark); border-radius: 6px; background: var(--soft); overflow-wrap: anywhere; }
+.request-activity-email > strong, .request-activity-email > span, .request-activity-email > small,
+.request-activity-email > p, .request-email-fields, .request-email-fields > div { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.request-activity-email > .request-email-outcome { font-weight: 600; }
+.request-email-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; }
+.request-email-fields dt { color: var(--muted); font-size: .75rem; font-weight: 700; }
+.request-email-fields dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+.request-email-recorded-time, .request-email-history-note { color: var(--muted); }
+.request-activity-email .request-email-history-note, .request-activity-email .request-email-reference { margin: 0; }
+.request-email-reference { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.request-email-reference code { max-width: 100%; color: var(--ink); overflow-wrap: anywhere; white-space: normal; }
+.request-email-reference-link { min-height: 36px; margin-left: auto; }
 .request-middle .request-metadata, .request-middle .workflow-context { margin: 0 0 6px; font-size: .82rem; }
 .request-middle .edit-form { padding-top: 8px; }
 .title-detail-content .edit-form input:disabled { background: #e9edf0; border-color: #aab4bc; color: #52606b; cursor: not-allowed; opacity: 1; }
@@ -897,6 +911,8 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 @media (max-width: 760px) {
   .patron-context .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .request-heading-context, .patron-context, .request-middle > [role="tabpanel"], .request-detail-tabs, .request-save-footer { padding-inline: 14px; }
+  .request-email-fields { grid-template-columns: minmax(0, 1fr); }
+  .request-email-reference-link { margin-left: 0; }
   .request-save-footer { flex-wrap: wrap; }
   .request-save-footer .form-actions { flex: 1 1 100%; }
   .request-save-footer .form-actions > button { flex: 1 1 0; min-width: 0; white-space: normal; }
