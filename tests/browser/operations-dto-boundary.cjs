@@ -26,12 +26,13 @@ async function main() {
 
   const endpoint = (response, pathname) => response.request().method() === 'GET' &&
     new URL(response.url()).pathname === pathname;
-  async function refresh(page, action) {
-    const queues = page.waitForResponse(response => endpoint(response, '/api/asap/staff/workflow/queues'));
+  async function refresh(page, action, { emailOnly = false } = {}) {
+    const queues = emailOnly ? Promise.resolve(null) : page.waitForResponse(response => endpoint(response, '/api/asap/staff/workflow/queues'));
     const emails = page.waitForResponse(response => endpoint(response, '/api/asap/staff/email-operations'));
     await action();
     const responses = await Promise.all([queues, emails]);
-    for (const response of responses) assert.equal(response.status(), 200, await response.text());
+    for (const response of responses.filter(Boolean)) assert.equal(response.status(), 200, await response.text());
+    await page.locator('#email-operations-table:not([aria-busy])').waitFor();
     await page.locator('#refresh-operations:not([disabled])').waitFor();
   }
 
@@ -89,7 +90,7 @@ async function main() {
     assert.equal(queue.IdentifierProcessing.lastOutcomeUtc, '2026-07-15T15:00:00.7654321Z');
     assert.equal(queue.PendingHoldTimeout.lastCreatedUtc, null);
     assert.equal(queue.PendingHoldTimeout.lastOutcomeUtc, null);
-    assert.equal(actual.email.items[0].status, 'failed', 'failed operations retain first priority');
+    assert.equal(actual.email.items[0].status, 'sent', 'normal history starts with the newest recorded operation');
     for (const row of actual.email.items) {
       assert.equal(row.organizationId, Number(scope));
       assert.match(row.createdUtc, /Z$/);
@@ -163,7 +164,7 @@ async function main() {
       await page.goto(`${origin}/staff/?stage=operations`, { waitUntil: 'networkidle' });
       await page.locator('#operations-view').waitFor({ state: 'visible' });
       await page.locator('#operations-email-tab').click();
-      await refresh(page, () => page.locator('#email-view-scope').selectOption(scope));
+      await refresh(page, () => page.locator('#email-view-scope').selectOption(scope), { emailOnly: true });
       await page.locator('#operations-workflow-tab').click();
       await refresh(page, () => page.locator('#operations-scope').selectOption(scope));
       await verifyProjection(page, scenario);

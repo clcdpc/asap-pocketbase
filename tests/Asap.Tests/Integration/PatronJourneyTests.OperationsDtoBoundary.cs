@@ -59,10 +59,10 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(Convert.ToBase64String(stored.RowVersion), row.GetProperty("version").GetString());
                 Assert.AreEqual(stored.Status == "failed", row.GetProperty("canRetry").GetBoolean());
             }
-            CollectionAssert.AreEqual(before.Emails.OrderByDescending(item => item.Status == "failed")
-                    .ThenByDescending(item => item.CreatedUtc).Select(item => item.Id.ToString(CultureInfo.InvariantCulture)).ToArray(),
+            CollectionAssert.AreEqual(before.Emails.OrderByDescending(item => item.CreatedUtc)
+                    .ThenByDescending(item => item.Id).Select(item => item.Id.ToString(CultureInfo.InvariantCulture)).ToArray(),
                 emailRows.Select(item => item.GetProperty("id").GetString()).ToArray(),
-                "UTC presentation must preserve failed-first, newest-first ordering.");
+                "UTC presentation must preserve newest-first ordering with a numeric reference tie-break.");
 
             using var failedResponse = await client.GetAsync($"/api/asap/staff/email-operations?organizationId={scope}&status=failed");
             using var failed = JsonDocument.Parse(await failedResponse.Content.ReadAsStringAsync());

@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { JSDOM } = require('jsdom');
+const { emailHistoryPage } = require('./helpers/staff-controller.cjs');
 
 const frontend = path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend');
 let actorKey;
@@ -133,7 +134,11 @@ async function fixture(route, journey, options = {}) {
       const pathname = parsed.pathname;
       if (apiResponse) {
         const result = await apiResponse({ url, init, parsed, pathname, staff, request });
-        if (result !== undefined) return result;
+        if (result !== undefined) {
+          return pathname.endsWith('/email-operations') && result.ok
+            ? response(result.status, emailHistoryPage({ libraries: organizations.filter(item => item.id > 1 && item.organizationCodeId === 2), ...await result.json() }, url))
+            : result;
+        }
       }
       if (pathname.endsWith('/session')) return response(200, { authenticated: true, accessAllowed: true, staff, antiforgeryToken: 'token' });
       if (pathname.endsWith('/email-readiness')) return response(200, {});
@@ -190,7 +195,9 @@ async function fixture(route, journey, options = {}) {
           preferredPickupBranchId: 101 } });
       if (pathname.endsWith('/suggestions')) return operationResponse ? operationResponse() : response(409, {
         code: 'duplicate_open_request', duplicate: { id, matchType: 'title_format' } });
-      if (pathname.endsWith('/workflow/queues') || pathname.endsWith('/email-operations')) return response(200, { items: [] });
+      if (pathname.endsWith('/workflow/queues')) return response(200, { items: [] });
+      if (pathname.endsWith('/email-operations')) return response(200, emailHistoryPage({ items: [],
+        libraries: organizations.filter(item => item.id > 1 && item.organizationCodeId === 2) }, url));
       if (pathname.endsWith('/audit')) return response(200, { code: 'ok', data: { items: [], count: 0, page: 1, pageSize: 25,
         actors: [], libraries: organizations.filter(item => item.id > 1) } });
       if (init.method === 'DELETE') return operationResponse ? operationResponse() : response(200, { deleted: true });
@@ -282,11 +289,12 @@ for (const settingsScope of ['system', '2']) {
         ui.dom.window.document.activeElement === ui.get('#email-operations-table'), 'scoped email log receives focus');
       assert.equal(ui.get('#operations-scope').value, 'all', 'Email navigation preserves independent workflow Run scope');
       assert.equal(ui.get('#email-view-scope').value, settingsScope === 'system' ? 'system' : '2');
+      assert.equal(ui.get('#email-test-scope').value, String(organizationId));
       assert.equal(ui.get('#operations-email-panel').hidden, false);
       assert.equal(JSON.parse(ui.dom.window.sessionStorage.getItem(key)).id, '9007199254740993');
       assert.equal(ui.get('#send-test-email').disabled, true, 'an unknown original outcome still blocks a new test after navigation');
       const list = ui.calls.filter(call => new URL(call.url, 'https://localhost').pathname.endsWith('/email-operations')).at(-1);
-      assert.equal(new URL(list.url, 'https://localhost').searchParams.get('organizationId'), settingsScope === 'system' ? '1' : '2');
+      assert.equal(new URL(list.url, 'https://localhost').searchParams.get('scope'), settingsScope === 'system' ? 'system' : '2');
       assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0, 'navigation never silently saves or resends');
     }));
 }

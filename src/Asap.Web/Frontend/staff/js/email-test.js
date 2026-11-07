@@ -446,16 +446,22 @@ export function createEmailTestController({ root, context, request = authorizedJ
   }
   dom.send.addEventListener('click', () => void send(), { signal: events.signal });
   dom.retire?.addEventListener('click', () => void retire(), { signal: events.signal });
-  dom.operations?.addEventListener('click', () => {
+  function retainForDeparture() {
     const value = context();
-    if (disposed || !value.active || key !== currentKey(value)) return;
+    if (disposed) return false;
+    if (!value.active || key !== currentKey(value)) return true;
     reconcileStored(value);
     // Preserve an in-memory unresolved identity before navigation destroys this
     // panel, even if session storage was removed after the original submission.
     if (isUnresolved(record) && !ownsStored(record) && !store(record)) {
       message(`The recovery reference could not be retained. Keep this page open and restore session storage before opening Operations. Reference ${record.id || record.operationId}.`);
-      return;
+      return false;
     }
+    return true;
+  }
+  dom.operations?.addEventListener('click', () => {
+    const value = context();
+    if (disposed || !value.active || key !== currentKey(value) || !retainForDeparture()) return;
     onOperations(value.organizationId, { ownerKey: value.ownerKey });
   }, { signal: events.signal });
   render();
@@ -487,6 +493,11 @@ export function createEmailTestController({ root, context, request = authorizedJ
     if (!saved && !loading && !blockedMessage(value)) await loadContext(owner);
     if (!signal?.aborted && current(owner) && record && !record.rejected && !record.retired) return observe(owner, true, false, signal);
   }
-  return { sync, invalidate, send, adopt, refresh,
+  return { sync, invalidate, send, adopt, refresh, retainForDeparture,
+    currentReference() {
+      const value = context();
+      return value.active && key === currentKey(value) && record?.id
+        ? { id: record.id, organizationId: value.organizationId, unconfirmed: Boolean(record.unconfirmed) } : null;
+    },
     dispose() { if (disposed) return; invalidate(); disposed = true; events.abort(); } };
 }

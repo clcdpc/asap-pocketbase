@@ -4,17 +4,19 @@ import { element, commandButton, text, dateTime } from './ui.js';
 import { unconfirmedResponseError } from './mutation-outcome.js';
 import { actorKey } from './session-identity.js';
 import { byDisplayLabel } from './display-order.js';
-import { createEmailTestController, emailTestStatusMessage, emailOperationStatusLabel, emailRowVersionBytes } from './email-test.js';
+import { createEmailTestController, emailTestStatusMessage, emailRowVersionBytes } from './email-test.js';
 import { createAdministrationAudit } from './administration-audit.js';
+import { createEmailHistory } from './email-history.js';
 
 export function createOperationsController({ root, sessionIdentity, announce, onScopeChange,
   onReceipt, clearReceipt, onRouteChange = () => {}, request = authorizedJson }) {
-  const state = { operationsScope: 'all', emailScope: 'all', section: 'workflow', operationMutation: null };
+  const state = { operationsScope: 'all', emailTestScope: '1', readinessScope: 'all', section: 'workflow', operationMutation: null };
   const reads = createLatestLoad();
   const events = new window.AbortController();
   let active = false;
   let disposed = false;
-  let libraries = [], staffOwner = null, projection = null, emailReconciliation = null;
+  let initialActionContext = true;
+  let libraries = [], staffOwner = null, emailReconciliation = null, testSnapshot = null;
   const dom = {
     operationsScopeField: root.querySelector('#operations-scope-field'),
     operationsScope: root.querySelector('#operations-scope'),
@@ -25,13 +27,22 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     queueProgressTable: root.querySelector('#queue-progress-table'),
     emailOperationsTable: root.querySelector('#email-operations-table'),
     outcome: root.querySelector('#operations-outcome'),
-    emailScope: root.querySelector('#email-view-scope'),
-    emailScopeField: root.querySelector('#email-view-scope-field'),
+    emailTestScope: root.querySelector('#email-test-scope'),
+    emailTestScopeField: root.querySelector('#email-test-scope-field'),
   };
   const audit = createAdministrationAudit({ root, sessionIdentity, request, onRouteChange: options => onRouteChange(currentRoute(), options) });
+  const emailHistory = createEmailHistory({ root, sessionIdentity, request, selectSnapshot: currentEmailSnapshot,
+    onRetry: retryEmail, isVisible: () => state.section === 'email',
+    onRouteChange: options => routeChanged(options) });
   const sectionTabs = [...root.querySelectorAll('[data-operations-section]')];
-  function currentRoute() { return { section: state.section, emailScope: state.emailScope, runScope: state.operationsScope, audit: audit.route() }; }
+  function currentRoute() { return { section: state.section, emailScope: emailHistory.route().scope,
+    email: emailHistory.route(), testScope: state.emailTestScope, runScope: state.operationsScope, audit: audit.route() }; }
   function routeChanged(options) { onRouteChange(currentRoute(), options); }
+  function acceptReadinessScope(scope) {
+    if (state.readinessScope === scope) return;
+    state.readinessScope = scope;
+    onScopeChange();
+  }
   function selectSection(section, { focus = false, write = true } = {}) {
     const selected = ['workflow', 'email', 'audit'].includes(section) ? section : 'workflow';
     if (state.section === 'audit' && selected !== 'audit') audit.deactivate();
@@ -43,17 +54,16 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       if (chosen && focus) tab.focus();
     }
     if (selected === 'audit' && active) audit.activate();
-    onScopeChange();
     if (write) routeChanged();
   }
   const emailTest = createEmailTestController({ root: root.querySelector('#operations-email-test'), request,
     onSubmitted: () => loadOperations({ silent: true }),
     focusRecovery: () => (dom.refreshOperations.disabled ? dom.emailOperationsTable : dom.refreshOperations).focus(),
     context: () => ({ ownerKey: sessionIdentity.actor()?.key, version: sessionIdentity.preferences()?.version,
-      organizationId: ['all', 'system'].includes(state.emailScope) ? 1 : Number(state.emailScope),
+      organizationId: Number(state.emailTestScope),
       active: active && !disposed, ready: Boolean(sessionIdentity.actor()), dirty: false,
       reconciling: Boolean(emailReconciliation && sessionIdentity.isCurrent(emailReconciliation.owner) &&
-        emailReconciliation.scope === state.emailScope && !emailReconciliation.signal.aborted),
+        emailReconciliation.scope === state.emailTestScope && !emailReconciliation.signal.aborted),
       blocked: Boolean(state.operationMutation) }) });
 
   function setLibraries(organizations) {
@@ -78,20 +88,20 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       dom.operationsScope.value = reconciledScope;
       const changed = state.operationsScope !== reconciledScope;
       state.operationsScope = reconciledScope;
-      populateEmailScopes();
-      if (changed) { clearOperations(); onScopeChange(); }
+      populateTestScopes();
+      if (changed) { clearOperations(); acceptReadinessScope(state.operationsScope); }
     }
 
-  function populateEmailScopes() {
+  function populateTestScopes() {
     const staff = sessionIdentity.preferences();
-    dom.emailScope.replaceChildren(...(staff?.role === 'super_admin'
-      ? [element('option', { value: 'all', text: 'All libraries and system' }), element('option', { value: 'system', text: 'System only' })]
+    dom.emailTestScope.replaceChildren(...(staff?.role === 'super_admin'
+      ? [element('option', { value: '1', text: 'System' })]
       : [element('option', { value: String(staff?.organizationId || ''), text: 'My library' })]));
-    for (const library of libraries.filter(item => staff?.role === 'super_admin' || Number(item.id) === staff?.organizationId)) dom.emailScope.append(element('option', { value: library.id, text: library.name }));
-    if (![...dom.emailScope.options].some(item => item.value === state.emailScope)) {
-      dom.emailScope.append(element('option', { value: state.emailScope, text: `Selected library ${state.emailScope}` }));
+    for (const library of libraries.filter(item => staff?.role === 'super_admin')) dom.emailTestScope.append(element('option', { value: library.id, text: library.name }));
+    if (![...dom.emailTestScope.options].some(item => item.value === state.emailTestScope)) {
+      dom.emailTestScope.append(element('option', { value: state.emailTestScope, text: `Selected library ${state.emailTestScope}` }));
     }
-    dom.emailScope.value = state.emailScope;
+    dom.emailTestScope.value = state.emailTestScope;
   }
 
   function setStaff(staff) {
@@ -105,10 +115,13 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     clearOperations();
     state.operationMutation = null;
     state.operationsScope = staff?.role === 'super_admin' ? 'all' : String(staff?.organizationId || 'all');
-    state.emailScope = state.operationsScope;
+    state.emailTestScope = String(staff?.role === 'super_admin' ? 1 : staff?.organizationId || 1);
+    state.readinessScope = state.operationsScope; initialActionContext = true;
+    testSnapshot = null; emailReconciliation = null;
     audit.setStaff(staff);
-    dom.emailScopeField.hidden = staff?.role !== 'super_admin';
-    populateEmailScopes();
+    emailHistory.setStaff(staff);
+    dom.emailTestScopeField.hidden = staff?.role !== 'super_admin';
+    populateTestScopes();
     dom.operationsScopeField.hidden = staff?.role !== 'super_admin';
     dom.operationsScope.replaceChildren(element('option', { value: state.operationsScope,
       text: staff?.role === 'super_admin' ? 'All libraries' : 'My library' }));
@@ -134,13 +147,8 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   }
 
   function clearOperations() {
-    projection = null;
     dom.queueProgressTable.replaceChildren(element('p', { text: 'Queue progress has not been loaded for this context.' }));
-    dom.emailOperationsTable.replaceChildren(element('p', { text: 'Email operations have not been loaded for this context.' }));
-  }
-
-  function emailQuery(scope = state.emailScope) {
-    return scope === 'system' ? '?organizationId=1' : operationsQuery(scope);
+    emailHistory.invalidate();
   }
 
   function captureOperation(value) {
@@ -264,7 +272,8 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     const operation = state.operationMutation;
     const locked = Boolean(operation);
     for (const control of [dom.runWorkflowNow, dom.runWeeklyNow,
-      dom.operationsScope, dom.emailScope, ...dom.emailOperationsTable.querySelectorAll('button')]) control.disabled = locked;
+      dom.operationsScope, dom.emailTestScope]) control.disabled = locked;
+    emailHistory.setBlocked(locked);
     emailTest.sync();
     const notice = dom.outcome;
     notice.hidden = !operation?.uncertain;
@@ -322,23 +331,6 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   }
 
   function renderOperations(data) {
-    const rendered = { owner: sessionIdentity.preferences(), scope: state.operationsScope, emailScope: state.emailScope };
-    projection = rendered;
-    const listedEmails = data.email?.items || [];
-    let emailItems = listedEmails;
-    if (data.test && (state.emailScope === 'all' || data.test.organizationId === (state.emailScope === 'system' ? 1 : Number(state.emailScope)))) {
-      const index = listedEmails.findIndex(row => row.id === data.test.id);
-      if (index < 0) emailItems = [{ ...data.test, canRetry: false }, ...listedEmails];
-      else {
-        // SQL rowversions are eight big-endian bytes. Compare canonical decoded
-        // bytes, not Base64 spelling, status rank or lossy JavaScript numbers.
-        const exactVersion = emailRowVersionBytes(data.test.version), listedVersion = emailRowVersionBytes(listedEmails[index].version);
-        if (exactVersion !== null && (listedVersion === null || exactVersion > listedVersion)) {
-          emailItems = [...listedEmails];
-          emailItems[index] = { ...data.test, canRetry: false };
-        }
-      }
-    }
     renderOperationsTable(
       dom.queueProgressTable,
       [
@@ -358,24 +350,24 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       data.queue?.items || [],
       'No queue progress has been recorded for this scope.'
     );
-    renderOperationsTable(
-      dom.emailOperationsTable,
-      [
-        { label: 'Reference', render: row => element('span', { text: String(row.id) }) },
-        { label: 'Created', render: row => element('time', { text: dateTime(row.createdUtc), datetime: row.createdUtc }) },
-        { label: 'Status', render: row => element('span', { text: emailOperationStatusLabel(row) }) },
-        { label: 'Type / detail', render: row => element('div', {}, [element('span', { text: text(row.deliveryClass) }),
-          row.lastErrorCode || row.suppressionReason ? element('div', { className: 'operations-meta', text: row.lastErrorCode || row.suppressionReason }) : null]) },
-        { label: 'Action', render: row => {
-          if (row.status !== 'failed' || row.canRetry !== true) return element('span', { text: 'No action' });
-          return commandButton('Retry', 'refresh', () => {
-            if (active && projection === rendered && sessionIdentity.isCurrent(rendered.owner) && rendered.emailScope === state.emailScope) void retryEmail(row);
-          }, 'secondary-button');
-        } }
-      ],
-      emailItems,
-      'No email operations have been recorded for this scope.'
-    );
+  }
+
+  function currentEmailSnapshot(listed) {
+    const exact = testSnapshot?.();
+    if (!exact) {
+      const remembered = emailTest.currentReference();
+      return remembered?.id === listed.id && remembered.organizationId === listed.organizationId &&
+        (remembered.unconfirmed || emailReconciliation && !emailReconciliation.signal.aborted)
+        ? { ...listed, canRetry: false } : listed;
+    }
+    if (exact.id !== listed.id || exact.organizationId !== listed.organizationId) return listed;
+    const selected = testSnapshot(listed);
+    if (!selected) return listed;
+    const exactVersion = emailRowVersionBytes(selected.version), listedVersion = emailRowVersionBytes(listed.version);
+    // Choose a complete snapshot. Fields from an older list must never be
+    // merged into newer exact evidence, especially its separate retry proof.
+    return exactVersion !== null && (listedVersion === null || exactVersion > listedVersion)
+      ? { ...selected, canRetry: false } : listed;
   }
 
   async function loadOperations(options = {}) {
@@ -383,12 +375,13 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     const owner = sessionIdentity.preferences();
     const load = reads.begin('operations');
     const requestedScope = state.operationsScope;
-    const requestedEmailScope = state.emailScope;
-    const reconciliation = { owner, scope: requestedEmailScope, signal: load.signal };
+    const requestedTestScope = state.emailTestScope;
+    const requestedHistory = JSON.stringify(emailHistory.route());
+    const reconciliation = { owner, scope: requestedTestScope, signal: load.signal };
     emailReconciliation = reconciliation;
     emailTest.sync();
     const currentLoad = () => load.isCurrent() && sessionIdentity.isCurrent(owner) &&
-      requestedScope === state.operationsScope && requestedEmailScope === state.emailScope;
+      requestedScope === state.operationsScope && requestedTestScope === state.emailTestScope;
     const retained = state.operationMutation;
     if (retained?.uncertain) { clearReview(retained); updateOperationControls(); }
     // Only the control being disabled owns this handoff. Background reads must
@@ -403,17 +396,16 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     const clearLoading = !options.silent ? announce('Loading operations...') : null;
     try {
       const query = operationsQuery(requestedScope);
-      const emailRead = request(`/api/asap/staff/email-operations${emailQuery(requestedEmailScope)}`, { signal: load.signal });
-      const testRead = options.reconcileTest === false ? Promise.resolve() : emailTest.refresh({ signal: load.signal });
+      const testRead = options.reconcileTest === false ? Promise.resolve() : emailTest.refresh({ signal: load.signal }).then(snapshot => {
+        if (currentLoad()) testSnapshot = snapshot || null;
+        return snapshot;
+      });
+      const emailRead = emailHistory.refresh({ waitFor: testRead });
       // Consume available email evidence before unrelated queue/catalog/audit
       // waits, including failures. Send remains guarded until this pair settles.
       const emailPair = Promise.allSettled([emailRead, testRead]).then(([listed, test]) => {
         if (currentLoad()) {
-          if (listed.status === 'fulfilled' && test.status === 'fulfilled') {
-            const exact = test.value?.();
-            const candidate = exact && listed.value?.items?.find(row => row.id === exact.id);
-            if (candidate) test.value(candidate);
-          }
+          emailHistory.render();
           if (emailReconciliation === reconciliation) { emailReconciliation = null; emailTest.sync(); }
         }
         return { listed, test };
@@ -421,7 +413,6 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       const [tables, pair] = await Promise.allSettled([
         Promise.all([
           request(`/api/asap/staff/workflow/queues${query}`, { signal: load.signal }),
-          emailRead,
           sessionIdentity.preferences().role === 'super_admin'
             ? request('/api/asap/staff/organizations', { signal: load.signal })
             : Promise.resolve(null)
@@ -429,12 +420,13 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         emailPair,
         state.section === 'audit' ? audit.refresh() : Promise.resolve()
       ]);
-      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.operationsScope || requestedEmailScope !== state.emailScope) return false;
+      if (!currentLoad()) return false;
       if (tables.status === 'rejected') throw tables.reason;
       if (pair.status === 'rejected') throw pair.reason;
-      const { test } = pair.value;
+      const { listed, test } = pair.value;
       if (test.status === 'rejected') throw test.reason;
-      const [queue, email, organizationResult] = tables.value;
+      if (listed.status === 'fulfilled' && !listed.value && requestedHistory === JSON.stringify(emailHistory.route()) && emailHistory.failure()) throw emailHistory.failure();
+      const [queue, organizationResult] = tables.value;
       const organizations = organizationResult?.data ?? organizationResult;
       if (sessionIdentity.preferences().role === 'super_admin' && Array.isArray(organizations)) {
         const activeLibraries = organizations
@@ -461,16 +453,14 @@ export function createOperationsController({ root, sessionIdentity, announce, on
         retained.reviewed = true;
         if (retained.path === '/api/asap/staff/email-operations/test') await reviewLegacyEmailTest(retained);
       }
-      if (!load.isCurrent() || !sessionIdentity.isCurrent(owner) || requestedScope !== state.operationsScope || requestedEmailScope !== state.emailScope) return false;
+      if (!currentLoad()) return false;
       // Resolve the operation-bound latest observation after every asynchronous
       // read, including audit and retained-command review. A newer poll wins.
-      const currentTest = test.value?.();
-      const listedTest = currentTest && email?.items?.find(row => row.id === currentTest.id);
-      renderOperations({ queue, email, test: listedTest ? test.value(listedTest) : currentTest });
+      renderOperations({ queue }); emailHistory.render();
       updateOperationControls();
-      return true;
+      return listed.status === 'fulfilled' && (listed.value || requestedHistory !== JSON.stringify(emailHistory.route()));
     } catch (error) {
-      if (load.isCurrent() && sessionIdentity.isCurrent(owner) && requestedScope === state.operationsScope && requestedEmailScope === state.emailScope &&
+      if (currentLoad() &&
           !options.silent && !isAbortError(error) && error.status !== 401) {
         announce(error.message || 'Operations could not be loaded.', 'error');
       }
@@ -526,7 +516,7 @@ export function createOperationsController({ root, sessionIdentity, announce, on
       if (disposed || !sessionIdentity.isCurrent(owner)) return;
       const refreshed = active ? await loadOperations({ silent: true }) : false;
       if (refreshed === true) clearReceipt(operation);
-      const visibleScope = path.endsWith('/retry') ? state.emailScope === 'system' ? 'all' : state.emailScope : state.operationsScope;
+      const visibleScope = path.endsWith('/retry') ? emailHistory.route().scope === 'system' ? 'all' : emailHistory.route().scope : state.operationsScope;
       if (!disposed && sessionIdentity.isCurrent(owner) && operation.scope === visibleScope && active) {
         announce(refreshed ? committedMessage : `${committedMessage} Operations could not be refreshed.`,
           refreshed ? 'success' : 'warning');
@@ -557,20 +547,21 @@ export function createOperationsController({ root, sessionIdentity, announce, on
 
   async function retryEmail(row) {
     await runOperation(`/api/asap/staff/email-operations/${encodeURIComponent(row.id)}/retry`,
-      `Email retry ${row.id}`, null, { version: row.version }, state.emailScope === 'system' ? 'all' : state.emailScope);
+      `Email retry ${row.id}`, null, { version: row.version }, emailHistory.route().scope === 'system' ? 'all' : emailHistory.route().scope);
   }
   const listen = (node, name, handler) => node.addEventListener(name, handler, { signal: events.signal });
   listen(dom.operationsScope, 'change', () => {
     if (state.operationMutation) { dom.operationsScope.value = state.operationsScope; return; }
     state.operationsScope = dom.operationsScope.value;
     clearOperations();
-    onScopeChange(); routeChanged({ replace: true });
+    acceptReadinessScope(state.operationsScope); routeChanged({ replace: true });
     void loadOperations();
   });
-  listen(dom.emailScope, 'change', () => {
-    if (state.operationMutation) { dom.emailScope.value = state.emailScope; return; }
-    state.emailScope = dom.emailScope.value;
-    clearOperations(); emailTest.sync(); onScopeChange(); routeChanged({ replace: true }); void loadOperations();
+  listen(dom.emailTestScope, 'change', () => {
+    if (state.operationMutation || !emailTest.retainForDeparture()) { dom.emailTestScope.value = state.emailTestScope; return; }
+    state.emailTestScope = dom.emailTestScope.value;
+    acceptReadinessScope(state.emailTestScope);
+    testSnapshot = null; emailTest.sync(); routeChanged({ replace: true }); void loadOperations();
   });
   for (const [index, tab] of sectionTabs.entries()) {
     listen(tab, 'click', () => { selectSection(tab.dataset.operationsSection); if (state.section === 'audit') void audit.refresh(); });
@@ -599,22 +590,21 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   });
   listen(dom.refreshOperations, 'click', () => loadOperations());
   return {
-    setStaff, setLibraries, currentRoute, currentScope: () => state.section === 'email'
-      ? state.emailScope === 'system' ? '1' : state.emailScope : state.operationsScope,
+    setStaff, setLibraries, currentRoute, currentScope: () => state.readinessScope,
     async openEmailScope(organizationId) {
       const owner = sessionIdentity.preferences();
       if (!active || !owner || !Number.isInteger(organizationId) || organizationId < 1 || organizationId > 2147483647) return false;
       const scope = organizationId === 1 ? 'system' : String(organizationId);
       if (owner.role !== 'super_admin' && organizationId !== owner.organizationId) return false;
-      if (state.emailScope !== scope) clearOperations();
       // Accept the requested presentation context before reads. An unrelated
       // queue/catalog outage must not strand the original Settings test on the
       // Workflow panel. Each saved-context, exact lookup and command still has
       // its own server-side scope/active-identity authorization.
-      state.emailScope = scope; populateEmailScopes(); selectSection('email', { write: false });
-      routeChanged({ replace: true }); emailTest.sync(); onScopeChange();
+      state.emailTestScope = String(organizationId); testSnapshot = null; populateTestScopes();
+      emailHistory.setRoute({ scope }); selectSection('email', { write: false });
+      routeChanged({ replace: true }); emailTest.sync(); acceptReadinessScope(state.emailTestScope);
       const loaded = await loadOperations();
-      if (!active || !sessionIdentity.isCurrent(owner) || state.emailScope !== scope || state.section !== 'email') return false;
+      if (!active || !sessionIdentity.isCurrent(owner) || emailHistory.route().scope !== scope || state.section !== 'email') return false;
       dom.emailOperationsTable.focus();
       return loaded;
     },
@@ -630,34 +620,42 @@ export function createOperationsController({ root, sessionIdentity, announce, on
     },
     retireCatalog() {
       if (disposed) return;
-      reads.begin('operations').abort(); projection = null;
-      audit.invalidate(); emailTest.invalidate();
+      reads.begin('operations').abort();
+      audit.invalidate(); emailHistory.invalidate(); emailTest.invalidate(); testSnapshot = null;
       clearReview(state.operationMutation);
       dom.refreshOperations.disabled = false;
       setLibraries([]);
       dom.queueProgressTable.replaceChildren(element('p', { text: 'Queue progress unavailable. Refresh Operations to review current work.' }));
-      dom.emailOperationsTable.replaceChildren(element('p', { text: 'Email operations unavailable. Refresh Operations to review current work.' }));
+      emailHistory.invalidate('Email operations unavailable. Refresh Operations to review current work.');
       updateOperationControls();
     },
     activate(route) {
       active = true;
+      emailHistory.activate();
       if (route) {
         const staff = sessionIdentity.preferences();
         const validScope = value => value === 'all' || value === 'system' || /^[1-9]\d{0,9}$/.test(value || '');
         if (staff?.role === 'super_admin') {
-          if (validScope(route.emailScope)) state.emailScope = route.emailScope;
           if (validScope(route.runScope) && route.runScope !== 'system') state.operationsScope = route.runScope;
-          populateEmailScopes();
+          if (/^[1-9]\d{0,9}$/.test(route.testScope || '') && Number(route.testScope) <= 2147483647) state.emailTestScope = route.testScope;
+          populateTestScopes();
         }
+        emailHistory.setRoute(route.email || { scope: route.emailScope });
         audit.setRoute(route.audit); selectSection(route.section, { write: false });
       } else selectSection(state.section, { write: false });
+      if (initialActionContext) {
+        initialActionContext = false;
+        // A restored action context initializes health once. Browsing filters
+        // and later tab/route presentation never select a provider context.
+        acceptReadinessScope(route?.section === 'email' && route.testScope ? state.emailTestScope : state.operationsScope);
+      }
       emailTest.sync();
     },
-    deactivate() { active = false; audit.deactivate(); emailTest.invalidate(); clearOperations(); reads.begin('operations').abort(); },
-    invalidate() { audit.invalidate(); emailTest.invalidate(); clearOperations(); reads.begin('operations').abort(); },
+    deactivate() { active = false; audit.deactivate(); emailHistory.deactivate(); emailTest.invalidate(); testSnapshot = null; clearOperations(); reads.begin('operations').abort(); },
+    invalidate() { audit.invalidate(); emailTest.invalidate(); testSnapshot = null; clearOperations(); reads.begin('operations').abort(); },
     refresh: loadOperations, run: runOperation,
     inspectDeparture: () => ({ owner: active ? state.operationsScope : null, blocked: disposed, dirty: false }),
     signedOut() { active = false; setStaff(null); },
-    dispose() { disposed = true; active = false; audit.dispose(); emailTest.dispose(); events.abort(); reads.begin('operations').abort(); }
+    dispose() { disposed = true; active = false; audit.dispose(); emailHistory.dispose(); emailTest.dispose(); events.abort(); reads.begin('operations').abort(); }
   };
 }

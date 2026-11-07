@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { JSDOM } = require('jsdom');
+const { emailHistoryPage } = require('./helpers/staff-controller.cjs');
 
 const frontend = path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend');
 const response = (status, body) => ({
@@ -55,11 +56,11 @@ async function verify(mode) {
       }
       if (url.includes('/workflow/queues')) return response(200, { items: [] });
       if (url.includes('/email-operations') && options.method !== 'POST') {
-        return response(200, { items: [{
+        return response(200, emailHistoryPage({ items: [{
           id: '9007199254740993', status: 'failed', deliveryClass: 'business_event',
           lastErrorCode: 'mail_not_configured', canRetry: true,
           createdUtc: '2026-09-14T12:00:00Z', version: 'email-version'
-        }] });
+        }] }, url));
       }
       if (url.includes('/email-readiness')) return response(200, {});
       if (options.method === 'POST') {

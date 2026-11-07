@@ -275,6 +275,8 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 #operations-email-test dd { margin: 0; overflow-wrap: anywhere; }
 #operations-email-test .form-actions { align-self: center; margin: 0; }
 #operations-email-test > p, #operations-email-test > details { grid-column: 1 / -1; }
+#email-test-scope-field { grid-column: 1 / -1; margin-bottom: 10px; }
+#email-test-scope { min-width: 0; max-width: 100%; }
 .operations-sections { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: 20px 0 24px; }
 .operations-sections button { min-height: 46px; padding: 12px 18px; color: var(--muted); background: transparent; border: 0; border-bottom: 3px solid transparent; cursor: pointer; }
 .operations-sections button[aria-selected="true"] { color: var(--brand-dark); border-bottom-color: var(--brand-dark); font-weight: 700; }
