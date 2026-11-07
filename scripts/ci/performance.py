@@ -746,6 +746,7 @@ class Monitor:
 
 def run(command, output, interval=15, docker_interval=60, sql_interval=60):
     child, monitor = None, None
+    lifecycle = None
     cancelled = threading.Event()
     received = []
 
@@ -758,6 +759,12 @@ def run(command, output, interval=15, docker_interval=60, sql_interval=60):
     handlers = {signum: signal.signal(signum, forward) for signum in (signal.SIGINT, signal.SIGTERM)}
     code, duration, command_started = 1, 0, None
     try:
+        if os.environ.get("ASAP_CI_RUNNER_DIAGNOSTICS") == "true":
+            try:
+                from runner_diagnostics import Collector
+                lifecycle = Collector(Path(output) / "runner-lifecycle.jsonl", optional_command).start()
+            except Exception as error:
+                warn("runner lifecycle diagnostics unavailable (" + type(error).__name__ + ").")
         try:
             monitor = Monitor(output, interval, docker_interval, cancelled, sql_interval)
         except Exception as error:
@@ -788,6 +795,8 @@ def run(command, output, interval=15, docker_interval=60, sql_interval=60):
     finally:
         if command_started is not None:
             duration = time.monotonic() - command_started
+        if lifecycle is not None:
+            lifecycle.finish()
         if child is not None and received and os.name == "posix":
             kill_group(child, signal.SIGKILL)
         if monitor is not None:

@@ -667,6 +667,24 @@ async function main() {
       assert.match(step(full, name).if, /always\(\).*outcome != 'skipped'/);
     }
   });
+  await check('runner diagnostics are opt-in observational manual dispatches with best-effort retention', () => {
+    const baseline = step(full, 'Record runner lifecycle baseline');
+    const upload = step(full, 'Upload runner lifecycle baseline');
+    const diagnosticContext = (event, force) => ({ github: { event_name: event }, inputs: { force_full_ci: force } });
+    assert.equal(evaluate(full.env.ASAP_CI_RUNNER_DIAGNOSTICS, diagnosticContext('workflow_dispatch', true)), 'true');
+    for (const [event, force] of [['push', true], ['pull_request', true], ['workflow_dispatch', false]]) {
+      assert.equal(evaluate(full.env.ASAP_CI_RUNNER_DIAGNOSTICS, diagnosticContext(event, force)), 'false');
+    }
+    assert.equal(baseline['continue-on-error'], true);
+    assert.equal(step(full, 'Check test reuse safety').env.ASAP_CI_RUNNER_DIAGNOSTICS, 'false');
+    assert.equal(baseline.run, 'python3 -B scripts/ci/runner_diagnostics.py --once');
+    assert.match(upload.if, /always\(\)/);
+    assert.equal(upload['continue-on-error'], true);
+    assert.equal(upload.with.path, '.artifacts/runner-lifecycle/');
+    assert.ok(full.steps.indexOf(baseline) < full.steps.indexOf(step(full, 'Restore and build')));
+    assert.equal(full['timeout-minutes'], 120);
+    assert.equal(full['runs-on'], 'clc-linux');
+  });
   await check('the reporter always inspects selected execution and runs no PR code', () => {
     assert.equal(gate.if, '${{ always() }}');
     assert.deepEqual(gate.permissions, { contents: 'read' });

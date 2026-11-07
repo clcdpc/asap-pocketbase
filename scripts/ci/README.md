@@ -47,6 +47,24 @@ frontend telemetry uses `.artifacts/frontend-performance/`. The workflow sets
 `ASAP_CI_PERFORMANCE_OUTPUT` for each command, so sequential execution cannot
 overwrite another suite's samples or summaries.
 
+For manual `force_full_ci=true` dispatches, runner lifecycle diagnostics also
+stream timestamped `[runner-lifecycle]` JSON records during each fresh suite.
+They retain selected systemd state/journal identities, package changes, known
+update-process PID/parent names and guest memory/OOM counters. Raw journal text,
+process arguments/environments and arbitrary service properties are never
+exported. A baseline runs after checkout; suite records live beside their other
+telemetry. Console records are flushed immediately because runner service loss
+can skip even `always()` uploads. Missing/denied probes are best-effort and do
+not change workload exit status, resources, update policy, services or gates.
+
+Polling every two seconds can miss short-lived callers and bounded history can
+omit older events. Timing correlation alone does not prove a restart requester.
+For a separately authorized incident investigation, `runner_diagnostics.py`
+can also run over a read-only pinned-host SSH connection outside the runner's
+service cgroup, preserving the same sanitized observations through a service
+restart. Stop it when that one diagnostic job finishes. No service/security
+configuration change is part of this collector.
+
 - `environment.json`: UTC start, validated GitHub run/attempt/SHA, runner type,
   OS/kernel/architecture, CPU model/logical count/affinity, guest RAM,
   classified virtualization indicators, root/workspace filesystem type, block

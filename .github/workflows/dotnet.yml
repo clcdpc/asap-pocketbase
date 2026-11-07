@@ -89,6 +89,9 @@ jobs:
     env:
       ASAP_FORCE_FULL_CI: ${{ inputs.force_full_ci || false }}
       ASAP_DEPLOY_TEST_IIS: ${{ inputs.deploy_test_iis || false }}
+      # Temporary diagnostic dispatches stream allow-listed lifecycle records
+      # before a guest service stop can prevent post-job uploads.
+      ASAP_CI_RUNNER_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && inputs.force_full_ci }}
     outputs:
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
       deployment_label: ${{ steps.identity.outputs.deployment_label }}
@@ -103,6 +106,11 @@ jobs:
 
       - name: Verify exact test source
         run: python3 -B scripts/ci/reuse.py checkout
+
+      - name: Record runner lifecycle baseline
+        if: ${{ env.ASAP_CI_RUNNER_DIAGNOSTICS == 'true' }}
+        continue-on-error: true
+        run: python3 -B scripts/ci/runner_diagnostics.py --once
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -128,6 +136,9 @@ jobs:
         run: dotnet build Asap.sln --configuration Release
 
       - name: Check test reuse safety
+        env:
+          # The synthetic collector tests control their own opt-in fixtures.
+          ASAP_CI_RUNNER_DIAGNOSTICS: 'false'
         run: python3 -B -m unittest discover -s scripts/ci -p 'test_*.py' -v
 
       - name: Verify current CI safety contracts
@@ -240,6 +251,16 @@ jobs:
         with:
           name: frontend-performance-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/frontend-performance/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload runner lifecycle baseline
+        if: ${{ always() && env.ASAP_CI_RUNNER_DIAGNOSTICS == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/runner-lifecycle/
           if-no-files-found: ignore
           retention-days: 7
 
