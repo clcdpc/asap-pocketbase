@@ -65,6 +65,9 @@ The current-tab filters and their independent workflow totals remain separate.
   the retained results view through the normal guarded traversal.
   Navigation retires an open quick dialog before gathering departure consent,
   including browser history traversal, without unmounting source drafts.
+  Detail preparation marks `searchResult=true` so both detail owners recheck
+  active-library eligibility for search. Ordinary authorized All-scope detail
+  access retains inactive-library journal/recovery behavior.
 
 Real SQL query plans and measured costs, independent review findings, exact-head
 CI/acceptance receipts and integration checkpoints belong in the PR. Raw receipts

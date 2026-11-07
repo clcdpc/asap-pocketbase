@@ -35,7 +35,10 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
     const live = () => !disposed && !signal.aborted && ticket === targetGeneration && sessionIdentity.isCurrent(owner);
     try {
       const path = `/api/asap/staff/additional-copies/${encodeURIComponent(id)}`;
-      const request = await send(options.scope ? `${path}?scope=${encodeURIComponent(options.scope)}` : path, { signal });
+      const query = new URLSearchParams();
+      if (options.scope) query.set('scope', options.scope);
+      if (options.searchScope) query.set('searchResult', 'true');
+      const request = await send(query.size ? `${path}?${query}` : path, { signal });
       return live() ? { request, owner, isCurrent: live } : null;
     } finally { reads.finish('detail-target', load.token); }
   }

@@ -139,6 +139,9 @@ public sealed partial class PatronJourneyTests
             var other = (await SearchAsync(superClient, "needle", OtherSearchLibrary.ToString(CultureInfo.InvariantCulture))).Items.Single();
             Assert.AreEqual(HttpStatusCode.NotFound, (await client.GetAsync($"/api/asap/staff/title-requests/{other.Id}")).StatusCode);
             var copy = (await SearchAsync(superClient, "needle", SearchLibrary.ToString(CultureInfo.InvariantCulture), "copy:open")).Items[0];
+            var titleId = SearchBigId.ToString(CultureInfo.InvariantCulture);
+            Assert.AreEqual(HttpStatusCode.OK, (await client.GetAsync($"/api/asap/staff/title-requests/{titleId}?searchResult=true")).StatusCode);
+            Assert.AreEqual(HttpStatusCode.OK, (await client.GetAsync($"/api/asap/staff/additional-copies/{copy.Id}?searchResult=true")).StatusCode);
             Assert.AreEqual(HttpStatusCode.NotFound, (await superClient.GetAsync($"/api/asap/staff/additional-copies/{copy.Id}?scope={OtherSearchLibrary}")).StatusCode);
             await ExecuteNonQueryAsync("UPDATE [asap].[StaffUser] SET [OrganizationId]=@other WHERE [Id]=@id;", ("@other", OtherSearchLibrary), ("@id", ordinary.Id));
             Assert.AreEqual(1, (await SearchAsync(client, "needle", "all")).Total, "Current SQL library supersedes cookie/header scope.");
@@ -148,7 +151,10 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue((await client.GetAsync($"/api/asap/staff/additional-copies/{copy.Id}")).StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized);
             await ExecuteNonQueryAsync("UPDATE [asap].[Organization] SET [IsActive]=0 WHERE [Id]=@id;", ("@id", SearchLibrary));
             Assert.AreEqual(1, (await SearchAsync(superClient, "needle", "all")).Total);
-            Assert.AreEqual(HttpStatusCode.NotFound, (await superClient.GetAsync($"/api/asap/staff/additional-copies/{copy.Id}?scope=all")).StatusCode);
+            Assert.AreEqual(HttpStatusCode.NotFound, (await superClient.GetAsync($"/api/asap/staff/additional-copies/{copy.Id}?scope=all&searchResult=true")).StatusCode);
+            Assert.AreEqual(HttpStatusCode.NotFound, (await superClient.GetAsync($"/api/asap/staff/title-requests/{titleId}?scope=all&searchResult=true")).StatusCode);
+            Assert.AreEqual(HttpStatusCode.OK, (await superClient.GetAsync($"/api/asap/staff/additional-copies/{copy.Id}")).StatusCode);
+            Assert.AreEqual(HttpStatusCode.OK, (await superClient.GetAsync($"/api/asap/staff/title-requests/{titleId}")).StatusCode);
             await ExecuteNonQueryAsync("UPDATE [asap].[StaffUser] SET [IsActive]=1 WHERE [Id]=@id; UPDATE [asap].[Organization] SET [IsActive]=0 WHERE [Id]=@other;", ("@id", ordinary.Id), ("@other", OtherSearchLibrary));
             Assert.AreEqual(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync("/api/asap/staff/search", new { query = "needle" })).StatusCode);
             Assert.AreEqual(0, (await SearchAsync(superClient, "needle", "all")).Total);

@@ -46,6 +46,7 @@ public static class AdditionalCopyEndpoints
         HttpContext context,
         string id,
         string? scope,
+        bool? searchResult,
         AdditionalCopyService service,
         CancellationToken cancellationToken)
     {
@@ -53,7 +54,7 @@ public static class AdditionalCopyEndpoints
         {
             return Results.BadRequest(new { code = "invalid_scope" });
         }
-        var result = await service.GetAsync(Current(context), id, null, cancellationToken, parsedScope);
+        var result = await service.GetAsync(Current(context), id, null, cancellationToken, parsedScope, searchResult == true);
         return result is null ? Results.NotFound() : Results.Json(result);
     }
 

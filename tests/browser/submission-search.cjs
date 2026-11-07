@@ -10,7 +10,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 (async () => {
   const fixture = JSON.parse(await fs.readFile(path.join(artifacts, 'fixture.json'), 'utf8'));
   const headers = actor => ({ 'X-ASAP-Test-Staff-Id': actor.id, 'X-ASAP-Test-Tenant-Id': actor.tenantId, 'X-ASAP-Test-Staff-Email': actor.email });
-  const report = { states: [], errors: [], external: [], mutations: [], referenceReads: [], timings: [], nativeZoom: [], dirtySettings: false, dirtyTitle: false, dirtyCopy: false, staleDetails: false };
+  const report = { states: [], errors: [], external: [], mutations: [], referenceReads: [], searchDetailReads: [], timings: [], nativeZoom: [], dirtySettings: false, dirtyTitle: false, dirtyCopy: false, staleDetails: false };
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   const browser = await chromium.launch({ headless: true });
   let injection = null;
@@ -21,6 +21,8 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     });
     context.on('page', page => { page.on('pageerror', error => report.errors.push(error.message)); rejectNativeDialogs(page, report.errors); });
     context.on('request', request => {
+      const url = new URL(request.url());
+      if (url.searchParams.get('searchResult') === 'true') report.searchDetailReads.push({ path: url.pathname, scope: url.searchParams.get('scope') });
       if (new URL(request.url()).pathname === '/api/asap/staff/polaris/patron-codes') report.referenceReads.push(request.url());
       if (!['GET', 'HEAD'].includes(request.method()) && !['/api/asap/staff/search'].includes(new URL(request.url()).pathname)) {
         report.mutations.push({ path: new URL(request.url()).pathname, method: request.method() });
@@ -119,6 +121,10 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await page.locator('#request-dialog-kicker').filter({ hasText: `Request ${fixture.bigId}` }).waitFor();
     await page.keyboard.press('Escape'); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await command('readOnly');
+    assert.equal(report.searchDetailReads.length, 2, 'Both initial selections explicitly request search detail eligibility.');
+    assert.ok(report.searchDetailReads.some(item => item.path.includes('/additional-copies/')));
+    assert.ok(report.searchDetailReads.some(item => item.path.includes('/title-requests/')));
+    assert.ok(report.searchDetailReads.every(item => item.scope === fixture.library));
     for (const name of ['analytics', 'operations', 'settings', 'profile', 'additional-copies', 'queue']) {
       await page.locator(name === 'profile' ? '#profile-button' : `.view-tab[data-view="${name}"]`).click();
       if (name === 'operations') { await page.locator('#operations-view').waitFor(); await page.emulateMedia({ colorScheme: 'dark' }); await scan(page, 'search-launcher-dark-operations'); }
