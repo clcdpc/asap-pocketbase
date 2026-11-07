@@ -203,6 +203,8 @@ $buildRoot = $null
 $sharedLog = $null
 $sharedError = $null
 $finished = $false
+$imageAttempted = $false
+$imageCleanup = @{ image = $null; status = 'NOT RUN'; detail = '' }
 try {
     $repoRoot = (Invoke-ReviewNative git @('-C', $PSScriptRoot, 'rev-parse', '--show-toplevel') -Capture).Output
     $registered = @(Get-Content -LiteralPath (Join-Path $repoRoot 'tests/acceptance/suites/registry.json') -Raw | ConvertFrom-Json)
@@ -233,28 +235,30 @@ try {
     Copy-ReviewTooling -Repository $repoRoot -Destination $tooling
     $digest = Get-ReviewToolingDigest $tooling
     $version = (Get-Content -LiteralPath (Join-Path $tooling 'dev/review/VERSION') -Raw).Trim()
-    $image = "asap-acceptance:$resolved-$toolingSha-$($digest.Substring(0, 16))$(if ($toolingDirty) { '-dirty' })"
+    # Every invocation owns its tag, including concurrent runs of identical code.
+    # Full application/tooling identity remains in the reports and image metadata.
+    $image = "asap-acceptance:$resolved-$($digest.Substring(0, 16))-$invocationId"
+    $imageCleanup.image = $image
     @("Application: $resolved", "Tooling: $toolingSha; dirty: $toolingDirty; version: $version; digest: $digest",
         "Image: $image", "Suites: $($selected -join ', ')") | Add-Content -LiteralPath $sharedLog -Encoding utf8NoBOM
     Write-Host "Application: $resolved"
     Write-Host "Tooling: $toolingSha$(if ($toolingDirty) { ' (working tree changes)' }); digest $digest"
     $buildLog = Join-Path $artifactRoot "build-$invocationId.log"
-    $cached = Invoke-ReviewNative wslc @('image', 'inspect', $image) -Capture -AllowFailure
-    if ($Rebuild -or $cached.Code -ne 0) {
-        $archive = Join-Path $context 'application.zip'
-        Invoke-ReviewNative git @('-C', $repoRoot, 'archive', '--format=zip', "--output=$archive", $resolved)
-        Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $context 'app')
-        Remove-Item -LiteralPath $archive
-        $build = @('build', '--file', (Join-Path $tooling 'dev/review/Containerfile'), '--tag', $image, '--progress', 'plain',
-            '--build-arg', "REVIEW_COMMIT_SHA=$resolved", '--build-arg', "REVIEW_TOOLING_SHA=$toolingSha",
-            '--build-arg', "REVIEW_TOOLING_DIRTY=$($toolingDirty.ToString().ToLowerInvariant())", '--build-arg', "REVIEW_TOOLING_VERSION=$version")
-        if ($Rebuild) { $build += '--no-cache' }
-        Write-Host "Building the shared acceptance image through WSLC... Diagnostics: $buildLog"
-        Add-Content -LiteralPath $sharedLog -Value "Build diagnostics: $buildLog"
-        $built = Invoke-ReviewNative wslc ($build + $context) -Capture -AllowFailure -TimeoutSeconds 2400 -LogPath $buildLog
-        if ($built.Code -ne 0) { throw "Shared WSLC image build failed. See $buildLog. No suites started." }
-    }
-    else { Write-Host 'Reusing the shared acceptance image.' }
+    $archive = Join-Path $context 'application.zip'
+    Invoke-ReviewNative git @('-C', $repoRoot, 'archive', '--format=zip', "--output=$archive", $resolved)
+    Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $context 'app')
+    Remove-Item -LiteralPath $archive
+    $build = @('build', '--file', (Join-Path $tooling 'dev/review/Containerfile'), '--tag', $image, '--progress', 'plain',
+        '--build-arg', "REVIEW_COMMIT_SHA=$resolved", '--build-arg', "REVIEW_TOOLING_SHA=$toolingSha",
+        '--build-arg', "REVIEW_TOOLING_DIRTY=$($toolingDirty.ToString().ToLowerInvariant())", '--build-arg', "REVIEW_TOOLING_VERSION=$version")
+    if ($Rebuild) { $build += '--no-cache' }
+    Write-Host "Building the shared acceptance image through WSLC... Diagnostics: $buildLog"
+    Add-Content -LiteralPath $sharedLog -Value "Build diagnostics: $buildLog"
+    # BuildKit may reuse layers, but the finished image tag belongs only to this
+    # invocation. Record intent before starting so failed builds also clean up.
+    $imageAttempted = $true
+    $built = Invoke-ReviewNative wslc ($build + $context) -Capture -AllowFailure -TimeoutSeconds 2400 -LogPath $buildLog
+    if ($built.Code -ne 0) { throw "Shared WSLC image build failed. See $buildLog. No suites started." }
     Remove-ReviewBuildContext $context $buildRoot
     $execution = @{ ApplicationCommit = $resolved; ToolingCommit = $toolingSha; ToolingDirty = $toolingDirty;
         ToolingDigest = $digest; ToolingVersion = $version; Image = $image; InvocationId = $invocationId;
@@ -270,9 +274,22 @@ catch {
     Write-Host "BLOCKED: $sharedError" -ForegroundColor Red
 }
 finally {
+    if ($imageAttempted) {
+        try {
+            Remove-ReviewImage $image
+            $imageCleanup.status = 'PASS'
+            Write-Host "Image cleanup confirmed: $image"
+        }
+        catch {
+            $imageCleanup.status = 'BLOCKED'
+            $imageCleanup.detail = "Image cleanup could not be confirmed. After removing this invocation's containers, run: wslc image remove --no-prune $image. $($_.Exception.Message)"
+            $sharedError = (@($sharedError, $imageCleanup.detail) | Where-Object { $_ }) -join "`n"
+            Write-Warning $imageCleanup.detail
+        }
+    }
     if ($context) {
         try { Remove-ReviewBuildContext $context $buildRoot }
-        catch { $sharedError = "Build context cleanup failed: $($_.Exception.Message)"; Write-Warning $sharedError }
+        catch { $sharedError = (@($sharedError, "Build context cleanup failed: $($_.Exception.Message)") | Where-Object { $_ }) -join "`n"; Write-Warning $sharedError }
     }
     if (-not $finished -and -not $sharedError) { $sharedError = 'Acceptance invocation was interrupted.' }
     foreach ($run in $runs | Where-Object Status -eq 'NOT RUN') { $run.Detail = $sharedError }
@@ -283,7 +300,8 @@ finally {
     if ($sharedLog) {
         try {
             if ($sharedError) { Add-Content -LiteralPath $sharedLog -Value "BLOCKED: $sharedError" -Encoding utf8NoBOM }
-            @{ invocationId = $invocationId; overall = $overall; exitCode = $exitCode; counts = $counts; detail = $sharedError;
+            "Image cleanup: $($imageCleanup.status); $($imageCleanup.image); $($imageCleanup.detail)" | Add-Content -LiteralPath $sharedLog -Encoding utf8NoBOM
+            @{ invocationId = $invocationId; overall = $overall; exitCode = $exitCode; counts = $counts; detail = $sharedError; imageCleanup = $imageCleanup;
                 suites = @($runs | Select-Object Suite, Status, @{ Name = 'durationSeconds'; Expression = { $_.Duration.TotalSeconds } }, ArtifactPath, Detail) } |
                 ConvertTo-Json -Depth 10 | Set-Content -LiteralPath ([System.IO.Path]::ChangeExtension($sharedLog, '.json')) -Encoding utf8NoBOM
             Write-Host "Shared diagnostics: $sharedLog"

@@ -189,3 +189,18 @@ function Remove-ReviewBuildContext {
     if (-not $absolute.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw 'Build cleanup path is outside the review build directory.' }
     if (Test-Path -LiteralPath $absolute) { Remove-Item -LiteralPath $absolute -Recurse -Force }
 }
+
+function Remove-ReviewImage {
+    param([Parameter(Mandatory)][ValidatePattern('^asap-acceptance:[a-f0-9]{40}-[a-f0-9]{16}-[a-f0-9]{32}$')][string]$Image)
+    try {
+        # Remove only this invocation's tag. Never force removal of an image still
+        # referenced by a container, or prune other images, parents or build cache.
+        $null = Invoke-ReviewNative wslc @('image', 'remove', '--no-prune', $Image) -Capture
+    }
+    catch {
+        # An interrupted/failed build may never have published its tag. A failed
+        # inspect alone cannot distinguish absence from an unavailable runtime.
+        $remaining = Invoke-ReviewNative wslc @('image', 'list', '--filter', "reference=$Image", '--quiet') -Capture
+        if (-not [string]::IsNullOrWhiteSpace($remaining.Output)) { throw "Image still exists: $Image" }
+    }
+}

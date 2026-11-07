@@ -76,8 +76,24 @@ function Invoke-ReviewNative {
     $code = 0; $output = ''; $errorText = ''
     switch ($Arguments[0]) {
         'version' { if ($case -eq 'prerequisite') { throw 'Synthetic WSLC unavailable' }; Write-Host 'Mock WSLC version' }
-        'image' { if ($case -in @('build', 'uncached')) { $code = 1 } }
-        'build' { if ($case -eq 'build') { $code = 1 }; $errorText = 'Synthetic image build diagnostic' }
+        'image' {
+            if ($Arguments[1] -eq 'remove') {
+                if ($case -in @('build', 'build-interrupt', 'image-cleanup', 'image-unavailable', 'failed-image-cleanup')) { throw 'Synthetic image removal failure' }
+            }
+            elseif ($Arguments[1] -eq 'list') {
+                if ($case -eq 'image-unavailable') { throw 'Synthetic runtime unavailable' }
+                if ($case -in @('image-cleanup', 'failed-image-cleanup')) { $output = 'remaining-image-id' }
+            }
+            else { throw 'Unexpected mock image call' }
+        }
+        'build' {
+            if ($case -in @('build', 'build-published')) { $code = 1 }
+            if ($case -eq 'build-interrupt') {
+                'ready' | Set-Content -LiteralPath $env:ASAP_LAUNCHER_TEST_READY
+                Start-Sleep -Seconds 30
+            }
+            $errorText = 'Synthetic image build diagnostic'
+        }
         'run' {
             $selected = $Arguments[[Array]::IndexOf($Arguments, '--suite') + 1]
             $outcomes = $env:ASAP_LAUNCHER_TEST_OUTCOMES | ConvertFrom-Json -AsHashtable
@@ -89,7 +105,7 @@ function Invoke-ReviewNative {
             if ($mount -notmatch '^type=bind,source=(.+),target=/artifacts$') { throw 'Invalid artifact mount' }
             $directory = $Matches[1]
             $report = Get-Content -LiteralPath (Join-Path $directory 'results.json') -Raw | ConvertFrom-Json -AsHashtable
-            $status = switch ($case) { 'failed' { 'FAIL' }; 'failed-cleanup' { 'FAIL' }; 'blocked' { 'BLOCKED' }; default { 'PASS' } }
+            $status = switch ($case) { 'failed' { 'FAIL' }; 'failed-cleanup' { 'FAIL' }; 'failed-image-cleanup' { 'FAIL' }; 'blocked' { 'BLOCKED' }; default { 'PASS' } }
             $report.environment = @{ status = if ($case -eq 'blocked') { 'BLOCKED' } else { 'PASS' } }
             $report.authentication = @{ status = 'PASS'; mode = 'local' }
             $report.applicationCommit = $report.expectedApplicationCommit
@@ -100,7 +116,7 @@ function Invoke-ReviewNative {
             $partial = $case -eq 'skipped' -or ($Arguments -contains '--read-only' -and $selected -in @('smoke', 'd1', 'pr410'))
             if ($partial) { $report.scenarios[1].status = 'NOT RUN'; $status = 'INCOMPLETE' }
             $report.automatedFunctionalAcceptance = $status
-            $report.actualExitCode = if ($partial) { 2 } else { switch ($case) { 'failed' { 1 }; 'failed-cleanup' { 1 }; 'blocked' { 2 }; 'mismatch' { 1 }; default { 0 } } }
+            $report.actualExitCode = if ($partial) { 2 } else { switch ($case) { 'failed' { 1 }; 'failed-cleanup' { 1 }; 'failed-image-cleanup' { 1 }; 'blocked' { 2 }; 'mismatch' { 1 }; default { 0 } } }
             $script:containerCases[$name] = if ($partial) { 'skipped' } else { $case }
             if ($case -eq 'falsepass') { $report.scenarios[1].status = 'NOT RUN' }
             if ($case -eq 'wrongsha') { $report.applicationCommit = 'a' * 40 }
@@ -118,7 +134,7 @@ function Invoke-ReviewNative {
         }
         'inspect' {
             $case = $script:containerCases[$Arguments[-1]]
-            $exit = switch ($case) { 'failed' { 1 }; 'failed-cleanup' { 1 }; 'blocked' { 2 }; 'skipped' { 2 }; default { 0 } }
+            $exit = switch ($case) { 'failed' { 1 }; 'failed-cleanup' { 1 }; 'failed-image-cleanup' { 1 }; 'blocked' { 2 }; 'skipped' { 2 }; default { 0 } }
             if ($case -eq 'interrupt') { 'ready' | Set-Content -LiteralPath $env:ASAP_LAUNCHER_TEST_READY }
             $output = @{ State = @{ Running = $case -eq 'interrupt'; ExitCode = $exit } } | ConvertTo-Json -Compress
         }
@@ -270,6 +286,8 @@ test('failed, blocked, startup, mismatch and cleanup outcomes retain the correct
     assert.equal(report.automatedFunctionalAcceptance, mode === 'failed' ? 'FAIL' : 'BLOCKED');
     assert.ok(outcome.stdout.includes('Report: ' + path.join(outcome.artifactPath, 'report.md')));
     assert.equal(outcome.summary.suites[0].Status, mode === 'failed' ? 'FAIL' : 'BLOCKED');
+    assert.equal(outcome.summary.imageCleanup.status, 'PASS');
+    assert.equal(outcome.calls.filter(c => c.arguments[0] === 'image' && c.arguments[1] === 'remove').length, 1);
     {
       assert.equal(existsSync(path.join(outcome.artifactPath, 'container.log')), true);
       assert.equal(outcome.calls.filter(call => call.arguments[0] === 'remove').length, 1);
@@ -299,15 +317,20 @@ test('native array invocations share one revision/image preparation and isolate 
     assert.deepEqual(outcome.summary.counts, { PASS: 3, FAIL: 0, BLOCKED: 0, 'NOT RUN': 0 });
     const calls = outcome.calls.map(c => c.arguments);
     assert.equal(calls.filter(c => c[0] === 'resolve').length, 1);
-    assert.equal(calls.filter(c => c[0] === 'image').length, 1);
+    assert.equal(calls.filter(c => c[0] === 'image' && c[1] === 'remove').length, 1);
     const builds = calls.filter(c => c[0] === 'build');
-    assert.equal(builds.length, mode === 'uncached' || flags ? 1 : 0);
+    assert.equal(builds.length, 1, 'Build one invocation-owned image, reusing layers unless forced');
     if (flags) assert.equal(builds[0].filter(arg => arg === '--no-cache').length, 1);
+    else assert.ok(!builds[0].includes('--no-cache'));
     const runs = calls.filter(c => c[0] === 'run');
     assert.deepEqual(runs.map(c => c[c.indexOf('--suite') + 1]), requested);
     assert.equal(new Set(runs.map(c => c[c.indexOf('--name') + 1])).size, 3);
     assert.equal(new Set(runs.map(c => c[c.indexOf('--expected-commit') + 1])).size, 1);
     assert.equal(new Set(runs.map(c => c[c.indexOf('--suite') - 1])).size, 1, 'One immutable image for every suite');
+    const image = builds[0][builds[0].indexOf('--tag') + 1];
+    assert.deepEqual(calls.at(-1), ['image', 'remove', '--no-prune', image], 'Image removed only after all suite containers');
+    assert.equal(outcome.summary.imageCleanup.image, image);
+    assert.equal(outcome.summary.imageCleanup.status, 'PASS');
     assert.deepEqual(calls.filter(c => ['run', 'stop', 'logs', 'remove'].includes(c[0])).map(c => c[0]),
       requested.flatMap(() => ['run', 'stop', 'logs', 'remove']), 'Cleanup completes before starting the next fresh runtime');
     assert.equal(new Set(outcome.summary.suites.map(s => s.ArtifactPath)).size, 3);
@@ -407,19 +430,22 @@ test('functional and suite-local infrastructure failures continue without hiding
 
 test('fatal shared prerequisites/build retain diagnostics and mark every requested suite NOT RUN', async t => {
   const f = await fixture(t), customRoot = path.join(f.directory, 'shared failure');
-  for (const mode of ['prerequisite', 'build']) {
+  for (const mode of ['prerequisite', 'build', 'build-published']) {
     const outcome = await f.launch({ customRoot, selection: 's1,d1,q1', mode });
     assert.equal(outcome.code, 2, outcome.stdout + outcome.stderr);
     assert.deepEqual(outcome.summary.suites.map(s => s.Status), ['NOT RUN', 'NOT RUN', 'NOT RUN']);
     assert.ok(outcome.summary.suites.every(s => s.ArtifactPath === null));
     assert.ok(!outcome.calls.some(c => ['run', 'remove'].includes(c.arguments[0])));
     assert.match(await fs.readFile(outcome.log, 'utf8'), /BLOCKED:/);
-    if (mode === 'build') {
+    if (mode !== 'prerequisite') {
       const build = outcome.calls.find(c => c.arguments[0] === 'build');
       assert.equal(existsSync(build.arguments.at(-1)), false, 'Failed build context is removed');
       const log = outcome.stdout.match(/Diagnostics: (.+)\r?$/m)[1].trim();
       assert.match(await fs.readFile(log, 'utf8'), /Synthetic image build diagnostic/);
+      assert.equal(outcome.summary.imageCleanup.status, 'PASS');
+      assert.equal(outcome.calls.filter(c => c.arguments[0] === 'image' && c.arguments[1] === 'remove').length, 1);
     }
+    else assert.equal(outcome.summary.imageCleanup.status, 'NOT RUN');
   }
 });
 
@@ -456,6 +482,54 @@ test('pipeline interruption still exports logs, removes the active container and
   assert.equal(report.actualExitCode, 2);
   assert.match(report.environment.detail, /interrupted/);
   for (const name of ['container.log', 'fixture-first.png', 'diagnostics/web.log']) assert.equal(existsSync(path.join(directory, name)), true);
+  assert.equal(outcome.summary.imageCleanup.status, 'PASS');
+  assert.deepEqual(outcome.calls.at(-1).arguments, ['image', 'remove', '--no-prune', outcome.summary.imageCleanup.image]);
+});
+
+test('concurrent identical invocations remove only their own image tags', async t => {
+  const f = await fixture(t), customRoot = path.join(f.directory, 'concurrent exports');
+  const outcomes = await Promise.all([f.launch({ customRoot }), f.launch({ customRoot })]);
+  const images = outcomes.map(outcome => {
+    assert.equal(outcome.code, 0, outcome.stdout + outcome.stderr);
+    const build = outcome.calls.find(c => c.arguments[0] === 'build').arguments;
+    const image = build[build.indexOf('--tag') + 1];
+    assert.match(image, /^asap-acceptance:[a-f0-9]{40}-[a-f0-9]{16}-[a-f0-9]{32}$/);
+    assert.deepEqual(outcome.calls.filter(c => c.arguments[0] === 'image').map(c => c.arguments),
+      [['image', 'remove', '--no-prune', image]]);
+    assert.equal(outcome.summary.imageCleanup.status, 'PASS');
+    assert.ok(!outcome.calls.some(c => c.arguments.includes('prune') || c.arguments.includes('system')));
+    return image;
+  });
+  assert.notEqual(images[0], images[1]);
+});
+
+test('image cleanup failures block the invocation without hiding suite evidence or functional failures', async t => {
+  const f = await fixture(t), customRoot = path.join(f.directory, 'image cleanup failure');
+  for (const mode of ['image-cleanup', 'image-unavailable', 'failed-image-cleanup']) {
+    const outcome = await f.launch({ customRoot, mode });
+    assert.equal(outcome.code, 2, outcome.stdout + outcome.stderr);
+    assert.equal(outcome.summary.imageCleanup.status, 'BLOCKED');
+    assert.match(outcome.summary.detail, /wslc image remove --no-prune asap-acceptance:/);
+    assert.equal(outcome.summary.suites[0].Status, mode === 'failed-image-cleanup' ? 'FAIL' : 'PASS');
+    assert.equal(existsSync(path.join(outcome.artifactPath, 'fixture-first.png')), true);
+    assert.equal(existsSync(path.join(outcome.artifactPath, 'container.log')), true);
+    const removal = outcome.calls.find(c => c.arguments[0] === 'image' && c.arguments[1] === 'remove');
+    assert.ok(!removal.arguments.includes('--force'));
+    assert.deepEqual(outcome.calls.at(-1).arguments,
+      ['image', 'list', '--filter', 'reference=' + outcome.summary.imageCleanup.image, '--quiet']);
+  }
+});
+
+test('interrupted image builds clean up their own tag and context without starting suites', async t => {
+  const f = await fixture(t), customRoot = path.join(f.directory, 'interrupted build');
+  const outcome = await f.launch({ customRoot, mode: 'build-interrupt', selection: 's1,d1', interrupt: true });
+  assert.equal(outcome.code, 2, outcome.stdout + outcome.stderr);
+  assert.deepEqual(outcome.summary.suites.map(s => s.Status), ['NOT RUN', 'NOT RUN']);
+  assert.equal(outcome.summary.imageCleanup.status, 'PASS');
+  const build = outcome.calls.find(c => c.arguments[0] === 'build').arguments;
+  assert.equal(existsSync(build.at(-1)), false);
+  assert.ok(!outcome.calls.some(c => c.arguments[0] === 'run'));
+  assert.equal(outcome.calls.filter(c => c.arguments[0] === 'image' && c.arguments[1] === 'remove').length, 1);
 });
 
 test('atomic allocation handles simultaneous identical timestamps without modifying existing evidence', async t => {

@@ -5,11 +5,12 @@
 ```
 
 Run directly from PowerShell 7 in a current local tooling checkout. The command
-resolves the application once, builds or reuses one acceptance image, then runs
+resolves the application once, builds one invocation-owned acceptance image, then runs
 exactly the requested suites once each in caller order. Each suite starts its own
 disposable container and fresh SQL Server 2022 database, authenticates a synthetic
 staff user locally, and runs Chromium/Playwright automatically. Containers are
-removed between suites; SQL state is never shared. No configuration file or
+removed between suites; SQL state is never shared. The image is removed after
+the invocation's final container teardown. No configuration file or
 browser interaction is needed.
 
 ## Prerequisites
@@ -58,8 +59,10 @@ tooling checkout. `-Commit` selects a Git commit; the two selectors are exclusiv
 Omitting both selectors tests resolved `HEAD`. The default suite is `smoke`;
 no smoke or extra repetitions are added to an explicit selection. Add `smoke`
 explicitly when useful, for example `-Suite smoke,s1,d1,q1`. `-Rebuild` forces
-one shared build with `--no-cache`, rather than one build per suite. Cached image
-identity still includes the application SHA, tooling SHA, dirty state and digest.
+one shared build with `--no-cache`, rather than one build per suite. Normal builds
+reuse BuildKit layers, not a retained finished-image tag. Each tag includes the
+application SHA, tooling digest and a unique invocation ID so concurrent runs
+cannot remove each other's image. Full tooling SHA/dirty state remain in metadata.
 
 All suites are validated against `tests/acceptance/suites/registry.json` in the
 local checkout before resolution or execution. Empty, unsafe, duplicate
@@ -103,9 +106,21 @@ are also copied into suites that start. A failed shared prerequisite/build
 marks all unstarted suites NOT RUN and prints its diagnostic path without
 inventing suite execution evidence. Ordinary suite failures/blockers continue
 to the next suite; an unconfirmed container cleanup stops later starts.
-The launcher removes the container after success, failure or interruption.
-A forced termination of the launcher process itself
-may require `wslc remove --force <printed-container-name>`.
+The launcher removes each container after success, failure or interruption, then
+removes only its own image tag after all suite teardown, including failed or
+interrupted builds. Image removal is never forced. Cleanup failures make the
+invocation BLOCKED (exit 2), retain suite outcomes and evidence, and print the exact
+recovery command. `invocation-<id>.json` records `imageCleanup` separately from
+suite results. A forced termination of the launcher process itself may require
+`wslc remove --force <printed-container-name>` followed by
+`wslc image remove --no-prune <printed-image-tag>`.
+
+This does not prune shared build cache, base images, historical acceptance tags,
+or other workloads. Shared layers remain while referenced. BuildKit can retain
+unreferenced build records, so removing a tag does not guarantee all its layers
+are freed. Previously accumulated cache/images require separate deliberate
+maintenance; reclaiming free space inside WSLC does not automatically compact
+the Windows VHDX. The launcher never shuts down WSL or compacts its disks.
 
 Default artifacts survive worktree deletion. Historical runs remain until you
 explicitly delete them; earlier artifacts under `.artifacts/acceptance/` in
@@ -149,8 +164,9 @@ The final SQL Server 2022 CU27 Ubuntu 22.04 image contains ASP.NET Core 10.0.13,
 Node 24, the locked npm dependencies and matching Playwright/Chromium binaries.
 It contains no SDK, real configuration, credentials or initialized database.
 Dependency/browser layers remain reusable when application or tooling changes.
-Image tags include application SHA, tooling SHA and a tooling content digest;
-working changes cannot silently reuse an older image.
+Image tags include application SHA, tooling content digest and invocation ID;
+working changes cannot silently reuse an older image. Build layers remain reusable
+after the invocation-owned tag is removed.
 
 The Bash entrypoint generates local secrets and configuration, starts SQL on
 localhost, waits for an authenticated connection, runs the existing initializer,
