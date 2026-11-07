@@ -288,11 +288,12 @@ public sealed partial class PatronJourneyTests
                 SET IDENTITY_INSERT [asap].[EmailDeliveryEvent] OFF;
                 """, ("@operation", operationId), ("@event", eventId), ("@request", source.Id));
             var detail = await ReadActivityDetailAsync(await ReadConfiguredSuperAdminAsync(), source.Id);
-            CollectionAssert.AreEqual(new[] { $"email_event:{eventId + 1}", $"email_event:{eventId}", $"request_event:{eventId}", $"request_event:{eventId + 1}" },
-                detail.Activity.Select(ActivityIdentity).ToArray());
+            CollectionAssert.AreEqual(new[] { $"request_event:{eventId + 1}", $"request_event:{eventId}", $"email_event:{eventId}", $"email_event:{eventId + 1}" },
+                detail.Activity.Select(ActivityIdentity).ToArray(), "The API remains chronological with exact inverse source/ID ties for newest-first display.");
             Assert.AreEqual(4, detail.Activity.Select(ActivityIdentity).Distinct().Count());
-            Assert.AreEqual(2L, detail.Activity[0].Created.Ticks % TimeSpan.TicksPerSecond);
-            Assert.AreEqual(operationId.ToString(CultureInfo.InvariantCulture), detail.Activity[0].Email!.OperationReference);
+            Assert.AreEqual(0L, detail.Activity[0].Created.Ticks % TimeSpan.TicksPerSecond);
+            Assert.AreEqual(2L, detail.Activity[^1].Created.Ticks % TimeSpan.TicksPerSecond);
+            Assert.AreEqual(operationId.ToString(CultureInfo.InvariantCulture), detail.Activity[^1].Email!.OperationReference);
             var json = JsonSerializer.Serialize(detail);
             StringAssert.Contains(json, "\"OperationReference\":\"9007199254740997\"");
             StringAssert.Contains(json, "2026-01-01T00:00:00.0000002Z");

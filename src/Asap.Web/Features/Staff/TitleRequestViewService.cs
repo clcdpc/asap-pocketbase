@@ -464,8 +464,9 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
                     item.ActorName,
                     item.Message,
                     AsUtc(item.CreatedUtc))).Concat(emailActivity)
-                    .OrderByDescending(item => item.Created).ThenBy(item => item.Source, StringComparer.Ordinal)
-                    .ThenByDescending(item => long.Parse(item.Id, CultureInfo.InvariantCulture)).ToArray() : [])
+                    // Preserve chronological API order; display uses the inverse source/ID ties.
+                    .OrderBy(item => item.Created).ThenByDescending(item => item.Source, StringComparer.Ordinal)
+                    .ThenBy(item => long.Parse(item.Id, CultureInfo.InvariantCulture)).ToArray() : [])
             {
                 CustomFieldsValid = customFieldsValid,
                 Research = research with { PatronId = request.PatronIdSnapshot is > 0 ? request.PatronIdSnapshot : null },

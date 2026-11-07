@@ -175,8 +175,10 @@ async function main() {
   async function assertActivity(page, profile = 'superAdmin') {
     const expected = fixture.expectedActivity[profile];
     assert.deepEqual(await activityRows(page).evaluateAll(rows => rows.map(row => row.dataset.activityId)),
-      fixture.expectedOrdering, `${profile}: actual SQL chronology is preserved across sources and exact IDs`);
-    assert.equal(new Set(fixture.expectedOrdering).size, fixture.expectedOrdering.length);
+      fixture.expectedDisplayOrdering, `${profile}: display reverses authoritative SQL chronology across sources and exact IDs`);
+    assert.deepEqual(expected.map(item => `${item.source}:${item.id}`), fixture.expectedApiOrdering);
+    assert.deepEqual([...fixture.expectedApiOrdering].reverse(), fixture.expectedDisplayOrdering);
+    assert.equal(new Set(fixture.expectedDisplayOrdering).size, fixture.expectedDisplayOrdering.length);
     for (const entry of expected) {
       const row = activity(page).locator(`[data-activity-id="${entry.source}:${entry.id}"]`);
       assert.equal(await row.count(), 1, `${entry.source}:${entry.id}`);
@@ -523,7 +525,7 @@ async function main() {
       await page.setViewportSize({ width, height: width === 1280 ? 720 : 900 });
       await page.emulateMedia({ colorScheme: theme });
       await twoFrames(page);
-      assert.deepEqual(await activityRows(page).evaluateAll(rows => rows.map(row => row.dataset.activityId)), fixture.expectedOrdering);
+      assert.deepEqual(await activityRows(page).evaluateAll(rows => rows.map(row => row.dataset.activityId)), fixture.expectedDisplayOrdering);
       assert.equal(await page.locator(`#request-${primary}-activity-tab`).getAttribute('aria-selected'), 'true');
       await scan(page, `${theme}-${width}`, { mobile: width === 390, desktop: width === 1280 });
       assert.deepEqual(await recoveryIdentity(page), retained);
