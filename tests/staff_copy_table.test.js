@@ -5,6 +5,7 @@ const { fixture } = require('./helpers/staff-controller.cjs');
 (async () => {
   await fixture(async ({ load, get, dom }) => {
     const { createSessionIdentity } = await load('session-identity');
+    const { createClaimsFilter } = await load('claims-filter');
     const { createCopyQueue } = await load('queues');
     const session = createSessionIdentity();
     const staff = { id: '20', tenantId: 'a', authenticationEmail: 'a@example.org', role: 'super_admin', organizationId: 1 };
@@ -39,7 +40,7 @@ const { fixture } = require('./helpers/staff-controller.cjs');
       research: { leapBibUrlPattern: 'https://catalog.example.org/bib/{{bibid}}' }
     })).reverse();
     const opened = [], urls = [];
-    const queue = createCopyQueue({ root: get('#additional-copy-view'), sessionIdentity: session, getContext: () => context,
+    const queue = createCopyQueue({ root: get('#additional-copy-view'), sessionIdentity: session, claimsFilter: createClaimsFilter({ sessionIdentity: session }), getContext: () => context,
       announce() {}, onOpen: (...args) => opened.push(args), onScopeIntent() {}, onStatusIntent() {},
       onScopeAccepted() {}, onLibraries() {}, onRefreshed() {}, onRendered() {},
       recovery: { current: () => null, begin: () => null, loaded: () => false },
@@ -56,7 +57,7 @@ const { fixture } = require('./helpers/staff-controller.cjs');
       await until(() => button() !== previous, 'Search replaces the accepted rows');
     };
     try {
-      queue.setStaff(staff); await queue.refresh();
+      queue.setStaff(session.preferences()); await queue.refresh();
       await until(() => button(), 'Real Grid.js renders copy tasks');
       assert.equal(rows().length, 25);
       assert.deepEqual([...get('#additional-copy-grid').querySelectorAll('th')].map(n => n.querySelector('.gridjs-th-content').textContent),

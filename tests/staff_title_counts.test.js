@@ -11,6 +11,7 @@ const records = totals => totals.flatMap((total, index) => Array.from({ length: 
   await fixture(async ({ load, get, dom }) => {
     const { createTitleQueue } = await load('queues');
     const { createSessionIdentity } = await load('session-identity');
+    const { createClaimsFilter } = await load('claims-filter');
     const identity = createSessionIdentity(); identity.accept(staff);
     let context = { activeView: 'queue', scope: '2', status: 'suggestion' };
     const calls = [], notices = [];
@@ -22,7 +23,7 @@ const records = totals => totals.flatMap((total, index) => Array.from({ length: 
       }
       render() {} destroy() {}
     } };
-    const options = { root: get('#queue-view'), sessionIdentity: identity, getContext: () => context,
+    const options = { root: get('#queue-view'), sessionIdentity: identity, claimsFilter: createClaimsFilter({ sessionIdentity: identity }), getContext: () => context,
       announce: message => notices.push(message), onOpen() {}, onScopeIntent() {}, onStatusIntent() {},
       onScopeAccepted: scope => changeScope(scope), onLibraries() {}, onRefreshed() {}, onRendered() {},
       request: (url, init) => { const pending = deferred(); calls.push({ url, init, ...pending }); return pending.promise; } };
@@ -42,7 +43,7 @@ const records = totals => totals.flatMap((total, index) => Array.from({ length: 
     };
     const reply = (totals, scope = context.scope, call = calls.at(-1)) => call.resolve({ scope, items: records(totals), organizations: [] });
     try {
-      queue.setStaff(staff); unavailable();
+      queue.setStaff(identity.preferences()); unavailable();
       const initial = queue.refresh(); unavailable(true);
       reply([31, 2, 1, 1, 0]); assert.equal(await initial, true); counts([31, 2, 1, 1, 0]);
       assert.equal(tabs()[4].querySelector('.status-count').classList.contains('quiet'), true);
@@ -90,7 +91,7 @@ const records = totals => totals.flatMap((total, index) => Array.from({ length: 
 
       const actorRead = queue.refresh(); const actorCall = calls.at(-1);
       const replacement = { ...staff, id: '21', role: 'staff', organizationId: 3 };
-      identity.accept(replacement); queue.setStaff(replacement); unavailable();
+      identity.accept(replacement); queue.setStaff(identity.preferences()); unavailable();
       prepared.accept(); unavailable();
       reply([90, 0, 0, 0, 0], '2', actorCall); assert.equal(await actorRead, false); unavailable();
       const foreign = queue.refresh(); reply([0, 0, 0, 0, 0], 'all');
@@ -101,10 +102,10 @@ const records = totals => totals.flatMap((total, index) => Array.from({ length: 
       const signoutRead = queue.refresh(); const signoutCall = calls.at(-1);
       queue.signedOut(); identity.clear(); unavailable();
       reply([80, 0, 0, 0, 0], '3', signoutCall); assert.equal(await signoutRead, false); unavailable();
-      identity.accept(replacement); queue.setStaff(replacement); unavailable();
+      identity.accept(replacement); queue.setStaff(identity.preferences()); unavailable();
       const reentry = queue.refreshOnEntry(); reply([0, 0, 0, 0, 0]); assert.equal(await reentry, true); counts([0, 0, 0, 0, 0]);
 
-      queue.dispose(); queue = createTitleQueue(options); queue.setStaff(replacement); unavailable();
+      queue.dispose(); queue = createTitleQueue(options); queue.setStaff(identity.preferences()); unavailable();
       assert.ok(tabs().every(tab => tab.querySelectorAll('.status-count').length === 1), 'Owner replacement keeps one label/count.');
     } finally { queue.dispose(); }
   });
