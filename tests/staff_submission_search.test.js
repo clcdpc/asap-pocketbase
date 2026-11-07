@@ -110,13 +110,13 @@ async function setup(run) {
     const count = calls.length; completion.resolve(false); await tick();
     assert.equal(calls.length, count, 'an obsolete detail rejection cannot restart a newer scoped search');
     calls[2].resolve({ ...response('needle', '3', 37), pageSize: 25 }); await tick();
-    get('#search-results-scope').value = '2'; get('#search-results-scope').dispatchEvent(new dom.window.Event('change'));
-    calls[3].resolve({ ...response('needle', '2', 37), pageSize: 25 }); await tick();
-    get('#search-view [data-search="next"]').click(); calls[4].resolve({ ...response('needle', '2', 37), page: 2, pageSize: 25 }); await tick();
-    search.open(); calls[5].resolve(response('needle', '2', 37)); await tick();
-    search.close(); assert.equal(calls[6].init.body.pageSize, 25, 'closing preview over full results restores full-page contract');
-    assert.equal(calls[6].init.body.page, 2, 'preview does not replace a retained full-results page');
-    calls[6].resolve({ ...response('needle', '2', 37), page: 2, pageSize: 25 }); await tick();
+    get('#search-view [data-search="next"]').click(); calls[3].resolve({ ...response('needle', '3', 37), page: 2, pageSize: 25 }); await tick();
+    search.open(); assert.equal(calls[4].init.body.scope, '3', 'full results own their selected scope when reopening preview');
+    calls[4].resolve(response('needle', '3', 37)); await tick();
+    search.close(); assert.equal(calls[5].init.body.pageSize, 25, 'closing preview over full results restores full-page contract');
+    assert.equal(calls[5].init.body.page, 2, 'preview does not replace a retained full-results page');
+    assert.equal(calls[5].init.body.scope, '3', 'closing preview preserves explicit full-results scope');
+    calls[5].resolve({ ...response('needle', '3', 37), page: 2, pageSize: 25 }); await tick();
   });
   await setup(async ({ search, calls, get, key, opened, type }) => {
     search.open(); calls[0].resolve(response()); await tick(); type('needle'); await tick();
@@ -127,6 +127,33 @@ async function setup(run) {
     assert.match(get('#search-option-0').textContent, /Exact copy/);
     key('ArrowDown'); key('Enter'); await tick();
     assert.equal(opened[0].type, 'copy', 'group presentation follows the server-ranked first result');
+  });
+  await fixture(async ({ load, get, dom }) => {
+    const { createSubmissionSearch } = await load('search'), http = await load('http');
+    const { createSessionIdentity } = await load('session-identity');
+    const identity = createSessionIdentity(); identity.accept(staff);
+    const originalFetch = global.fetch, delayed = pending();
+    let currentStaff = staff, controller, invalidations = 0, posted = false;
+    global.fetch = async (url, options = {}) => {
+      if (url.endsWith('/session')) return { ok: true, status: 200, json: async () => ({ authenticated: true,
+        accessAllowed: true, staff: currentStaff, antiforgeryToken: 'token' }) };
+      assert.equal(url, '/api/asap/staff/search'); assert.equal(options.method, 'POST'); assert.equal(options.cache, 'no-store');
+      const body = JSON.parse(options.body); if (!body.query) return { ok: true, status: 200, json: async () => response() };
+      posted = true; await delayed.promise;
+      return { ok: true, status: 200, json: async () => response(body.query, '2', 1, 'Old account private result') };
+    };
+    const unsubscribe = http.onSessionInvalid(() => { invalidations++; controller.signedOut(); identity.clear(); });
+    try {
+      await http.loadStaffSession();
+      controller = createSubmissionSearch({ dialog: get('#search-dialog'), view: get('#search-view'), launcher: get('#search-asap'),
+        sessionIdentity: identity, getScope: () => '2', openResult() {}, openAll() {}, announce() {}, debounceMs: 10 });
+      controller.open(); await tick();
+      const input = get('#search-quick-input'); input.value = 'private'; input.dispatchEvent(new dom.window.Event('input')); await tick();
+      assert.equal(posted, true); currentStaff = { ...staff, id: '21' }; delayed.resolve(); await tick();
+      assert.equal(invalidations, 1, 'read-only POST rechecks session after its response');
+      assert.equal(identity.actor(), null); assert.equal(input.value, ''); assert.equal(get('#search-dialog').open, false);
+      assert.doesNotMatch(get('#search-suggestions').textContent, /Old account/);
+    } finally { controller?.dispose(); unsubscribe(); global.fetch = originalFetch; }
   });
   console.log('Submission search controller: debounce, states, literal DOM, stale query/scope/page/session, keyboard and full results passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

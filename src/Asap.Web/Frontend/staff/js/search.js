@@ -182,7 +182,7 @@ export function createSubmissionSearch({ dialog, view, launcher, detailLauncher,
     if (competing.length && !(competing.length === 1 && detailHost?.contains(source))) return false;
     resumeDetail = competing.length ? detailHost.suspendForSearch() : null;
     opener = source;
-    const operationalScope = getScope();
+    const operationalScope = active ? scope : getScope();
     if (operationalScope && operationalScope !== 'system' && operationalScope !== '1' && operationalScope !== scope) {
       scope = operationalScope; group = ''; page = 1;
     }
@@ -216,6 +216,7 @@ export function createSubmissionSearch({ dialog, view, launcher, detailLauncher,
   render();
   return {
     open, close, refresh: () => replaceLoad(),
+    dismissForNavigation() { if (dialog.open) close(); },
     activate() { active = true; replaceLoad(); },
     deactivate() { active = false; retire(); },
     invalidate() { close({ restoreFocus: false, refreshFull: false }); clearResults(); state = normalize(query) ? 'loading' : 'idle'; render(); },

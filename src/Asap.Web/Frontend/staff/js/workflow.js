@@ -32,6 +32,7 @@ export function createWorkflowApp() {
   const polarisLookup = createPolarisLookup({ authorizedJson, isAbortError, announce, sessionIdentity, onReceipt, clearReceipt });
   const analytics = createAnalyticsController({ root: get('#analytics-container'), sessionIdentity });
   const navigation = createNavigationController({ router, sessionIdentity, detailHost, announce,
+    beforeDeparture: () => search.dismissForNavigation(),
     present: shell.presentView,
     onInvalidate: () => {
       titleDetail.invalidate(); copyDetail.invalidate(); titleQueue.invalidate(); copyQueue.invalidate();

@@ -6,7 +6,7 @@ const titleStages = ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold
 
 // Ports describe owner policies and lifecycle. Navigation never inspects forms.
 export function createNavigationController({ router, sessionIdentity, detailHost, getFeatures, views,
-  announce, present, closeTransient, onInvalidate, onContextChanged, request = authorizedJson }) {
+  announce, present, closeTransient, onInvalidate, onContextChanged, beforeDeparture = () => {}, request = authorizedJson }) {
   let context = Object.freeze({ scope: 'all', status: 'suggestion', additionalCopyStatus: 'open', activeView: 'queue' });
   let generation = 0;
   let disposed = false;
@@ -51,6 +51,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
   // Consent is evidence about these owners and drafts, never an early discard.
   // The opaque handle is single-use; even commit re-inspects pending commands.
   async function prepareDeparture(options = {}) {
+    beforeDeparture();
     options = { ...options };
     const source = context, ticket = generation, actor = sessionIdentity.actor(), revision = ++departureRevision;
     const inspections = inspect(options);

@@ -108,8 +108,10 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await command('readOnly');
     for (const name of ['analytics', 'operations', 'settings', 'profile', 'additional-copies', 'queue']) {
       await page.locator(name === 'profile' ? '#profile-button' : `.view-tab[data-view="${name}"]`).click();
+      if (name === 'operations') { await page.locator('#operations-view').waitFor(); await page.emulateMedia({ colorScheme: 'dark' }); await scan(page, 'search-launcher-dark-operations'); }
       await open(page); await search(page, 'Ada   O\'Brien'); assert.match(await summary(page).textContent(), /2 matching/);
       await close(page); assert.equal(await page.locator('#search-asap').evaluate(node => node === document.activeElement), true);
+      if (name === 'operations') await page.emulateMedia({ colorScheme: 'light' });
     }
     await open(page); await search(page, 'Éloïse author'); assert.match(await summary(page).textContent(), /5 matching/); await close(page);
     await open(page); await search(page, 'EXACT-BARCODE');
@@ -125,7 +127,20 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 
     await page.locator('.view-tab[data-view="settings"]').click();
     await page.locator('#settings-nav-patron').click();
+    // Make Back a real departure from Settings rather than a safe, same-owner
+    // Settings-section traversal, which correctly preserves drafts without consent.
+    await page.locator('.view-tab[data-view="queue"]').click();
+    await page.locator('.view-tab[data-view="settings"]').click();
     const note = page.locator('#patron-login-note'); await note.fill('Private unsaved search draft');
+    await open(page); await search(page, 'EXACT-BARCODE');
+    await decideConfirmation(page, () => page.goBack(), async decision => {
+      assert.equal(await dialog(page).isVisible(), false, 'history retires quick search before consent');
+      assert.equal(await page.locator('dialog[open]').count(), 1, 'only the discard decision owns the top layer');
+      await decision.dismiss();
+    });
+    await page.waitForFunction(() => new URL(location.href).searchParams.get('stage') === 'settings');
+    assert.equal(await note.inputValue(), 'Private unsaved search draft');
+    assert.equal(await page.locator('#search-asap').evaluate(node => node === document.activeElement), true);
     await open(page); await search(page, 'EXACT-BARCODE');
     await decideConfirmation(page, () => page.locator('#search-option-0').click(), decision => decision.dismiss());
     assert.equal(await note.inputValue(), 'Private unsaved search draft');
@@ -141,6 +156,15 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.equal(await page.locator('#search-results-input').inputValue(), 'needle');
     await page.locator('#search-view [data-search="next"]').click();
     await page.waitForFunction(() => document.querySelector('#search-view [data-search="page"]').textContent === 'Page 2 of 2');
+    await page.locator('#search-results-scope').selectOption(fixture.otherLibrary);
+    await page.waitForFunction(() => /1 matching/.test(document.querySelector('#search-view [data-search="summary"]').textContent));
+    await open(page); await search(page, 'needle');
+    assert.equal(await page.locator('#search-quick-scope').inputValue(), fixture.otherLibrary);
+    await close(page);
+    await page.waitForFunction(() => /1 matching/.test(document.querySelector('#search-view [data-search="summary"]').textContent));
+    assert.equal(await page.locator('#search-results-scope').inputValue(), fixture.otherLibrary);
+    await page.locator('#search-results-scope').selectOption(fixture.library);
+    await page.waitForFunction(() => /36 matching/.test(document.querySelector('#search-view [data-search="summary"]').textContent));
     await page.locator('#search-result-filter').selectOption('copy:closed');
     await page.waitForFunction(() => document.querySelector('#search-view [data-search="list"]').children.length === 1);
     assert.match(await page.locator('#search-view [data-search="summary"]').textContent(), /1 matching/);

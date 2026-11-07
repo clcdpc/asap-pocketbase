@@ -43,10 +43,13 @@ The current-tab filters and their independent workflow totals remain separate.
   no nested interactive controls; Tab reaches normal dialog controls. Escape
   restores the launcher. An explicit Search button in title/copy details can
   reversibly suspend their host without unmounting drafts.
+  The header owns its contrast independently of the current view's palette.
 - Search loads bind query/scope/filter/page/mode to a session and revision;
   replacement/close/navigation/sign-out aborts and rejects stale success/failure.
   Full results keep query/scope in session memory under `stage=search`; reloading
   starts idle. No search recents are retained.
+  Reopening quick search from full results retains that view's explicit scope,
+  filter and page. Other views initialize from their operational scope.
   Replacing that context also cancels in-flight search detail preparation and
   invalidates its departure consent, including changes made in the source view.
 - Selection carries typed native ID, accepted scope and session owner to existing
@@ -55,6 +58,8 @@ The current-tab filters and their independent workflow totals remain separate.
   or denied details preserve the source and show recoverable feedback; subsequent
   preview/full refresh re-reads results. Full-results detail history returns to
   the retained results view through the normal guarded traversal.
+  Navigation retires an open quick dialog before gathering departure consent,
+  including browser history traversal, without unmounting source drafts.
 
 Real SQL query plans and measured costs, independent review findings, exact-head
 CI/acceptance receipts and integration checkpoints belong in the PR. Raw receipts

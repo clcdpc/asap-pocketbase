@@ -101,8 +101,10 @@ button, a, input, select, textarea { outline-offset: 3px; }
 .brand strong { font-size: 1.28rem; }
 .brand small { margin-top: 3px; color: #e7f4fa; font-size: .76rem; }
 .session-actions { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.header-search { white-space: nowrap; }
-.header-search kbd { margin-left: 6px; font-size: .72rem; opacity: .8; }
+.app-header .header-search { white-space: nowrap; color: #fff; background: transparent; border-color: #d0e4ed; }
+.app-header .header-search:hover { color: #17212b; background: #fff; }
+.header-search:focus-visible { outline-color: #ffe089; }
+.header-search kbd { margin-left: 6px; font-size: .72rem; }
 #staff-identity { max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-work { position: relative; color: var(--ink); }
 .recent-work summary { min-height: 40px; padding: 9px 12px; color: #fff; border: 1px solid rgba(255,255,255,.65); border-radius: 4px; cursor: pointer; white-space: nowrap; }
