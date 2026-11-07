@@ -290,6 +290,18 @@ test('read-only mode rejects accidental writes of every method and skips require
   assert.equal(skipped.report.scenarios[0].status, 'NOT RUN'); assert.equal(exitCode(skipped.report), 2);
 });
 
+test('read-only Search POST is narrowly exempt without admitting writes or remote requests', async t => {
+  const search = await dispatchProbe(t, { readOnly: true, path: '/api/asap/staff/search' });
+  assert.equal(search.dispatched, 1); assert.equal(search.aborted, 0);
+  assert.deepEqual(search.metadata, []); assert.equal(search.report.scenarios[0].status, 'PASS');
+  for (const input of [{ path: '/api/asap/staff/search/action' }, { path: '/api/asap/staff/search/' },
+    { path: '/api/asap/staff/search', method: 'DELETE' },
+    { path: 'https://example.org/api/asap/staff/search' }]) {
+    const rejected = await dispatchProbe(t, { readOnly: true, ...input });
+    assert.equal(rejected.dispatched, 0); assert.equal(rejected.aborted, 1);
+  }
+});
+
 test('existing frontend/browser entry points and full CI guard remain; artifacts are Git ignored', async () => {
   // Preserve the current main baseline, including its discovery/reuse guards.
   for (const file of ['package.json', 'tests/browser/run.cjs', 'scripts/ci/selection.py']) {
@@ -383,6 +395,10 @@ test('registered suites match discovered modules and retain their mutation bound
   assert.equal(registry.smoke.mutations, true);
   assert.equal(registry.s1.mutations, false);
   assert.equal(registry.s1.scenarios.length, 6);
+  assert.equal(registry.i467.id, 'i467');
+  assert.equal(registry.i467.mutations, false);
+  assert.equal(registry.i467.scenarios.length, 7);
+  assert.ok(registry.i467.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));
   assert.ok(registry.s1.scenarios.every(scenario => scenario.writes === false));
   assert.equal(registry.i390.id, 'i390');
   assert.equal(registry.i390.mutations, false);

@@ -18,6 +18,7 @@ import { createSettingsController } from './settings.js';
 import { createAnalyticsController } from './analytics.js';
 import { createPolarisLookup } from './research.js';
 import { disposeConfirmations } from './confirmation.js';
+import { createSubmissionSearch } from './search.js';
 
 export function createWorkflowApp() {
   const get = selector => document.querySelector(selector);
@@ -33,10 +34,12 @@ export function createWorkflowApp() {
   const polarisLookup = createPolarisLookup({ authorizedJson, isAbortError, announce, sessionIdentity, onReceipt, clearReceipt });
   const analytics = createAnalyticsController({ root: get('#analytics-container'), sessionIdentity });
   const navigation = createNavigationController({ router, sessionIdentity, detailHost, announce,
+    beforeDeparture: () => search.dismissForNavigation(),
     present: shell.presentView,
     onInvalidate: () => {
       titleDetail.invalidate(); copyDetail.invalidate(); titleQueue.invalidate(); copyQueue.invalidate();
       suggestion.invalidate(); operations.invalidate();
+      search.invalidate();
     },
     closeTransient: () => {
       if (detailHost.isOpen()) detailHost.requestClose({ navigation: true, guarded: true });
@@ -76,10 +79,10 @@ export function createWorkflowApp() {
         refresh: options => copyQueue.refresh(options), render: () => copyQueue.render(),
         prepare: context => copyQueue.prepare(context),
         isReady: context => copyQueue.isReady(context),
-        prepareDetail: id => copyDetail.prepare(id), presentDetail: (target, options, ticket) => copyDetail.present(target, null, options, ticket),
+        prepareDetail: (id, options) => copyDetail.prepare(id, options), presentDetail: (target, options, ticket) => copyDetail.present(target, null, options, ticket),
         refreshOnEntry: options => copyQueue.refreshOnEntry(options), setLibraries: libraries => populateScopes(libraries),
         resetFilters: () => copyQueue.resetFilters(),
-        openDetail: id => copyDetail.open(id, null, { fromDeepLink: true }),
+        openDetail: (id, opener, options = { fromDeepLink: true }) => copyDetail.open(id, opener, options),
         closeOverlay: () => detailHost.isOpen() ? detailHost.requestClose() : suggestion.isOpen() ? suggestion.close() : null
       },
       settings: { activate: options => { void settings.activate(options.panel); }, deactivate: () => settings.suspend(),
@@ -91,7 +94,8 @@ export function createWorkflowApp() {
         refresh: options => operations.refresh(options), refreshOnEntry: () => operations.refresh() },
       profile: { activate: () => profile.activate(), deactivate: () => profile.deactivate() },
       analytics: { activate: () => analytics.activate(), deactivate: () => analytics.deactivate(),
-        refresh: () => analytics.refresh(), refreshOnEntry: () => analytics.refresh() }
+        refresh: () => analytics.refresh(), refreshOnEntry: () => analytics.refresh() },
+      search: { activate: () => search.activate(), deactivate: () => search.deactivate() }
     }
   });
 
@@ -214,7 +218,14 @@ export function createWorkflowApp() {
       }
     }
   });
-  const features = [bulk, suggestion, titleDetail, copyCreation, copyDetail, detailHost, polarisLookup,
+  const search = createSubmissionSearch({ dialog: get('#search-dialog'), view: get('#search-view'), launcher: get('#search-asap'),
+    detailLauncher: get('#detail-search-asap'), detailHost, sessionIdentity, announce,
+    getScope: () => navigation.context().activeView === 'settings' ? settings.currentScope()
+      : navigation.context().activeView === 'operations' ? operations.currentScope()
+        : navigation.context().activeView === 'analytics' ? analytics.currentScope() : navigation.context().scope,
+    canOpen: () => ![session, polarisLookup, titleDetail, copyDetail, suggestion, settings, operations].some(feature => feature.inspectDeparture?.().blocked),
+    openResult: navigation.openSearchResult, openAll: () => navigation.switchView('search') });
+  const features = [search, bulk, suggestion, titleDetail, copyCreation, copyDetail, detailHost, polarisLookup,
     operations, titleQueue, copyQueue, profile, settings, analytics];
   const session = createSessionCoordinator({ identity: sessionIdentity, shell, navigation, getFeatures: () => features,
     onAccepted: staff => navigation.align({ scope: staff.role === 'super_admin' ? 'all' : String(staff.organizationId) }),

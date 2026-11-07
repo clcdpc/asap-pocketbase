@@ -8,7 +8,8 @@ export const statusStages = Object.freeze([
   'settings',
   'analytics',
   'operations',
-  'profile'
+  'profile',
+  'search'
 ]);
 
 export const stageQueryMap = Object.freeze({
@@ -24,7 +25,8 @@ export const stageQueryMap = Object.freeze({
   settings: 'settings',
   operations: 'operations',
   analytics: 'analytics',
-  profile: 'profile'
+  profile: 'profile',
+  search: 'search'
 });
 
 export function readUrl(href) {

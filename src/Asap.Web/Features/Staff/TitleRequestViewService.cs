@@ -177,11 +177,12 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
         CurrentStaff staff,
         string id,
         CancellationToken cancellationToken,
-        LibraryScope? scope = null)
+        LibraryScope? scope = null,
+        bool searchResult = false)
     {
         try
         {
-            return await ReadRequestDetailAsync(staff, id, cancellationToken, scope);
+            return await ReadRequestDetailAsync(staff, id, cancellationToken, scope, searchResult);
         }
         catch (SqlException exception) when (cancellationToken.IsCancellationRequested && exception.Errors.Count > 0 &&
             exception.Errors.Cast<SqlError>().All(error => error.Number == 0 && error.Class == 11 && error.State == 0))
@@ -191,7 +192,7 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
     }
 
     private async Task<TitleRequestDto?> ReadRequestDetailAsync(
-        CurrentStaff staff, string id, CancellationToken cancellationToken, LibraryScope? scope)
+        CurrentStaff staff, string id, CancellationToken cancellationToken, LibraryScope? scope, bool searchResult)
     {
         cancellationToken.ThrowIfCancellationRequested();
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -225,10 +226,11 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
         staff = current.Staff;
         var request = await context.TitleRequests.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == requestId.Value && item.LibraryOrganizationId == requestOrganizationId.Value, cancellationToken);
+        // Search selects active libraries; ordinary All-scope details also serve durable recovery.
         if (request is null || !CanAccess(staff, request.LibraryOrganizationId) ||
             !await context.Organizations.AsNoTracking().AnyAsync(item =>
                 item.Id == request.LibraryOrganizationId && item.Id > LibraryScope.SystemOrganizationId &&
-                item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId,
+                item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && (!searchResult || item.IsActive),
                 cancellationToken))
         {
             return null;

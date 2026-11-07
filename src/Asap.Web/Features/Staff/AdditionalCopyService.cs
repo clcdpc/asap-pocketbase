@@ -141,7 +141,9 @@ public sealed class AdditionalCopyService(
         CurrentStaff actor,
         string id,
         string? claimClearedReason,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        LibraryScope? scope = null,
+        bool searchResult = false)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var requestId = await RequestLinkResolver.ResolveAsync(
@@ -156,6 +158,19 @@ public sealed class AdditionalCopyService(
         var request = await context.AdditionalCopyRequests.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == requestId.Value, cancellationToken);
         if (request is null || !CanAccess(actor, request.LibraryOrganizationId))
+        {
+            return null;
+        }
+        if (scope is { } selected && (selected.Kind == LibraryScopeKind.System ||
+            actor.Role == StaffRole.SuperAdmin && selected.Kind == LibraryScopeKind.Library &&
+                selected.OrganizationId != request.LibraryOrganizationId))
+        {
+            return null;
+        }
+        if ((searchResult || scope is { Kind: LibraryScopeKind.Library }) &&
+            !await context.Organizations.AsNoTracking().AnyAsync(item => item.Id == request.LibraryOrganizationId &&
+                item.Id > 1 && item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive,
+                cancellationToken))
         {
             return null;
         }

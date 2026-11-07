@@ -54,7 +54,10 @@ async function runScenarios({ suite, options, environment, browser, report, dire
       return route.abort('blockedbyclient');
     }
     const settingsReset = url.pathname === settingsResetPath;
-    if (settingsReset || !['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
+    // This exact endpoint is an authorized read carried by POST to keep private
+    // search terms out of URLs. No other route or method gains a write exemption.
+    const searchRead = request.method() === 'POST' && url.pathname === '/api/asap/staff/search';
+    if (settingsReset || !searchRead && !['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
       if (options.readOnly || !active) {
         guards.errors.push('Unexpected mutation blocked');
         return route.abort('blockedbyclient');

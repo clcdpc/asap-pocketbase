@@ -603,6 +603,7 @@ export function createAnalyticsController({ root: container, sessionIdentity }) 
   }
 
   return {
+    currentScope: () => selectedScope ? String(selectedScope) : null,
     inspectDeparture: () => ({
       owner: active ? JSON.stringify([selectedScope, editorRange, draftStartDate, draftEndDate]) : null,
       blocked: disposed, dirty: false

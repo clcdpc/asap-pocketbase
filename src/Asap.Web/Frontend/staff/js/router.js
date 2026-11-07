@@ -51,7 +51,7 @@ export function createRouter() {
     const marker = window.history.state?.asapStaff;
     const path = replaceStageUrl(window.location.href, stage, context);
     if (marker?.detailOrigin && marker.detailOrigin.index === marker.index - 1 &&
-        marker.detailOrigin.path === path) {
+        (marker.detailOrigin.path === path || requestedStatusFromUrl(new URL(marker.detailOrigin.path, window.location.href).href) === 'search')) {
       window.history.back();
       return true;
     }
@@ -167,7 +167,11 @@ export function createRouter() {
         if (closing) {
           closing = false;
           if (window.history.state?.asapStaff?.index === closingOrigin?.index &&
-              historyPath(readUrl()) === closingOrigin?.path) { remember(); return; }
+              historyPath(readUrl()) === closingOrigin?.path) {
+            if (requestedStatusFromUrl() === 'search') void onTraversal();
+            else remember();
+            return;
+          }
         }
         void onTraversal();
       }, { signal: events.signal });

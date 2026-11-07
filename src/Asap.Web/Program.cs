@@ -126,6 +126,7 @@ if (externalConfiguration is not null)
     builder.Services.AddSingleton<AdministrationService>();
     builder.Services.AddSingleton<AnalyticsService>();
     builder.Services.AddSingleton<TitleRequestViewService>();
+    builder.Services.AddSingleton<SubmissionSearchService>();
     builder.Services.AddSingleton<TitleRequestMutationService>();
     builder.Services.AddSingleton<AdditionalCopyService>();
     builder.Services.AddSingleton<StaffPickupService>();
@@ -218,6 +219,7 @@ if (externalConfiguration is not null)
     app.MapStaffLifecycleEndpoints();
     app.MapAdministrationEndpoints();
     app.MapTitleRequestEndpoints();
+    app.MapSubmissionSearchEndpoints();
     app.MapAdditionalCopyEndpoints();
     app.MapAnalyticsEndpoints();
     app.UseHangfireDashboard(
