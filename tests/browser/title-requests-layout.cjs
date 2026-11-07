@@ -19,7 +19,8 @@ const viewports = [
   { name: 'wide-3000', width: 3000, height: 1000 },
   { name: 'desktop-1440', width: 1440, height: 900 },
   { name: 'intermediate-900', width: 900, height: 900 },
-  { name: 'mobile-390', width: 390, height: 844 }
+  { name: 'mobile-390', width: 390, height: 844 },
+  { name: 'short-narrow-320x480', width: 320, height: 480 }
 ];
 
 const report = { viewportMatrix: [], resizeOnly: [], nativeZoom: [], external: [], errors: [], missingImages: [], scans: [] };
@@ -43,9 +44,30 @@ async function openStaffPage(page, fixture) {
   await page.locator('#request-grid .gridjs-wrapper').waitFor();
   await page.waitForFunction(() => document.querySelectorAll('#request-grid tbody .request-title-link').length === 2);
   await page.addScriptTag({ path: require.resolve('axe-core/axe.min.js') });
+  assert.equal(await page.getByRole('combobox', { name: 'Claims filter', exact: true }).count(), 1);
+  assert.equal(await page.getByRole('combobox', { name: 'Tag filter', exact: true }).count(), 1);
+  const search = page.locator('#request-search');
+  await search.focus(); await page.keyboard.press('Tab');
+  const claimFocus = await page.locator('#claim-filter').evaluate(node => ({
+    active: node === document.activeElement,
+    visible: node.matches(':focus-visible')
+  }));
+  assert.deepEqual(claimFocus, { active: true, visible: true }, 'Claims remains reachable with visible keyboard focus.');
+  await page.keyboard.press('Home');
+  assert.equal(await page.locator('#claim-filter').inputValue(), 'all', 'Claims accepts a native keyboard selection.');
+  await page.keyboard.press('Tab');
+  const tagFocus = await page.locator('#tag-filter').evaluate(node => ({
+    active: node === document.activeElement,
+    visible: node.matches(':focus-visible')
+  }));
+  assert.deepEqual(tagFocus, { active: true, visible: true }, 'Tag remains reachable with visible keyboard focus.');
+  await page.keyboard.press('Home');
+  assert.equal(await page.locator('#tag-filter').inputValue(), 'all', 'Tag accepts a native keyboard selection.');
 }
 
 async function selectStage(page, stage) {
+  assert.equal(await page.getByRole('combobox', { name: 'Claims filter', exact: true }).count(), 1);
+  assert.equal(await page.getByRole('combobox', { name: 'Tag filter', exact: true }).count(), 1);
   await page.locator(`#status-tabs [data-status="${stage}"]`).click();
   await page.waitForFunction(stage => document.querySelector(`#status-tabs [data-status="${stage}"]`)?.getAttribute('aria-selected') === 'true', stage);
   const expected = expectedCounts[stage];
@@ -60,6 +82,13 @@ async function selectStage(page, stage) {
       const titles = [...document.querySelectorAll('#request-grid tbody .request-title-link')].map(node => node.textContent);
       return titles.length === expected.length && expected.every(title => titles.some(value => value.includes(title)));
     }, expectedTitles[stage]);
+  }
+  if (stage === 'suggestion') {
+    assert.equal(await page.getByRole('combobox', { name: 'Similarity filter', exact: true }).count(), 1);
+    assert.equal(await page.locator('#similar-filter-field').isVisible(), true);
+  } else {
+    assert.equal(await page.locator('#similar-filter-field').isVisible(), false,
+      `${stage}: Similarity remains Suggestions-only.`);
   }
   if (stage === 'closed') {
     await page.waitForFunction(() => document.querySelectorAll('#request-grid button[data-request-action="reopen"]').length === 2);
@@ -126,6 +155,29 @@ async function measure(page, name, width, stage) {
       tableIds.set(table, window.__titleRequestLayoutNextTableId);
     }
     const active = document.activeElement, bounds = active?.getBoundingClientRect();
+    const queue = document.querySelector('#queue-view'), countState = document.querySelector('#status-count-state');
+    const filters = ['claim-filter', 'tag-filter', 'similar-filter'].map(id => {
+      const control = document.getElementById(id), label = control.closest('label'), name = label.querySelector('span');
+      const labelBounds = name.getBoundingClientRect(), fieldBounds = label.getBoundingClientRect();
+      return {
+        id,
+        name: name.textContent.trim(),
+        isSrOnly: name.classList.contains('sr-only') && getComputedStyle(name).position === 'absolute' &&
+          labelBounds.width <= 1 && labelBounds.height <= 1 && getComputedStyle(name).clip !== 'auto',
+        hidden: label.hidden,
+        fieldHeight: fieldBounds.height,
+        controlHeight: control.getBoundingClientRect().height
+      };
+    });
+    const danglingDescriptions = [...document.querySelectorAll('[aria-describedby]')].flatMap(node =>
+      (node.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean)
+        .filter(id => !document.getElementById(id)).map(id => ({ node: node.id || node.tagName, id })));
+    const visibleRemovedCopy = [
+      'Tab counts show all requests in the selected library scope.',
+      'Workflow rules follow each request’s library; open Details to review.',
+      'Scroll the table horizontally to reach every column. Use a request title to open details.'
+    ].filter(copy => (queue.innerText || '').includes(copy));
+    const stateBounds = countState.getBoundingClientRect();
     return {
       name: info.name,
       viewportWidth: innerWidth,
@@ -142,6 +194,22 @@ async function measure(page, name, width, stage) {
       columns,
       rowCount: table?.tBodies[0]?.rows.length ?? 0,
       actionNames: [...grid.querySelectorAll('button[data-request-action]')].map(button => button.getAttribute('aria-label')),
+      cleanup: {
+        removedNodesAbsent: ['status-count-help', 'queue-automation', 'request-table-help']
+          .every(id => document.getElementById(id) === null),
+        visibleRemovedCopy,
+        filterLabels: filters,
+        countState: {
+          text: countState.textContent,
+          role: countState.getAttribute('role'),
+          live: countState.getAttribute('aria-live'),
+          display: getComputedStyle(countState).display,
+          height: stateBounds.height
+        },
+        statusTabsDescribedBy: document.querySelector('#status-tabs').getAttribute('aria-describedby'),
+        regionDescribedBy: wrapper.getAttribute('aria-describedby'),
+        danglingDescriptions
+      },
       ancestors
     };
   }, { name, stage });
@@ -155,6 +223,17 @@ async function measure(page, name, width, stage) {
   assert.equal(metric.columns[7].action, false, `${name}/${stage}: Actions stays unsortable.`);
   assert.equal(metric.focusedRegion, true, `${name}/${stage}: the table region receives focus.`);
   assert.deepEqual(metric.region, { role: 'region', tabIndex: 0, label: 'Title requests' });
+  assert.equal(metric.cleanup.removedNodesAbsent, true, `${name}/${stage}: removed helper elements are absent.`);
+  assert.deepEqual(metric.cleanup.visibleRemovedCopy, [], `${name}/${stage}: removed helper prose is absent.`);
+  assert.deepEqual(metric.cleanup.filterLabels.map(filter => filter.name), ['Claims filter', 'Tag filter', 'Similarity filter']);
+  assert.ok(metric.cleanup.filterLabels.filter(filter => !filter.hidden).every(filter =>
+    filter.isSrOnly && Math.abs(filter.fieldHeight - filter.controlHeight) <= 1),
+  `${name}/${stage}: screen-reader labels add no visible heading or field gap.`);
+  assert.deepEqual(metric.cleanup.countState, { text: '', role: 'status', live: 'polite', display: 'none', height: 0 },
+    `${name}/${stage}: empty ready feedback reserves no layout space.`);
+  assert.equal(metric.cleanup.statusTabsDescribedBy, null, `${name}/${stage}: the tablist has no dangling count description.`);
+  assert.equal(metric.cleanup.regionDescribedBy, null, `${name}/${stage}: the scroll region has no dangling description.`);
+  assert.deepEqual(metric.cleanup.danglingDescriptions, [], `${name}/${stage}: no aria-describedby reference is dangling.`);
   if (stage === 'closed') {
     assert.equal(metric.actionNames.filter(label => label.startsWith('Reopen request ')).length, 2,
       `${name}: both Closed row actions remain in the table.`);
@@ -196,8 +275,8 @@ async function collectViewport(page, viewport) {
     await selectStage(page, stage);
     const metric = await measure(page, viewport.name, viewport.width, stage);
     entries.push(metric);
-    if (viewport.width === 3000 || viewport.width === 390) await scan(page, `${stage}-${viewport.name}`);
-    if (viewport.width === 3000 || ['closed', 'hold_placed'].includes(stage)) await capture(page, metric);
+    if ([3000, 390, 320].includes(viewport.width)) await scan(page, `${stage}-${viewport.name}`);
+    if ([3000, 320].includes(viewport.width) || viewport.width === 390 && ['closed', 'hold_placed'].includes(stage)) await capture(page, metric);
   }
   report.viewportMatrix.push({ ...viewport, stages: entries });
   if (viewport.width === 390) {
@@ -491,6 +570,7 @@ async function verifyActionColumnSizingAndCleanFlows(page, fixture, artifacts) {
         .map(stage => ({ viewport: stage.name, stage: stage.stage, wrapper: stage.wrapper, table: stage.table }))
     ];
     const narrow = report.viewportMatrix.find(item => item.width === 390);
+    const shortNarrow = report.viewportMatrix.find(item => item.width === 320);
     const intermediate = report.viewportMatrix.find(item => item.width === 900);
     const mobileScroll = narrow.stages.find(stage => stage.stage === 'closed');
     const allMeasurements = [
@@ -503,6 +583,8 @@ async function verifyActionColumnSizingAndCleanFlows(page, fixture, artifacts) {
       wideOverflow,
       mobileContained: narrow.stages.every(stage => stage.document.scrollWidth <= stage.document.clientWidth),
       mobileTableScrolls: mobileScroll.wrapper.hasHorizontalOverflow && mobileScroll.keyboardScrolled,
+      shortNarrowContained: shortNarrow.stages.every(stage => stage.document.scrollWidth === stage.document.clientWidth),
+      shortNarrowTableScrolls: shortNarrow.stages.every(stage => stage.wrapper.hasHorizontalOverflow),
       intermediateContainedScrolling: intermediate.stages.every(stage => stage.table.minWidth === '1080px' &&
         stage.wrapper.scrollWidth > stage.wrapper.clientWidth && stage.document.scrollWidth === stage.document.clientWidth),
       proportionalWidthErrors: allMeasurements.flatMap(metric => metric.columns.flatMap((column, index) => {
@@ -527,6 +609,8 @@ async function verifyActionColumnSizingAndCleanFlows(page, fixture, artifacts) {
     assert.equal(report.assertions.intermediateContainedScrolling, true, 'Intermediate widths retain contained 1080px table scrolling.');
     assert.equal(report.assertions.mobileContained, true, 'Narrow scrolling stays contained at 390 CSS pixels.');
     assert.equal(report.assertions.mobileTableScrolls, true, 'The narrow table remains keyboard-scrollable in its region.');
+    assert.equal(report.assertions.shortNarrowContained, true, 'The short 320 CSS pixel viewport has no document overflow.');
+    assert.equal(report.assertions.shortNarrowTableScrolls, true, 'Every status retains contained table scrolling at short/narrow size.');
     assert.deepEqual(report.assertions.proportionalWidthErrors, [], 'The original column proportions remain exact within pixel rounding.');
     assert.deepEqual(report.assertions.keyboardRegionFailures, [], 'The table region retains its keyboard focus contract.');
     assert.deepEqual(report.assertions.documentOverflow, [], 'No document-level horizontal overflow.');
