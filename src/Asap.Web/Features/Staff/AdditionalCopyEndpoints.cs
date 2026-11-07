@@ -45,10 +45,15 @@ public static class AdditionalCopyEndpoints
     private static async Task<IResult> GetAsync(
         HttpContext context,
         string id,
+        string? scope,
         AdditionalCopyService service,
         CancellationToken cancellationToken)
     {
-        var result = await service.GetAsync(Current(context), id, null, cancellationToken);
+        if (!LibraryScope.TryParse(scope, LibraryScope.All, out var parsedScope))
+        {
+            return Results.BadRequest(new { code = "invalid_scope" });
+        }
+        var result = await service.GetAsync(Current(context), id, null, cancellationToken, parsedScope);
         return result is null ? Results.NotFound() : Results.Json(result);
     }
 

@@ -181,7 +181,7 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         if (request is null || !CanAccess(staff, request.LibraryOrganizationId) ||
             !await context.Organizations.AsNoTracking().AnyAsync(item =>
                 item.Id == request.LibraryOrganizationId && item.Id > LibraryScope.SystemOrganizationId &&
-                item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId,
+                item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive,
                 cancellationToken))
         {
             return null;
