@@ -10,10 +10,10 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 (async () => {
   const fixture = JSON.parse(await fs.readFile(path.join(artifacts, 'fixture.json'), 'utf8'));
   const headers = actor => ({ 'X-ASAP-Test-Staff-Id': actor.id, 'X-ASAP-Test-Tenant-Id': actor.tenantId, 'X-ASAP-Test-Staff-Email': actor.email });
-  const report = { states: [], errors: [], external: [], mutations: [], referenceReads: [], searchDetailReads: [], timings: [], nativeZoom: [], dirtySettings: false, dirtyTitle: false, dirtyCopy: false, staleDetails: false };
+  const report = { states: [], errors: [], external: [], mutations: [], referenceReads: [], searchDetailReads: [], timings: [], nativeZoom: [], dirtySettings: false, dirtyTitle: false, dirtyCopy: false, staleDetails: false, pendingSettingsRetired: false };
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   const browser = await chromium.launch({ headless: true });
-  let injection = null;
+  let injection = null, settingsPreparation = null, page = null;
   const guard = async context => {
     await context.route('**/*', route => {
       if (new URL(route.request().url()).origin === new URL(baseURL).origin) return route.continue();
@@ -96,7 +96,13 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       try { await route.fulfill({ response }); } catch (error) { if (!/closed|cancelled|canceled|invalid interception/i.test(error.message)) throw error; }
       finally { control.completed.resolve(); }
     });
-    const page = await context.newPage();
+    await context.route('**/api/asap/staff/settings?*', async route => {
+      const control = settingsPreparation; settingsPreparation = null;
+      if (!control) return route.continue();
+      const response = await route.fetch(); control.started.resolve(); await control.release.promise;
+      await route.fulfill({ response });
+    });
+    page = await context.newPage();
     await page.goto(`${baseURL}/staff/?scope=${fixture.library}`);
     await page.locator('#request-grid tbody tr').first().waitFor();
     await page.keyboard.press('Control+k'); await dialog(page).waitFor();
@@ -126,7 +132,23 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.ok(report.searchDetailReads.some(item => item.path.includes('/title-requests/')));
     assert.ok(report.searchDetailReads.every(item => item.scope === fixture.library));
     for (const name of ['analytics', 'operations', 'settings', 'profile', 'additional-copies', 'queue']) {
+      const preparing = name === 'settings' ? { started: deferred(), release: deferred() } : null;
+      if (preparing) settingsPreparation = preparing;
       await page.locator(name === 'profile' ? '#profile-button' : `.view-tab[data-view="${name}"]`).click();
+      if (preparing) {
+        await preparing.started.promise;
+        assert.equal(await page.locator('#settings-view').isVisible(), false, 'Settings remains unaccepted while its target is preparing.');
+        await open(page); await search(page, 'Ada   O\'Brien');
+        await scan(page, 'search-during-settings-preparation');
+        preparing.release.resolve();
+        await page.locator('#settings-view').waitFor();
+        await dialog(page).waitFor({ state: 'hidden' });
+        assert.equal(await page.locator('#search-suggestions [role="option"]').count(), 0, 'Accepted context replacement retires the previous search.');
+        report.pendingSettingsRetired = true;
+      }
+      // A tab click starts guarded target preparation. Search from the destination
+      // only after that destination is visible, rather than racing its commit.
+      await page.locator(`#${name === 'additional-copies' ? 'additional-copy' : name}-view`).waitFor();
       if (name === 'operations') { await page.locator('#operations-view').waitFor(); await page.emulateMedia({ colorScheme: 'dark' }); await scan(page, 'search-launcher-dark-operations'); }
       await open(page); await search(page, 'Ada   O\'Brien'); assert.match(await summary(page).textContent(), /2 matching/);
       await close(page); assert.equal(await page.locator('#search-asap').evaluate(node => node === document.activeElement), true);
@@ -286,5 +308,16 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       } finally { await zoomContext.close(); }
     }
     assert.deepEqual(report.mutations, []); assert.deepEqual(report.external, []); assert.deepEqual(report.errors, []);
+  } catch (error) {
+    report.failure = { message: error.message };
+    if (page && !page.isClosed()) {
+      try {
+        report.failure.state = await page.evaluate(() => ({ url: location.href, dialogOpen: document.querySelector('#search-dialog').open,
+          summary: document.querySelector('#search-dialog [data-search="summary"]').textContent, focus: document.activeElement?.id,
+          visibleViews: ['queue', 'additional-copy', 'analytics', 'operations', 'settings', 'profile', 'search'].filter(name => !document.getElementById(`${name}-view`).hidden) }));
+        await page.screenshot({ path: path.join(artifacts, 'search-failure.png'), fullPage: true });
+      } catch (diagnosticError) { report.failure.diagnosticError = diagnosticError.message; }
+    }
+    throw error;
   } finally { await fs.writeFile(path.join(artifacts, 'browser-results.json'), JSON.stringify(report, null, 2)); await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

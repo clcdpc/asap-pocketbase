@@ -23,7 +23,12 @@ public sealed partial class PatronJourneyTests
         var secondRow = await CreateCorrectiveStaffAsync(actor, StaffRole.Staff, SearchLibrary);
         var second = await ReadCorrectiveStaffAsync(secondRow);
         var contexts = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
-        var directory = SearchEvidenceDirectory("browser");
+        var root = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
+        var ciResults = Environment.GetEnvironmentVariable("ASAP_CI_BROWSER_RESULTS");
+        var evidenceRoot = Environment.GetEnvironmentVariable("ASAP_SEARCH_EVIDENCE_DIR") ??
+            (string.IsNullOrWhiteSpace(ciResults) ? Path.Combine(root, ".artifacts", "browser") : Path.GetDirectoryName(Path.GetFullPath(ciResults))!);
+        var directory = Path.Combine(evidenceRoot, $"submission-search-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
         var before = await SearchStateAsync();
         var provider = factory.Services.GetRequiredService<DeterministicTestingPatronProvider>();
         var calls = provider.Calls.Count;
@@ -70,7 +75,6 @@ public sealed partial class PatronJourneyTests
         }, stop.Token);
         try
         {
-            var root = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
             var (code, stdout, stderr) = await RunBrowserScriptAsync(root, "submission-search.cjs", client.BaseAddress!.GetLeftPart(UriPartial.Authority), directory);
             if (commands.IsFaulted) { await commands; }
             Assert.AreEqual(0, code, $"{directory}\n{stdout}\n{stderr}");
