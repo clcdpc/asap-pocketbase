@@ -1,5 +1,6 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createSessionIdentity } from './session-identity.js';
+import { createClaimsFilter } from './claims-filter.js';
 import { createSessionCoordinator } from './session.js';
 import { createStaffShell } from './shell.js';
 import { createRouter } from './router.js';
@@ -22,6 +23,7 @@ import { createSubmissionSearch } from './search.js';
 export function createWorkflowApp() {
   const get = selector => document.querySelector(selector);
   const sessionIdentity = createSessionIdentity(), router = createRouter();
+  const claimsFilter = createClaimsFilter({ sessionIdentity });
   const detailHost = createDetailHost({ root: get('#request-dialog') });
   const shell = createStaffShell({ root: document, sessionIdentity,
     getContext: () => navigation.context(), settingsScope: () => settings.currentScope(), operationsScope: () => operations.currentScope(),
@@ -97,7 +99,7 @@ export function createWorkflowApp() {
     }
   });
 
-  const titleQueue = createTitleQueue({ root: get('#queue-view'), sessionIdentity, announce, polarisLookup,
+  const titleQueue = createTitleQueue({ root: get('#queue-view'), sessionIdentity, claimsFilter, announce, polarisLookup,
     onCatalogCommitted: result => { if (result.additionalCopyRequestId) copyQueue.markStale(); },
     getContext: navigation.context, onOpen: (id, opener, options = {}) => titleDetail.open(id, opener, { history: 'push', ...options }),
     onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) }),
@@ -125,7 +127,7 @@ export function createWorkflowApp() {
     getFocusReturn: (id, opener) => copyQueue.focusReturn(id, opener), refreshQueue: options => copyQueue.refresh(options),
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner)
   });
-  const copyQueue = createCopyQueue({ root: get('#additional-copy-view'), sessionIdentity, announce,
+  const copyQueue = createCopyQueue({ root: get('#additional-copy-view'), sessionIdentity, claimsFilter, announce,
     getContext: navigation.context, onOpen: (id, opener) => copyDetail.open(id, opener, { history: 'push' }),
     onScopeIntent: scope => navigation.changeQueueContext('additional-copies', { scope }),
     onStatusIntent: additionalCopyStatus => navigation.changeQueueContext('additional-copies', { additionalCopyStatus }),
@@ -144,6 +146,15 @@ export function createWorkflowApp() {
     getFocusReturn: (id, opener) => titleQueue.focusReturn(id, opener), refreshQueue: options => titleQueue.refresh(options), queueSequence: titleQueue.sequence,
     rememberOpened: shell.rememberOpened, forgetUnavailable: shell.forgetUnavailable,
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),
+    onOpenEmailOperation: async intent => {
+      const owner = sessionIdentity.preferences();
+      if (!sessionIdentity.isCurrent(owner) || typeof intent?.isCurrent !== 'function' || !intent.isCurrent()) return false;
+      if (!await navigation.switchView('operations') || !sessionIdentity.isCurrent(owner) ||
+          navigation.context().activeView !== 'operations') return false;
+      // Accepted navigation deliberately disposes the source detail. Its old
+      // lease is checked before departure; the destination owns reads afterward.
+      return operations.openEmailReference(intent);
+    },
     onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) })
   });
   const suggestion = createSuggestionController({ root: get('#staff-suggestion-dialog'), trigger: get('#new-suggestion'), sessionIdentity, polarisLookup, announce,

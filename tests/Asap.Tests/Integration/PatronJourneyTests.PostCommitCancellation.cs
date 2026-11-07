@@ -257,6 +257,12 @@ public sealed partial class PatronJourneyTests
         var outbox = await context.EmailOutbox.AsNoTracking().SingleAsync(item => item.Id == outboxId);
         Assert.AreEqual($"patron-submission:{request.Id}", outbox.BusinessKey);
         Assert.AreEqual("pending", outbox.Status);
+        Assert.AreEqual(request.Id, outbox.TitleRequestId);
+        Assert.AreEqual("confirmation", outbox.MessageKind);
+        var evidence = await context.EmailDeliveryEvents.AsNoTracking().Where(item => item.EmailOutboxId == outbox.Id).ToArrayAsync();
+        Assert.AreEqual(1, evidence.Length);
+        Assert.AreEqual("queued", evidence[0].EventType);
+        Assert.AreEqual("initial", evidence[0].LocalEventKey);
         Assert.AreEqual(1, await context.EmailOutbox.CountAsync(item => item.BusinessKey == outbox.BusinessKey));
     }
 
@@ -280,8 +286,7 @@ public sealed partial class PatronJourneyTests
             .SingleOrDefaultAsync();
         if (requestId.HasValue)
         {
-            await context.EmailOutbox.Where(item => item.BusinessKey == $"patron-submission:{requestId.Value}")
-                .ExecuteDeleteAsync();
+            await DeleteOwnedEmailFixtureAsync(context, context.EmailOutbox.Where(item => item.BusinessKey == $"patron-submission:{requestId.Value}"));
             await context.TitleRequestEvents.Where(item => item.TitleRequestId == requestId.Value)
                 .ExecuteDeleteAsync();
             await context.TitleRequests.Where(item => item.Id == requestId.Value).ExecuteDeleteAsync();

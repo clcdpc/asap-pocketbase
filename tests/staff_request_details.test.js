@@ -15,6 +15,8 @@ const research = { patronId: 41007, leapBibUrlPattern: 'https://example.org/bib/
   ] };
 const buttons = root => [...root.querySelectorAll('.action-bar > button')];
 const button = (root, label) => buttons(root).find(n => n.textContent.trim() === label);
+const detailValue = (root, label) => [...root.querySelectorAll('.detail-grid div')]
+  .find(row => row.querySelector('dt')?.textContent.trim() === label)?.querySelector('dd');
 
 async function setup(ui, initial = source, options = {}) {
   const { createDetailHost } = await ui.load('detail-host');
@@ -23,7 +25,7 @@ async function setup(ui, initial = source, options = {}) {
   const identity = createSessionIdentity(); identity.accept(options.actor || actor);
   const host = createDetailHost({ root: ui.get('#request-dialog') });
   let current = initial, pending = null;
-  const calls = [], quick = [], lookups = [], announcements = [];
+  const calls = [], quick = [], lookups = [], announcements = [], emailOperations = [];
   const controller = createTitleDetailController({ host, sessionIdentity: identity,
     polarisLookup: { open: context => lookups.push(context), close() {}, invalidate() {} },
     copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
@@ -32,17 +34,19 @@ async function setup(ui, initial = source, options = {}) {
     onAlign: async () => ({ scope: 'all', commit: () => 1 }), onOpened() {}, onClosed() {},
     getFocusReturn: () => null, refreshQueue: async () => true, queueSequence: () => 1,
     rememberOpened() {}, forgetUnavailable() {}, onReceipt() {}, clearReceipt() {},
+    onOpenEmailOperation: options.onOpenEmailOperation || (intent => { emailOperations.push(intent); return Promise.resolve(true); }),
     onNewSuggestion: (...args) => quick.push(args), request: async (path, init = {}) => {
       calls.push({ path, init });
       if (options.send) { const custom = options.send(path, init); if (custom !== undefined) return custom; }
       if (init.method) return new Promise(resolve => { pending = resolve; });
-      if (path.includes('research-configuration')) return research;
+      if (path.includes('research-configuration')) return options.researchConfiguration ?? research;
       if (path.includes('assignment-candidates')) return { candidates: [{ id: '20', displayName: 'Reviewer' }] };
       if (path.includes('rejection-templates')) return { items: [] };
       return path.includes('/title-requests/') ? current : {};
     } });
   await controller.open(current.id); await settle();
   return { controller, host, identity, calls, quick, lookups, announcements, root: ui.get('#request-dialog'),
+    emailOperations,
     async show(next) { current = next; await controller.open(next.id); await settle(); },
     async start(action, next = current) { current = next; await controller.open(next.id, null, { action }); await settle(); },
     complete(next) { current = next; pending({ committed: true, request: next }); },
@@ -232,11 +236,103 @@ async function setup(ui, initial = source, options = {}) {
       const plus = patron.querySelector('.grid-new-suggestion');
       assert.ok(plus); assert.equal(plus.previousElementSibling.textContent, 'Synthetic Reviewer');
       assert.equal(t.root.querySelectorAll('.grid-new-suggestion').length, 1);
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a').href, 'https://example.org/patron/41007');
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a').href, 'https://example.org/patron/41007');
+      for (const link of [detailValue(t.root, 'Patron').querySelector('a'), detailValue(t.root, 'Barcode').querySelector('a')]) {
+        assert.equal(link.target, '_blank'); assert.equal(link.rel, 'noopener noreferrer');
+      }
+      assert.equal(t.root.querySelector('.polaris-edit-tools').textContent.includes('Open patron in LEAP'), false);
       plus.click(); assert.deepEqual(t.quick[0], [source.barcode, plus, source.id]);
       const stalePlus = plus;
       await t.show({ ...source, id: '92', barcode: ' ' });
       stalePlus.click(); assert.equal(t.quick.length, 1, 'retired quick-create callback is fenced');
       assert.equal(t.root.querySelector('.grid-new-suggestion'), null);
+    } finally { t.dispose(); }
+  });
+  await fixture(async ui => {
+    const created = '2026-10-23T12:00:00.1234567Z';
+    const activity = Object.freeze([
+      Object.freeze({ id: '9007199254740993', source: 'email_event', eventType: 'email', created,
+        email: Object.freeze({ operationReference: '9223372036854775807', messageType: 'Patron confirmation',
+          outcome: 'suppressed', outcomeLabel: 'Suppressed; no email sent', reason: '<img src=x onerror=alert(1)> ' + 'R'.repeat(300),
+          intendedRecipient: '<svg onload=alert(2)> patron@example.org', deliveryMode: 'unknown',
+          isRecordedSummary: false, timestampKind: 'suppressed', operationsScope: '2' }) }),
+      Object.freeze({ id: '9007199254740992', source: 'email_event', created: '2026-10-23T12:00:00.1234567Z',
+        email: Object.freeze({ operationReference: '9007199254740993', messageType: 'Staff notification',
+          outcome: 'provider_accepted', outcomeLabel: 'Provider accepted; delivery unconfirmed',
+          reason: null, intendedRecipient: 'staff@example.org', deliveryMode: 'postmark',
+          isRecordedSummary: false, timestampKind: 'sent', operationsScope: '2' }) }),
+      Object.freeze({ id: '9007199254740993', source: 'email_summary', created,
+        email: Object.freeze({ operationReference: '9223372036854775807', messageType: 'Patron confirmation',
+          outcome: 'recorded_sent', outcomeLabel: 'Current recorded summary: sent status; delivery unconfirmed',
+          reason: null, intendedRecipient: null, deliveryMode: 'file', isRecordedSummary: true,
+          timestampKind: 'created', operationsScope: '2' }) }),
+      Object.freeze({ id: '9007199254740993', source: 'request_event', created, eventType: 'created',
+        actorType: 'system', message: 'Saved workflow event' }),
+      Object.freeze({ id: '1', source: 'email_event', created: '2026-10-23T12:00:00.1234568Z',
+        email: Object.freeze({ operationReference: '01', messageType: null, outcome: 'captured', outcomeLabel: null,
+          intendedRecipient: null, deliveryMode: 'future-mode', timestampKind: 'future-time', isRecordedSummary: false,
+          operationsScope: '2' }) }),
+      Object.freeze({ id: 'bad', source: 'email_event', created: 'not a date',
+        email: Object.freeze({ operationReference: '9223372036854775808', messageType: null, outcome: 'suppressed',
+          outcomeLabel: 'Suppressed; no email sent', reason: null, intendedRecipient: null, deliveryMode: 'unknown',
+          isRecordedSummary: false, timestampKind: 'future-time', operationsScope: '2' }) }),
+      Object.freeze({ id: '5', source: 'email_summary', created: 'not a date', email: Object.freeze({}) }),
+      Object.freeze({ id: '2', source: 'request_event', created: 'not a date', eventType: 'unknown', message: 'Missing date' })
+    ]);
+    const t = await setup(ui, { ...source, notes: 'Saved note is not system history.', activity });
+    try {
+      const rows = [...t.root.querySelectorAll('.request-activity li')];
+      assert.deepEqual(rows.map(row => row.dataset.activityId), [
+        'email_event:1', 'email_event:9007199254740993', 'email_event:9007199254740992',
+        'email_summary:9007199254740993', 'request_event:9007199254740993',
+        'email_event:bad', 'email_summary:5', 'request_event:2'
+      ], 'SQL fractional ticks, ordinal source, then exact BigInt IDs define a stable reverse chronology.');
+      assert.equal(rows[1].querySelector('code').textContent, '9223372036854775807');
+      assert.equal(rows[1].querySelectorAll('.request-email-reference-link').length, 1);
+      assert.equal(rows[1].querySelector('.request-email-fields').textContent.includes('<svg onload=alert(2)> patron@example.org'), true);
+      assert.equal(rows[1].querySelectorAll('img, svg').length, 0, 'Malicious API strings remain text.');
+      assert.equal(rows[1].textContent.includes('R'.repeat(300)), true, 'Long recorded reasons remain available and wrap in the rendered content.');
+      assert.equal(rows[1].textContent.includes('<img src=x onerror=alert(1)>'), true, 'A reason is rendered as safe text.');
+      assert.match(rows[0].textContent, /Delivery mode unknown/);
+      assert.match(rows[0].textContent, /Recorded time \(meaning unavailable\)/);
+      assert.match(rows[2].textContent, /Provider accepted; delivery unconfirmed/);
+      assert.doesNotMatch(rows[2].textContent, /Delivered/);
+      assert.match(rows[3].textContent, /File capture; no live email sent/);
+      assert.match(rows[3].textContent, /Recorded summary; earlier email activity may be incomplete/);
+      assert.match(rows[4].textContent, /Saved workflow event/);
+      assert.match(rows[5].textContent, /Email type not recorded/);
+      assert.match(rows[5].textContent, /Recorded time \(meaning unavailable\): Time not recorded/);
+      assert.match(rows[5].textContent, /Delivery mode unknown/);
+      assert.equal(rows[5].querySelector('.request-email-reference-link'), null, 'Out-of-range canonical IDs cannot become an action.');
+      assert.equal(rows[6].querySelector('.request-email-reference-link'), null, 'Missing values never create a reference action.');
+      const notes = t.root.querySelector('.edit-form textarea[maxlength="10000"]');
+      assert.equal(notes.value, 'Saved note is not system history.');
+      assert.equal(activity.length, 8, 'The frozen Activity array is retained.');
+      assert.equal(activity[0].id, '9007199254740993', 'Rendering leaves frozen DTO input unchanged.');
+      rows[1].querySelector('.request-email-reference-link').click(); await settle();
+      assert.equal(t.emailOperations.length, 1);
+      assert.equal(t.emailOperations[0].operationReference, '9223372036854775807');
+      assert.equal(t.emailOperations[0].operationsScope, '2');
+      assert.equal(typeof t.emailOperations[0].isCurrent, 'function');
+      const oldButton = rows[1].querySelector('.request-email-reference-link');
+      await t.show({ ...source, id: '91', notes: 'Saved note is not system history.', activity });
+      oldButton.click(); await settle();
+      assert.equal(t.emailOperations.length, 1, 'A detached previous detail reference cannot invoke navigation.');
+    } finally { t.dispose(); }
+  });
+  for (const [role, organizationId, operationsScope, expectedLinks] of [
+    ['admin', 2, '2', 1], ['admin', 2, '3', 0], ['staff', 2, '2', 0], ['super_admin', 1, '2', 1]
+  ]) await fixture(async ui => {
+    const item = { id: '9223372036854775807', source: 'email_event', created: '2026-10-23T12:00:00Z',
+      email: { operationReference: '9223372036854775807', messageType: 'Patron confirmation', outcomeLabel: 'Suppressed',
+        operationsScope, intendedRecipient: null, deliveryMode: 'unknown', timestampKind: 'suppressed' } };
+    const t = await setup(ui, { ...source, activity: [item] }, { actor: { ...actor, role, organizationId } });
+    try {
+      assert.equal(t.root.querySelectorAll('.request-email-reference-link').length, expectedLinks,
+        'Only authorized administrators receive a canonical exact-reference action.');
+      if (!expectedLinks) assert.equal(t.root.querySelector('.request-email-reference').textContent.includes('9223372036854775807'), true,
+        'Unauthorized viewers keep the plain exact reference.');
     } finally { t.dispose(); }
   });
 
@@ -278,7 +374,7 @@ async function setup(ui, initial = source, options = {}) {
       assert.equal(t.root.querySelector('.research-section'), null);
       assert.equal(row.previousElementSibling.querySelector('input').getAttribute('inputmode'), 'numeric');
       assert.match(row.nextElementSibling.textContent, /Publication timing/);
-      assert.deepEqual([...row.querySelectorAll('a')].map(n => n.textContent), ['Open BIB in LEAP', 'Open patron in LEAP', 'First', 'Second']);
+      assert.deepEqual([...row.querySelectorAll('a')].map(n => n.textContent), ['Open BIB in LEAP', 'First', 'Second']);
       assert.doesNotMatch(row.textContent, /Catalog and research links/);
       for (const a of row.querySelectorAll('a')) { assert.equal(a.target, '_blank'); assert.equal(a.rel, 'noopener noreferrer'); }
       for (const [label, value, link] of [['Title', 'New & café', 'title?q=New%20%26%20caf%C3%A9'],
@@ -293,8 +389,82 @@ async function setup(ui, initial = source, options = {}) {
       t.lookups[0].apply({ bibId: 789, title: 'Catalog' }, { bibId: 789 });
       assert.ok([...row.querySelectorAll('a')].some(a => a.href.endsWith('/bib/789')));
       t.root.querySelector('.request-save-footer .secondary-button').click(); await settle();
-      assert.equal(t.root.querySelectorAll('.polaris-edit-tools a').length, 4, 'Revert retains one populated links row');
+      assert.equal(t.root.querySelectorAll('.polaris-edit-tools a').length, 3, 'Revert retains one populated links row');
       assert.ok(t.root.querySelector('a[href$="/bib/123"]'));
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    let release;
+    const t = await setup(ui, source, { send: path => path.includes('research-configuration?requestId=91')
+      ? new Promise(resolve => { release = resolve; }) : undefined });
+    try {
+      const titleInput = [...t.root.querySelectorAll('.edit-form label')]
+        .find(label => label.firstElementChild.textContent === 'Title').querySelector('input');
+      titleInput.value = 'Unsaved title draft';
+      titleInput.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+      titleInput.focus();
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a'), null);
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a'), null);
+      const retainedNameText = detailValue(t.root, 'Patron').textContent;
+      release(research); await settle();
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a').href, 'https://example.org/patron/41007');
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a').href, 'https://example.org/patron/41007');
+      assert.equal(detailValue(t.root, 'Patron').textContent, retainedNameText);
+      assert.equal(titleInput.value, 'Unsaved title draft');
+      assert.equal(document.activeElement, titleInput, 'Accepted research refresh retains editor focus.');
+      assert.equal(titleInput.isConnected, true, 'Accepted research refresh does not rebuild the dirty editor.');
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    let release;
+    const t = await setup(ui, source, { send: path => path.includes('research-configuration?requestId=91')
+      ? new Promise(resolve => { release = resolve; }) : undefined });
+    try {
+      const titleInput = [...t.root.querySelectorAll('.edit-form label')]
+        .find(label => label.firstElementChild.textContent === 'Title').querySelector('input');
+      titleInput.value = 'Retained draft & focus';
+      titleInput.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+      titleInput.focus();
+      release({ ...research, leapPatronUrlPattern: 123 }); await settle();
+
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a'), null,
+        'A non-string patron pattern remains plain text.');
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a'), null);
+      const links = [...t.root.querySelectorAll('.polaris-edit-tools a')];
+      assert.deepEqual(links.map(link => link.textContent), ['Open BIB in LEAP', 'First', 'Second']);
+      assert.equal(links[0].href, 'https://example.org/bib/123');
+      assert.equal(t.root.querySelector('.polaris-edit-tools a[href*="/patron/"]'), null);
+      assert.ok([...t.root.querySelectorAll('.polaris-edit-tools button')]
+        .some(control => control.textContent.trim() === 'Search Polaris catalog'));
+      assert.equal(titleInput.value, 'Retained draft & focus');
+      assert.equal(titleInput.isConnected, true);
+      assert.equal(document.activeElement, titleInput,
+        'Malformed patron metadata does not interrupt accepted config or move editor focus.');
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    const initialResearch = { ...research, patronId: 62001,
+      leapPatronUrlPattern: 'https://initial.example.org/patron/{{patronId}}' };
+    let release;
+    const t = await setup(ui, { ...source, research: initialResearch }, { send: path => path.includes('research-configuration?requestId=91')
+      ? new Promise(resolve => { release = resolve; }) : undefined });
+    try {
+      const nameLink = detailValue(t.root, 'Patron').querySelector('a');
+      const barcodeLink = detailValue(t.root, 'Barcode').querySelector('a');
+      assert.equal(nameLink.href, 'https://initial.example.org/patron/62001');
+      assert.equal(barcodeLink.href, nameLink.href);
+      nameLink.focus();
+      release({ ...research, patronId: null, leapPatronUrlPattern: 'javascript:open({{patronId}})' });
+      await settle();
+      assert.strictEqual(detailValue(t.root, 'Patron').querySelector('a'), nameLink,
+        'An unresolved later configuration preserves the useful DTO link.');
+      assert.strictEqual(detailValue(t.root, 'Barcode').querySelector('a'), barcodeLink);
+      assert.equal(document.activeElement, nameLink, 'A still-correct focused DTO link is not replaced.');
+      assert.equal(nameLink.target, '_blank'); assert.equal(nameLink.rel, 'noopener noreferrer');
+      assert.equal(t.root.querySelector('.polaris-edit-tools').textContent.includes('Open patron in LEAP'), false);
     } finally { t.dispose(); }
   });
 
@@ -305,9 +475,51 @@ async function setup(ui, initial = source, options = {}) {
     try {
       await t.show({ ...source, id: '92', libraryOrgId: 3, title: 'Other library' });
       const links = [...t.root.querySelectorAll('.polaris-edit-tools a')].map(n => n.href);
-      release({ externalSearchProviders: [{ label: 'Stale', urlTemplate: 'https://stale.example.org/{{title}}' }] }); await settle();
+      const upperLinks = [detailValue(t.root, 'Patron').querySelector('a').href,
+        detailValue(t.root, 'Barcode').querySelector('a').href];
+      release({ patronId: 99999, leapPatronUrlPattern: 'https://stale.example.org/patron/{{patron-id}}',
+        externalSearchProviders: [{ label: 'Stale', urlTemplate: 'https://stale.example.org/{{title}}' }] }); await settle();
       assert.deepEqual([...t.root.querySelectorAll('.polaris-edit-tools a')].map(n => n.href), links);
+      assert.deepEqual([detailValue(t.root, 'Patron').querySelector('a').href,
+        detailValue(t.root, 'Barcode').querySelector('a').href], upperLinks);
       assert.equal(ui.get('#request-dialog-title').textContent, 'Other library');
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    let release;
+    const t = await setup(ui, source, { send: path => path.includes('research-configuration?requestId=91')
+      ? new Promise(resolve => { release = resolve; }) : undefined });
+    try {
+      t.identity.accept({ ...actor, id: '21', authenticationEmail: 'replacement@example.org' });
+      release(research); await settle();
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a'), null,
+        'A response for a retired actor cannot attach patron links.');
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a'), null);
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    let release;
+    const t = await setup(ui, source, { send: path => path.includes('research-configuration?requestId=91')
+      ? new Promise(resolve => { release = resolve; }) : undefined });
+    try {
+      t.controller.invalidate();
+      release(research); await settle();
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a'), null,
+        'An aborted research load cannot attach patron links.');
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a'), null);
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    const t = await setup(ui, source, { send: path => path.includes('research-configuration?requestId=91')
+      ? Promise.reject(new Error('research configuration unavailable')) : undefined });
+    try {
+      assert.equal(detailValue(t.root, 'Patron').querySelector('a'), null);
+      assert.equal(detailValue(t.root, 'Barcode').querySelector('a'), null);
+      assert.equal(buttons(t.root).some(control => control.textContent.trim() === 'Already own'), true,
+        'A failed research lookup leaves the editor and catalog workflow available.');
     } finally { t.dispose(); }
   });
 

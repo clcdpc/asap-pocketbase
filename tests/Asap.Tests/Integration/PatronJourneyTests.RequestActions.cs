@@ -117,15 +117,24 @@ public sealed partial class PatronJourneyTests
                     .OrderByDescending(item => item.Id).Take(7).Select(item => item.Id).ToListAsync());
             }
             requestIds.Sort();
+            TitleRequestEvent[] workflowEvents;
             await using (var context = await factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
                              .CreateDbContextAsync())
             {
                 var timestamp = timeProvider!.GetUtcNow().UtcDateTime;
-                context.TitleRequestEvents.AddRange(
+                // Insert the latest event first, with a submillisecond delta,
+                // and retain two equal-time events to pin the API's ID tie.
+                workflowEvents = [
                     new TitleRequestEvent { TitleRequestId = requestIds[0], EventType = "staff_note",
-                        ActorType = "staff", Message = "<svg onload=alert(1)>", CreatedUtc = timestamp },
+                        ActorType = "system", Message = "Later SQL tick", CreatedUtc = timestamp.AddTicks(1) },
+                    new TitleRequestEvent { TitleRequestId = requestIds[0], EventType = "staff_note",
+                        ActorType = "staff", Message = "<svg onload=alert(1)>", CreatedUtc = timestamp.AddMinutes(-1) },
                     new TitleRequestEvent { TitleRequestId = requestIds[0], EventType = "status_changed",
-                        ActorType = "system", Message = "Second event", CreatedUtc = timestamp });
+                        ActorType = "system", Message = "Second event", CreatedUtc = timestamp },
+                    new TitleRequestEvent { TitleRequestId = requestIds[0], EventType = "staff_note",
+                        ActorType = "staff", Message = "Equal time, later ID", CreatedUtc = timestamp }
+                ];
+                context.TitleRequestEvents.AddRange(workflowEvents);
                 context.EmailTemplates.Remove(await context.EmailTemplates.SingleAsync(item => item.Id == deletedId));
                 await context.SaveChangesAsync();
             }
@@ -140,13 +149,24 @@ public sealed partial class PatronJourneyTests
             using var first = await Detail(requestIds[0]);
             var version = first.RootElement.GetProperty("version").GetString();
             var activity = first.RootElement.GetProperty("activity");
-            Assert.AreEqual(2, activity.GetArrayLength());
-            Assert.IsTrue(long.Parse(activity[0].GetProperty("id").GetString()!) <
-                          long.Parse(activity[1].GetProperty("id").GetString()!));
+            var expectedChronology = new[] { workflowEvents[1], workflowEvents[2], workflowEvents[3], workflowEvents[0] };
+            Assert.AreEqual(4, activity.GetArrayLength());
+            CollectionAssert.AreEqual(expectedChronology.Select(item => item.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray(),
+                activity.EnumerateArray().Select(item => item.GetProperty("id").GetString()).ToArray(),
+                "Authoritative workflow activity stays oldest first, independently of insertion order and newest-first display.");
+            CollectionAssert.AreEqual(expectedChronology.Select(item => item.Message).ToArray(),
+                activity.EnumerateArray().Select(item => item.GetProperty("message").GetString()).ToArray());
+            CollectionAssert.AreEqual(expectedChronology.Select(item => item.CreatedUtc.Ticks).ToArray(),
+                activity.EnumerateArray().Select(item => item.GetProperty("created").GetDateTime().Ticks).ToArray());
+            Assert.IsTrue(long.Parse(activity[1].GetProperty("id").GetString()!) <
+                          long.Parse(activity[2].GetProperty("id").GetString()!));
+            Assert.IsTrue(activity.EnumerateArray().All(item => item.GetProperty("source").GetString() == "request_event" &&
+                item.GetProperty("email").ValueKind == JsonValueKind.Null), "This API chronology regression uses only workflow events.");
             Assert.AreEqual(JsonValueKind.Null, activity[0].GetProperty("actorName").ValueKind);
             Assert.AreEqual("<svg onload=alert(1)>", activity[0].GetProperty("message").GetString());
             using var repeated = await Detail(requestIds[0]);
-            Assert.AreEqual(2, repeated.RootElement.GetProperty("activity").GetArrayLength());
+            Assert.AreEqual(activity.GetRawText(), repeated.RootElement.GetProperty("activity").GetRawText(),
+                "A repeated authoritative read preserves chronology without adding history.");
 
             using var choicesResponse = await client.GetAsync(
                 $"/api/asap/staff/title-requests/{requestIds[0]}/rejection-templates");
@@ -192,7 +212,7 @@ public sealed partial class PatronJourneyTests
             }
             using var unchanged = await Detail(requestIds[0]);
             Assert.AreEqual("suggestion", unchanged.RootElement.GetProperty("status").GetString());
-            Assert.AreEqual(2, unchanged.RootElement.GetProperty("activity").GetArrayLength());
+            Assert.AreEqual(4, unchanged.RootElement.GetProperty("activity").GetArrayLength());
             using var paddedReject = await client.PostAsJsonAsync(
                 $"/api/asap/staff/title-requests/{requestIds[0]}/action",
                 new { version, action = " reject ", rejectionTemplateId = goodId.ToString() });
@@ -441,7 +461,7 @@ public sealed partial class PatronJourneyTests
                 var rejectionKey = $"rejection:{id}:%";
                 var reminderKey = $"purchase-reminder:{id}:%";
                 await context.Database.ExecuteSqlInterpolatedAsync(
-                    $"DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE {rejectionKey} OR [BusinessKey] LIKE {reminderKey}");
+                    $"DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE {rejectionKey} OR [BusinessKey] LIKE {reminderKey}); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE {rejectionKey} OR [BusinessKey] LIKE {reminderKey}");
                 await context.Database.ExecuteSqlInterpolatedAsync(
                     $"DELETE FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = {id}");
                 await context.Database.ExecuteSqlInterpolatedAsync(

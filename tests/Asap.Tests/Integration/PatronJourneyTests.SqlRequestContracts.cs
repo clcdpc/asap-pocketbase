@@ -175,7 +175,7 @@ public sealed partial class PatronJourneyTests
             var requestId = desiredIdentity + 1;
             await ExecuteNonQueryAsync(
                 "DELETE FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = @id; " +
-                "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @id); " +
+                "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @id)); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @id); " +
                 "DELETE FROM [asap].[TitleRequest] WHERE [Id] = @id; " +
                 "DELETE FROM [asap].[PatronSession] WHERE [Barcode] = @barcode;",
                 ("@id", requestId), ("@barcode", barcode));
@@ -285,6 +285,8 @@ public sealed partial class PatronJourneyTests
                 DECLARE @requestId bigint =
                     (SELECT TOP (1) [Id] FROM [asap].[TitleRequest] WHERE [Barcode] = @barcode AND [Title] = @title);
                 DELETE FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = @requestId;
+                DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN
+                    (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @requestId));
                 DELETE FROM [asap].[EmailOutbox]
                     WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @requestId);
                 DELETE FROM [asap].[TitleRequest] WHERE [Id] = @requestId;

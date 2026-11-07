@@ -84,12 +84,23 @@ public sealed partial class PatronJourneyTests
     [DataRow("staff", false)]
     [DataRow("admin", false)]
     [DataRow("super_admin", false)]
-    public async Task WorkflowEmailReadinessUsesBusinessLibraryOutsideSqlLocks(string role, bool configured)
+    public Task WorkflowEmailReadinessUsesBusinessLibraryOutsideSqlLocks(string role, bool configured) =>
+        VerifyWorkflowEmailActivityAsync(role, configured, missingStaffRecipient: false);
+
+    [TestMethod]
+    public Task WorkflowEmailMissingStaffRecipientsPersistSuppressionWithRequestActivity() =>
+        VerifyWorkflowEmailActivityAsync("staff", configured: true, missingStaffRecipient: true);
+
+    private async Task VerifyWorkflowEmailActivityAsync(string role, bool configured, bool missingStaffRecipient)
     {
         using var startup = factory!.CreateClient();
         await startup.GetAsync("/api/asap/staff/session");
         var superAdmin = await ReadConfiguredSuperAdminAsync();
         var staff = await CreateCorrectiveStaffAsync(superAdmin, role, role == "super_admin" ? 1 : 2);
+        if (missingStaffRecipient)
+        {
+            await ExecuteNonQueryAsync("UPDATE [asap].[StaffUser] SET [NotificationEmail] = NULL WHERE [Id] = @id;", ("@id", staff.Id));
+        }
         var actor = await ReadCorrectiveStaffAsync(staff);
         var sender = new ScopedReadinessEmailSender(configured);
         var provider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
@@ -168,10 +179,23 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(2, outbox.OrganizationId);
                 if (outbox.AuthorizationOrganizationId.HasValue) Assert.AreEqual(2, outbox.AuthorizationOrganizationId);
                 Assert.AreEqual("library.sender@example.org", outbox.FromAddress);
-                Assert.AreEqual(configured ? "pending" : "suppressed", outbox.Status);
-                Assert.AreEqual(configured ? null : "mail_not_configured", outbox.SuppressionReason);
+                var missingRecipient = missingStaffRecipient && outbox.DeliveryClass == "staff_authorization_sensitive";
+                Assert.AreEqual(configured && !missingRecipient ? "pending" : "suppressed", outbox.Status);
+                Assert.AreEqual(missingRecipient ? "recipient_missing" : configured ? null : "mail_not_configured", outbox.SuppressionReason);
+                var kind = outbox.BusinessKey!.Split(':')[0] switch
+                {
+                    "title-assignment" => "assignment",
+                    "purchase-reminder" => "purchase_reminder",
+                    "staff-patron-action" => "purchase_approved",
+                    "additional-copy-reminder" => "additional_copy_reminder",
+                    "additional-copy-assignment" => "additional_copy_assignment",
+                    "title-hold-placed" => "hold_placed",
+                    _ => throw new AssertFailedException("Unexpected request-mail producer.")
+                };
+                await AssertRequestMailEvidenceAsync(outbox,
+                    kind is "assignment" or "purchase_reminder" or "purchase_approved" ? title.Id : source.Id, kind);
             }
-            Assert.AreEqual(configured ? 6 : 0, localDispatcher.EnqueuedIds.Count);
+            Assert.AreEqual(configured ? missingStaffRecipient ? 2 : 6 : 0, localDispatcher.EnqueuedIds.Count);
         }
         finally
         {

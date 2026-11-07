@@ -519,8 +519,8 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(seeded.OutboxId, sending.Id);
             Assert.AreEqual(before.BusinessKey, sending.BusinessKey);
             Assert.AreEqual("sending", sending.Status);
-            Assert.IsNull(sending.LastErrorCode);
-            Assert.IsNull(sending.LastErrorDetail);
+            Assert.AreEqual("provider_cancelled", sending.LastErrorCode);
+            Assert.IsNotNull(sending.LastErrorDetail);
             Assert.IsNull(sending.ProviderMessageId);
             Assert.AreEqual(1, sending.AttemptCount);
             Assert.IsNotNull(sending.LastAttemptUtc);
@@ -540,9 +540,8 @@ public sealed partial class PatronJourneyTests
             await jobs.SweepAsync(CancellationToken.None);
             var quarantined = await ReadEmailOutcomeDispatchSnapshotAsync(seeded.OutboxId);
             Assert.AreEqual("failed", quarantined.Status);
-            Assert.AreEqual("ambiguous_expired_lease", quarantined.LastErrorCode);
-            Assert.IsNotNull(quarantined.LastErrorDetail);
-            StringAssert.Contains(quarantined.LastErrorDetail, "unknown");
+            Assert.AreEqual(sending.LastErrorCode, quarantined.LastErrorCode);
+            Assert.AreEqual(sending.LastErrorDetail, quarantined.LastErrorDetail);
             Assert.AreEqual(sending.BusinessKey, quarantined.BusinessKey);
             Assert.AreEqual(sending.AttemptCount, quarantined.AttemptCount);
             Assert.AreEqual(sending.LastAttemptUtc, quarantined.LastAttemptUtc);

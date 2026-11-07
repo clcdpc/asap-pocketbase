@@ -357,7 +357,7 @@ public sealed partial class PatronJourneyTests
             }
             await ExecuteNonQueryAsync(
                 "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @businessKey); " +
-                "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @businessKey;",
+                "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @businessKey); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @businessKey;",
                 ("@businessKey", businessKey));
         }
     }
@@ -445,7 +445,7 @@ public sealed partial class PatronJourneyTests
             {
                 await ExecuteNonQueryAsync(
                     "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @businessKey); " +
-                    "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @businessKey;",
+                    "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @businessKey); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @businessKey;",
                     ("@businessKey", suppressedBusinessKey));
             }
         }

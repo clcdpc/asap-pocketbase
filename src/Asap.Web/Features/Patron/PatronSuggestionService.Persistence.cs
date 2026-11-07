@@ -1294,18 +1294,20 @@ public sealed partial class PatronSuggestionService
             INSERT INTO [asap].[EmailOutbox]
                 ([OrganizationId], [BusinessKey], [DeliveryClass], [ToAddress], [FromAddress],
                  [FromName], [Subject], [BodyText], [BodyHtml], [Status], [SuppressionReason],
-                 [NextAttemptUtc], [CreatedUtc], [SuppressedUtc])
+                 [NextAttemptUtc], [CreatedUtc], [SuppressedUtc], [TitleRequestId], [MessageKind])
             OUTPUT inserted.[Id]
             VALUES
                 (@organizationId, @businessKey, N'business_event', @toAddress, @fromAddress,
                  @fromName, @subject, @bodyText, @bodyHtml, @status, @suppressionReason,
                  CASE WHEN @status = N'pending' THEN @now ELSE NULL END,
                  @now,
-                 CASE WHEN @status = N'suppressed' THEN @now ELSE NULL END);
+                 CASE WHEN @status = N'suppressed' THEN @now ELSE NULL END, @requestId, N'confirmation');
             """,
             connection,
             transaction);
-        Add(command, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        Add(command, "@now", SqlDbType.DateTime2, now);
+        Add(command, "@requestId", SqlDbType.BigInt, requestId);
         Add(command, "@organizationId", SqlDbType.Int, configuration.OrganizationId);
         Add(command, "@businessKey", SqlDbType.NVarChar, $"patron-submission:{requestId}", 450);
         Add(command, "@toAddress", SqlDbType.NVarChar, patron.Email, 320);
@@ -1317,6 +1319,7 @@ public sealed partial class PatronSuggestionService
         Add(command, "@status", SqlDbType.NVarChar, status, 16);
         Add(command, "@suppressionReason", SqlDbType.NVarChar, suppressionReason, 100);
         var outboxId = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken));
+        await RequestEmailEvidence.AddInitialAsync(connection, transaction, outboxId, status, suppressionReason, now, cancellationToken);
         return new SubmissionEmailResult(
             status == "pending" ? outboxId : null,
             status == "pending" ? "queued" : "suppressed");

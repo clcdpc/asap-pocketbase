@@ -95,7 +95,7 @@ public sealed partial class PatronJourneyTests
             {
                 var reminderKey = $"purchase-reminder:{item.Source.Id}:";
                 var rejectionKey = $"rejection:{item.Source.Id}:";
-                await cleanup.EmailOutbox.Where(value => value.BusinessKey!.StartsWith(reminderKey) || value.BusinessKey!.StartsWith(rejectionKey)).ExecuteDeleteAsync();
+                await DeleteOwnedEmailFixtureAsync(cleanup, cleanup.EmailOutbox.Where(value => value.BusinessKey!.StartsWith(reminderKey) || value.BusinessKey!.StartsWith(rejectionKey)));
             }
             await cleanup.EmailTemplates.Where(value => value.Id == template.Id).ExecuteDeleteAsync();
         }

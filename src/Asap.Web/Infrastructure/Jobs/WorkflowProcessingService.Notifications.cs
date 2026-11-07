@@ -467,6 +467,8 @@ public sealed partial class WorkflowProcessingService
         {
             OrganizationId = request.LibraryOrganizationId,
             BusinessKey = $"timeout:OutstandingTimeout:{request.Id}",
+            TitleRequestId = request.Id,
+            MessageKind = "timeout",
             DeliveryClass = "business_event",
             ToAddress = request.Email,
             FromAddress = fromAddress,
@@ -480,6 +482,7 @@ public sealed partial class WorkflowProcessingService
             SuppressedUtc = allowed ? null : UtcNow()
         };
         context.EmailOutbox.Add(outbox);
+        RequestEmailEvidence.AddInitial(context, outbox);
         return allowed ? outbox : null;
     }
 

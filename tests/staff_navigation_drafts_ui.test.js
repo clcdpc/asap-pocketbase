@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { JSDOM } = require('jsdom');
+const { emailHistoryPage } = require('./helpers/staff-controller.cjs');
 
 const frontend = path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend');
 let actorKey;
@@ -133,7 +134,11 @@ async function fixture(route, journey, options = {}) {
       const pathname = parsed.pathname;
       if (apiResponse) {
         const result = await apiResponse({ url, init, parsed, pathname, staff, request });
-        if (result !== undefined) return result;
+        if (result !== undefined) {
+          return pathname.endsWith('/email-operations') && result.ok
+            ? response(result.status, emailHistoryPage({ libraries: organizations.filter(item => item.id > 1 && item.organizationCodeId === 2), ...await result.json() }, url))
+            : result;
+        }
       }
       if (pathname.endsWith('/session')) return response(200, { authenticated: true, accessAllowed: true, staff, antiforgeryToken: 'token' });
       if (pathname.endsWith('/email-readiness')) return response(200, {});
@@ -190,7 +195,9 @@ async function fixture(route, journey, options = {}) {
           preferredPickupBranchId: 101 } });
       if (pathname.endsWith('/suggestions')) return operationResponse ? operationResponse() : response(409, {
         code: 'duplicate_open_request', duplicate: { id, matchType: 'title_format' } });
-      if (pathname.endsWith('/workflow/queues') || pathname.endsWith('/email-operations')) return response(200, { items: [] });
+      if (pathname.endsWith('/workflow/queues')) return response(200, { items: [] });
+      if (pathname.endsWith('/email-operations')) return response(200, emailHistoryPage({ items: [],
+        libraries: organizations.filter(item => item.id > 1 && item.organizationCodeId === 2) }, url));
       if (pathname.endsWith('/audit')) return response(200, { code: 'ok', data: { items: [], count: 0, page: 1, pageSize: 25,
         actors: [], libraries: organizations.filter(item => item.id > 1) } });
       if (init.method === 'DELETE') return operationResponse ? operationResponse() : response(200, { deleted: true });
@@ -282,14 +289,99 @@ for (const settingsScope of ['system', '2']) {
         ui.dom.window.document.activeElement === ui.get('#email-operations-table'), 'scoped email log receives focus');
       assert.equal(ui.get('#operations-scope').value, 'all', 'Email navigation preserves independent workflow Run scope');
       assert.equal(ui.get('#email-view-scope').value, settingsScope === 'system' ? 'system' : '2');
+      assert.equal(ui.get('#email-test-scope').value, String(organizationId));
       assert.equal(ui.get('#operations-email-panel').hidden, false);
       assert.equal(JSON.parse(ui.dom.window.sessionStorage.getItem(key)).id, '9007199254740993');
       assert.equal(ui.get('#send-test-email').disabled, true, 'an unknown original outcome still blocks a new test after navigation');
       const list = ui.calls.filter(call => new URL(call.url, 'https://localhost').pathname.endsWith('/email-operations')).at(-1);
-      assert.equal(new URL(list.url, 'https://localhost').searchParams.get('organizationId'), settingsScope === 'system' ? '1' : '2');
+      assert.equal(new URL(list.url, 'https://localhost').searchParams.get('scope'), settingsScope === 'system' ? 'system' : '2');
       assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0, 'navigation never silently saves or resends');
     }));
 }
+test('request email activity uses guarded reference navigation and preserves the saved test recovery scope', () => {
+  const staff = { id: '20', role: 'super_admin', organizationId: 1, tenantId: 'activity-navigation-tenant',
+    authenticationEmail: 'activity-navigation@example.org' };
+  const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+  const reference = '9007199254740993';
+  const scope = '3';
+  const storageKey = `asap.staff.email-test.${encodeURIComponent(actorKey(staff))}.${scope}`;
+  const stored = { storageKey, operationId, id: reference, pending: true, status: 'failed', version: 'AAAAAAAAAAE=' };
+  const activity = [{ id: '9223372036854775807', source: 'email_event', eventType: 'email', actorType: 'system',
+    message: 'Suppressed; no email sent', created: '2026-10-23T12:00:00.1234567Z',
+    email: { operationReference: reference, messageKind: 'confirmation', messageType: 'Patron confirmation',
+      outcome: 'suppressed', outcomeLabel: 'Suppressed; no email sent', reason: 'Recipient domain not allowed',
+      intendedRecipient: 'patron@example.org', deliveryMode: 'unknown', isRecordedSummary: false,
+      timestampKind: 'suppressed', operationsScope: '2' } }];
+  return fixture(`?stage=operations&opSection=email&emailScope=2&emailTestScope=${scope}`, async ui => {
+    require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, () => null);
+    await until(() => !ui.get('#operations-view').hidden && ui.get('#email-test-scope').value === scope,
+      'the saved test context is selected in Operations');
+    const originalRecord = ui.dom.window.sessionStorage.getItem(storageKey);
+    assert.equal(JSON.parse(originalRecord).operationId, operationId);
+    ui.get('[data-view="queue"]').click();
+    await until(() => !ui.get('#queue-view').hidden && ui.get(`#request-grid a[data-request-id="${id}"]`),
+      'the request queue is ready');
+    ui.get(`#request-grid a[data-request-id="${id}"]`).click();
+    await until(() => ui.get('#request-dialog').open, `request detail is open: ${ui.get('#app-status').textContent}`);
+    assert.ok(ui.get(`#request-${id}-activity-tab`), `Activity tab exists after detail load: ${ui.get('#app-status').textContent}`);
+    const activityTab = ui.get(`#request-${id}-activity-tab`);
+    activityTab.click();
+    const link = ui.get(`[aria-label="Open email operation ${reference}"]`);
+    assert.ok(link);
+    const notes = ui.get('.edit-form textarea[maxlength="10000"]');
+    ui.edit('.edit-form textarea[maxlength="10000"]', 'Unsaved request note draft');
+    assert.equal(protectedUnload(ui), true, 'The request Notes field owns a real unsaved draft.');
+    link.focus(); link.click();
+    await until(() => ui.get('#confirmation-dialog .secondary-button'), 'dirty request departure asks for consent');
+    const keepEditing = ui.get('#confirmation-dialog .secondary-button');
+    assert.equal(keepEditing.textContent, 'Keep editing');
+    keepEditing.click(); await settle();
+    assert.equal(ui.get('#request-dialog').open, true);
+    assert.equal(activityTab.getAttribute('aria-selected'), 'true', 'Cancel preserves the selected Activity tab.');
+    assert.equal(notes.value, 'Unsaved request note draft', 'Cancel retains the editable Notes draft.');
+    assert.equal(ui.dom.window.document.activeElement, link, 'Cancel restores focus to the reference action.');
+    assert.equal(ui.get('#operations-view').hidden, true);
+    assert.equal(ui.calls.filter(call => new URL(call.url, 'https://localhost').pathname.endsWith('/email-operations') &&
+      new URL(call.url, 'https://localhost').searchParams.has('reference')).length, 0,
+    'Cancel stops before the exact Operations history read.');
+    assert.equal(ui.dom.window.sessionStorage.getItem(storageKey), originalRecord,
+      'Cancel leaves the saved unresolved recovery record unchanged.');
+
+    ui.allowDiscard(); link.focus(); link.click();
+    await until(() => ui.get('#confirmation-dialog .danger-button'), 'accepted discard awaits the user decision');
+    ui.get('#confirmation-dialog .danger-button').click();
+    await until(() => !ui.get('#operations-view').hidden && ui.dom.window.document.activeElement === ui.get('#email-operations-table'),
+      'accepted discard opens the exact Operations destination and focuses its stable table');
+    assert.equal(ui.get('#request-dialog').open, false, 'The request closes only after accepted departure.');
+    assert.equal(ui.get('#email-view-scope').value, '2');
+    assert.equal(ui.get('#email-test-scope').value, scope, 'Reference navigation preserves Test settings scope.');
+    assert.equal(ui.get('#email-reference-value').textContent, `Showing exact email operation ${reference}.`);
+    const listRead = ui.calls.filter(call => new URL(call.url, 'https://localhost').pathname.endsWith('/email-operations') &&
+      new URL(call.url, 'https://localhost').searchParams.has('reference')).at(-1);
+    assert.equal(new URL(listRead.url, 'https://localhost').searchParams.get('reference'), reference);
+    assert.equal(new URL(listRead.url, 'https://localhost').searchParams.get('scope'), '2');
+    assert.equal(ui.get('#email-operations-table').textContent.includes(reference), true);
+    assert.equal(ui.dom.window.sessionStorage.getItem(storageKey), originalRecord,
+      'The exact history read does not mutate saved test recovery state.');
+    assert.equal(ui.readRequest().notes, 'Saved note <b>text</b>. Email evidence belongs in Activity.',
+      'Accepted discard leaves the persisted Notes value untouched.');
+    assert.doesNotMatch(notes.value, /Suppressed; no email sent|patron@example\.org/,
+      'Request email history never contaminates the editable Notes draft.');
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0,
+      'Neither Cancel nor accepted discard saves or sends the request draft.');
+  }, { staff, request: { activity, notes: 'Saved note <b>text</b>. Email evidence belongs in Activity.' },
+    storage: new Map([[storageKey, JSON.stringify(stored)]]), api: ({ pathname, parsed }) => {
+      if (pathname.endsWith('/email-operations/test') && parsed.searchParams.get('operationId') === operationId) {
+        return response(200, { code: 'ok', data: { id: reference, organizationId: Number(scope), status: 'failed',
+          lastErrorCode: 'provider_timeout', deliveryClass: 'operational_test', deliveryMode: 'postmark',
+          version: 'AAAAAAAAAAE=' } });
+      }
+      if (pathname.endsWith('/email-operations')) return response(200, { items: [{ id: reference, organizationId: 2,
+        createdUtc: '2026-10-23T12:00:00.1234567Z', status: 'suppressed', deliveryClass: 'business_event',
+        typeLabel: 'Business event', detailLabel: 'Recipient domain not allowed', canRetry: false,
+        version: 'AAAAAAAAAAE=' }] });
+    } });
+});
 test('email operations navigation guards the original terminal test while Settings rechecks after departure', () =>
   fixture('?stage=settings&settingsScope=system#settings-smtp', async ui => {
     const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
@@ -2127,7 +2219,10 @@ test('Analytics view round trip preserves scope/range and rejects the prior acti
     const pending = [];
     const analyticsData = (scope, range, label) => ({
       scope: { mode: scope === 'all' ? 'all' : 'library', libraryOrgId: scope === 'all' ? null : Number(scope), label, superAdmin: true },
-      dateRange: { key: range, start: '2026-09-01', end: '2026-09-30' },
+      dateRange: {
+        key: range, start: '2026-09-01T04:00:00Z', end: '2026-10-01T03:59:59Z',
+        startDate: '2026-09-01', endDate: '2026-09-30', timeZoneId: 'America/New_York'
+      },
       availableLibraries: [{ orgId: 2, name: 'Library A' }], summary: {}, stageCounts: {},
       aging: {}, exceptions: {}, closedReasons: []
     });
@@ -2136,12 +2231,12 @@ test('Analytics view round trip preserves scope/range and rejects the prior acti
     ui.get('[data-view="analytics"]').click();
     await until(() => pending.length === 1, 'initial Analytics request');
     pending[0].resolve(response(200, analyticsData('all', 'lastMonth', 'All libraries')));
-    await until(() => ui.get('#analytics-scope'), 'Analytics controls');
+    await until(() => ui.get('#analytics-container').textContent.includes('All libraries:'), 'initial Analytics report');
     ui.get('#analytics-scope').value = '2';
     ui.get('#analytics-scope').dispatchEvent(new ui.dom.window.Event('change'));
     await until(() => pending.length === 2, 'library-scoped request');
     pending[1].resolve(response(200, analyticsData('2', 'lastMonth', 'Library A')));
-    await until(() => ui.get('#analytics-date-range'), 'scoped controls');
+    await until(() => ui.get('#analytics-container').textContent.includes('Library A:'), 'scoped Analytics report');
     ui.get('#analytics-date-range').value = 'last90';
     ui.get('#analytics-date-range').dispatchEvent(new ui.dom.window.Event('change'));
     await until(() => pending.length === 3, 'selected range request');
@@ -2152,7 +2247,7 @@ test('Analytics view round trip preserves scope/range and rejects the prior acti
     assert.equal(pending[3].parsed.searchParams.get('scope'), '2');
     assert.equal(pending[3].parsed.searchParams.get('range'), 'last90');
     pending[3].resolve(response(200, analyticsData('2', 'last90', 'Current activation')));
-    await until(() => ui.get('#analytics-scope'), 'reactivated controls');
+    await until(() => ui.get('#analytics-container').textContent.includes('Current activation'), 'reactivated report');
     assert.equal(ui.get('#analytics-scope').value, '2');
     assert.equal(ui.get('#analytics-date-range').value, 'last90');
     const focused = document.activeElement;
@@ -2161,6 +2256,57 @@ test('Analytics view round trip preserves scope/range and rejects the prior acti
     assert.match(ui.get('#analytics-container').textContent, /Current activation/);
     assert.doesNotMatch(ui.get('#analytics-container').textContent, /Stale activation/);
     assert.equal(document.activeElement, focused);
+
+    ui.get('#analytics-date-range').value = 'custom';
+    ui.get('#analytics-date-range').dispatchEvent(new ui.dom.window.Event('change'));
+    ui.edit('#analytics-start-date', '2026-11-01');
+    ui.edit('#analytics-end-date', '2026-11-02');
+    const beforeAnalyticsExit = pending.length;
+    ui.get('[data-view="profile"]').click(); await settle();
+    assert.equal(pending.length, beforeAnalyticsExit, 'drafting custom dates does not fetch on view exit');
+    ui.get('[data-view="analytics"]').click();
+    await until(() => pending.length === beforeAnalyticsExit + 1, 'report refresh after returning to Analytics');
+    assert.equal(pending.at(-1).parsed.searchParams.get('range'), 'last90');
+    pending.at(-1).resolve(response(200, analyticsData('2', 'last90', 'Custom draft restored')));
+    await until(() => ui.get('#analytics-container').textContent.includes('Custom draft restored'), 'restored Analytics report');
+    assert.equal(ui.get('#analytics-date-range').value, 'custom');
+    assert.equal(ui.get('#analytics-start-date').value, '2026-11-01');
+    assert.equal(ui.get('#analytics-end-date').value, '2026-11-02');
+  }));
+
+test('Analytics custom drafts leave without a prompt and Settings drafts keep their existing navigation guard', () =>
+  fixture('?stage=settings#settings-patron', async ui => {
+    await until(() => !ui.get('#settings-form').hidden, 'Settings editor loaded');
+    ui.edit('#patron-login-note', 'Unsaved Settings note');
+    ui.setApi(({ pathname }) => pathname.endsWith('/analytics') ? response(200, {
+      scope: { mode: 'all', libraryOrgId: null, label: 'All libraries', superAdmin: true },
+      dateRange: { key: 'lastMonth', start: '2026-10-01T04:00:00Z', end: '2026-11-01T03:59:59Z',
+        startDate: '2026-10-01', endDate: '2026-10-31', timeZoneId: 'America/New_York' },
+      availableLibraries: [], summary: {}, stageCounts: {}, closedReasons: [],
+      aging: { thresholdDays: 30, openOlderThanThreshold: 0, averageAgeByStage: [] },
+      exceptions: { holdFailures: 0, identifierFailures: 0 }
+    }) : undefined);
+
+    ui.get('[data-view="analytics"]').click(); await settle();
+    assert.equal(ui.params().get('stage'), 'settings');
+    assert.equal(ui.get('#patron-login-note').value, 'Unsaved Settings note');
+    assert.equal(ui.confirms.length, 1, 'Settings navigation still asks before discarding a draft');
+    ui.allowDiscard();
+    ui.get('[data-view="analytics"]').click();
+    await until(() => ui.params().get('stage') === 'analytics' &&
+      ui.get('#analytics-container').textContent.includes('All libraries:'), 'Analytics entered after Settings discard');
+    ui.get('#analytics-date-range').value = 'custom';
+    ui.get('#analytics-date-range').dispatchEvent(new ui.dom.window.Event('change'));
+    ui.edit('#analytics-start-date', '2026-11-01');
+    ui.edit('#analytics-end-date', '2026-11-02');
+    const confirmsBeforeExit = ui.confirms.length;
+    ui.get('[data-view="profile"]').click(); await settle();
+    assert.equal(ui.confirms.length, confirmsBeforeExit, 'Analytics date drafts do not add navigation prompts');
+    ui.get('[data-view="analytics"]').click();
+    await until(() => ui.params().get('stage') === 'analytics', 'returned to Analytics');
+    assert.equal(ui.get('#analytics-date-range').value, 'custom');
+    assert.equal(ui.get('#analytics-start-date').value, '2026-11-01');
+    assert.equal(ui.get('#analytics-end-date').value, '2026-11-02');
   }));
 
 test('programmatic hold-resolution Revert invalidates consent while a competing editor draft remains', () =>
@@ -2731,9 +2877,13 @@ for (const copy of [false, true]) {
             committed = true;
             return response(200, { code: 'saved', data: { orgId: JSON.parse(init.body).orgId, version: 'v2' } });
           }
+          const item = copy ? ui.readCopyRequest() : ui.readRequest();
+          if (!copy && pathname.endsWith(`/title-requests/${item.id}`)) {
+            return response(200, { ...item,
+              workflowContext: { outstandingTimeoutEnabled: true, outstandingTimeoutDays: committed ? 9 : 5 } });
+          }
           if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
             queueReads++;
-            const item = copy ? ui.readCopyRequest() : ui.readRequest();
             return response(200, { scope: parsed.searchParams.get('scope'), status: 'open',
               organizations: [{ id: 2, name: 'Library A', organizationCodeId: 2 }],
               availableLibraries: [{ id: 2, name: 'Library A', organizationCodeId: 2 }],
@@ -2763,9 +2913,16 @@ for (const copy of [false, true]) {
           assert.match(ui.get(grid).textContent, /Old format/);
         } else {
           await until(() => queueReads === before + 1 && /New format/.test(ui.get(grid).textContent), 'affected same-scope DTO refreshed');
-          const automation = copy ? ui.get(grid) : ui.get('#queue-automation');
-          assert.match(automation.textContent, /9 days/);
-          assert.doesNotMatch(`${ui.get(grid).textContent} ${automation.textContent}`, /Old format|5 days/);
+          if (copy) {
+            assert.match(ui.get(grid).textContent, /9 days/);
+            assert.doesNotMatch(ui.get(grid).textContent, /Old format|5 days/);
+          } else {
+            await ui.open();
+            await until(() => /Suggestion timeout: 9 days/.test(ui.get('#request-dialog-body .workflow-context')?.textContent || ''),
+              'per-request workflow details use the refreshed configuration');
+            assert.doesNotMatch(ui.get('#request-dialog-body').textContent, /Old format|5 days/);
+            await ui.closeDetail();
+          }
         }
       }, { copyRequest: {} }));
   }

@@ -4,7 +4,7 @@ import { applyPolarisResultToControls, renderResearchLinks, selectedStaffBibId, 
 import { customFieldValue, renderCustomFieldEditor, collectCustomFields } from './custom-fields.js';
 import { element, icon, commandButton, labeledInput, selectWithHistorical } from './ui.js';
 
-export function createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot = null, closeDetail = () => {}, onDirtyChange = () => {}, verified = null, retained = null, request: send = authorizedJson }) {
+export function createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot = null, closeDetail = () => {}, onDirtyChange = () => {}, onResearchConfiguration = () => {}, verified = null, retained = null, request: send = authorizedJson }) {
   const { request, actor, root, scope: interactionScope, isCurrent, isPending, admit, confirm: confirmChanges, mutate } = context;
   const reads = createLatestLoad();
   let editControls = null, editorDirty = false, editorDraft = null, verifiedBib = verified, research = null, lookupContext = null;
@@ -43,6 +43,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
         { signal: load.signal });
       if (!load.isCurrent() || !isCurrent()) return;
       research = data;
+      onResearchConfiguration(data);
       updateResearchLinks();
     } catch (error) {
       if (isAbortError(error) || error.status === 401) return;
