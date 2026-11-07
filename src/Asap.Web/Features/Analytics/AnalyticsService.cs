@@ -365,73 +365,80 @@ public sealed class AnalyticsService(
         AddParameter(command, "@rangeEndExclusiveUtc", SqlDbType.DateTime2, resolvedRange.EndExclusiveUtc);
         AddParameter(command, "@nowUtc", SqlDbType.DateTime2, nowUtc.UtcDateTime);
 
-        await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
+        try
         {
-            throw new InvalidOperationException("Analytics aggregate query returned no summary row.");
+            await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                throw new InvalidOperationException("Analytics aggregate query returned no summary row.");
+            }
+
+            var summary = new AnalyticsSummary(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetInt64(2),
+                reader.GetInt64(3),
+                reader.IsDBNull(4) ? 0 : reader.GetDouble(4));
+
+            var stageCounts = StageOrder.ToDictionary(stage => stage, _ => 0L, StringComparer.Ordinal);
+            await reader.NextResultAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                stageCounts[reader.GetString(0)] = reader.GetInt64(1);
+            }
+
+            var closedReasons = new List<AnalyticsClosedReason>();
+            await reader.NextResultAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                closedReasons.Add(new AnalyticsClosedReason(reader.GetString(0), reader.GetInt64(1)));
+            }
+
+            var agingStages = new List<AnalyticsAgingStage>();
+            await reader.NextResultAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                agingStages.Add(new AnalyticsAgingStage(reader.GetString(0), reader.GetInt64(1), reader.GetDouble(2)));
+            }
+            agingStages = OpenStageOrder
+                .Select(stage => agingStages.FirstOrDefault(item => item.Status == stage) ?? new AnalyticsAgingStage(stage, 0, 0))
+                .ToList();
+
+            await reader.NextResultAsync(cancellationToken);
+            var openOlderThanThreshold = await reader.ReadAsync(cancellationToken) ? reader.GetInt64(0) : 0L;
+
+            await reader.NextResultAsync(cancellationToken);
+            var holdFailures = 0L;
+            var identifierFailures = 0L;
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                holdFailures = reader.GetInt64(0);
+                identifierFailures = reader.GetInt64(1);
+            }
+
+            var availableLibraries = staff.Role == StaffRole.SuperAdmin ? organizations : [];
+            var response = new AnalyticsResponse(
+                new AnalyticsScope(
+                    resolvedScope.Mode,
+                    resolvedScope.LibraryOrgId,
+                    resolvedScope.Label,
+                    staff.Role == StaffRole.SuperAdmin),
+                new AnalyticsDateRange(
+                    resolvedRange.Key, resolvedRange.Start, resolvedRange.End,
+                    resolvedRange.StartDate, resolvedRange.EndDate, resolvedRange.TimeZoneId,
+                    new DateTimeOffset(resolvedRange.EndExclusiveUtc, TimeSpan.Zero)),
+                availableLibraries,
+                summary,
+                stageCounts,
+                closedReasons,
+                new AnalyticsAging(30, openOlderThanThreshold, agingStages),
+                new AnalyticsExceptions(holdFailures, identifierFailures));
+            return new AnalyticsResult("ok", response);
         }
-
-        var summary = new AnalyticsSummary(
-            reader.GetInt64(0),
-            reader.GetInt64(1),
-            reader.GetInt64(2),
-            reader.GetInt64(3),
-            reader.IsDBNull(4) ? 0 : reader.GetDouble(4));
-
-        var stageCounts = StageOrder.ToDictionary(stage => stage, _ => 0L, StringComparer.Ordinal);
-        await reader.NextResultAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        catch (SqlException exception) when (cancellationToken.IsCancellationRequested)
         {
-            stageCounts[reader.GetString(0)] = reader.GetInt64(1);
+            throw new OperationCanceledException("The Analytics read was canceled.", exception, cancellationToken);
         }
-
-        var closedReasons = new List<AnalyticsClosedReason>();
-        await reader.NextResultAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            closedReasons.Add(new AnalyticsClosedReason(reader.GetString(0), reader.GetInt64(1)));
-        }
-
-        var agingStages = new List<AnalyticsAgingStage>();
-        await reader.NextResultAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            agingStages.Add(new AnalyticsAgingStage(reader.GetString(0), reader.GetInt64(1), reader.GetDouble(2)));
-        }
-        agingStages = OpenStageOrder
-            .Select(stage => agingStages.FirstOrDefault(item => item.Status == stage) ?? new AnalyticsAgingStage(stage, 0, 0))
-            .ToList();
-
-        await reader.NextResultAsync(cancellationToken);
-        var openOlderThanThreshold = await reader.ReadAsync(cancellationToken) ? reader.GetInt64(0) : 0L;
-
-        await reader.NextResultAsync(cancellationToken);
-        var holdFailures = 0L;
-        var identifierFailures = 0L;
-        if (await reader.ReadAsync(cancellationToken))
-        {
-            holdFailures = reader.GetInt64(0);
-            identifierFailures = reader.GetInt64(1);
-        }
-
-        var availableLibraries = staff.Role == StaffRole.SuperAdmin ? organizations : [];
-        var response = new AnalyticsResponse(
-            new AnalyticsScope(
-                resolvedScope.Mode,
-                resolvedScope.LibraryOrgId,
-                resolvedScope.Label,
-                staff.Role == StaffRole.SuperAdmin),
-            new AnalyticsDateRange(
-                resolvedRange.Key, resolvedRange.Start, resolvedRange.End,
-                resolvedRange.StartDate, resolvedRange.EndDate, resolvedRange.TimeZoneId,
-                new DateTimeOffset(resolvedRange.EndExclusiveUtc, TimeSpan.Zero)),
-            availableLibraries,
-            summary,
-            stageCounts,
-            closedReasons,
-            new AnalyticsAging(30, openOlderThanThreshold, agingStages),
-            new AnalyticsExceptions(holdFailures, identifierFailures));
-        return new AnalyticsResult("ok", response);
     }
 
     public static AnalyticsResolvedScope ResolveScope(

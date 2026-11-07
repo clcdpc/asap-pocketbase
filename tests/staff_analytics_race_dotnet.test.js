@@ -79,6 +79,8 @@ async function flush() {
     analytics.activate();
     const initial = analytics.refresh();
     assert.strictEqual(pending.length, 1);
+    assert.equal(new URL(requests[0].url, dom.window.location.href).searchParams.get('range'), 'lastMonth',
+      'the controller should request the initial Last month report');
     pending[0].resolve(response(200, payload('all', 'lastMonth', 'All libraries')));
     await initial;
     assert.ok(container.textContent.includes('All libraries'));

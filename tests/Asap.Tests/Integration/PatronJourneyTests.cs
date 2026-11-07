@@ -596,7 +596,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             foreach (var flag in new[]
                      {
                          "incompleteDraftNoDispatch", "scopeKeepsAppliedDatesAndDraft", "presetOmitsCustomDates",
-                         "keyboardApplyAndValidationFocus", "preDispatchFailureRetry", "customInvalidScopeRecovery",
+                         "keyboardApplyAndValidationFocus", "keyboardOnlyCustomApply", "preDispatchFailureRetry", "customInvalidScopeRecovery",
                          "mobileCustomSameDay"
                      })
             {

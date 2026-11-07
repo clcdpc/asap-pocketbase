@@ -831,19 +831,41 @@ async function runAnalytics(browser, args, axeSource, report) {
     const endInput = superPage.locator('#analytics-end-date');
     const apply = superPage.locator('#analytics-apply-range');
     const beforeCustomSelect = analyticsRequests.length;
-    await dateRange.selectOption('custom');
+    await dateRange.focus();
+    await superPage.keyboard.press('End');
+    assert.equal(await dateRange.inputValue(), 'custom', 'Keyboard selection should choose Custom');
+    await superPage.keyboard.press('Enter');
+    await superPage.keyboard.press('Escape');
     await superPage.locator('.analytics-custom-range:not([hidden])').waitFor();
     assert.equal(analyticsRequests.length, beforeCustomSelect, 'Selecting Custom must not send a report request');
-    await apply.click();
+    const activeAnalyticsControl = () => superPage.evaluate(() => document.activeElement.id);
+    const tabToAnalyticsControl = async controlId => {
+      const path = [];
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        if (await activeAnalyticsControl() === controlId) return path;
+        await superPage.keyboard.press('Tab');
+        path.push(await activeAnalyticsControl());
+      }
+      assert.fail(`Keyboard Tab did not reach ${controlId}: ${path.join(' → ')}`);
+    };
+    const rangeToStartPath = await tabToAnalyticsControl('analytics-start-date');
+    assert.ok(rangeToStartPath.length > 0, 'Keyboard navigation should leave the native range select');
+    await tabToAnalyticsControl('analytics-apply-range');
+    await superPage.keyboard.press('Enter');
     assert.equal(analyticsRequests.length, beforeCustomSelect, 'Incomplete custom dates must not send a report request');
     assert.equal(await startInput.getAttribute('aria-invalid'), 'true');
     assert.equal(await startInput.getAttribute('aria-describedby'), 'analytics-start-date-error');
-    assert.equal(await superPage.evaluate(() => document.activeElement.id), 'analytics-start-date');
+    assert.equal(await activeAnalyticsControl(), 'analytics-start-date');
 
     const applyCustomFromKeyboard = async (startDate, endDate) => {
-      await startInput.fill(startDate);
-      await endInput.fill(endDate);
-      await apply.focus();
+      assert.equal(await activeAnalyticsControl(), 'analytics-start-date',
+        'The validation response should focus the first date field');
+      await superPage.keyboard.type('03072026');
+      assert.equal(await startInput.inputValue(), startDate, 'Keyboard input should complete the native start date');
+      await tabToAnalyticsControl('analytics-end-date');
+      await superPage.keyboard.type('03092026');
+      assert.equal(await endInput.inputValue(), endDate, 'Keyboard input should complete the native end date');
+      await tabToAnalyticsControl('analytics-apply-range');
       const responsePromise = superPage.waitForResponse(response => {
         const url = new URL(response.url());
         return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
@@ -859,12 +881,28 @@ async function runAnalytics(browser, args, axeSource, report) {
       return data;
     };
 
+    const applyCustomWithFilledValues = async (startDate, endDate) => {
+      await startInput.fill(startDate);
+      await endInput.fill(endDate);
+      const responsePromise = superPage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
+          url.searchParams.get('range') === 'custom' && url.searchParams.get('startDate') === startDate &&
+          url.searchParams.get('endDate') === endDate && response.status() === 200;
+      });
+      await apply.click();
+      const response = await responsePromise;
+      const data = await response.json();
+      await waitForApplied(superPage);
+      return data;
+    };
+
     const multiDay = await applyCustomFromKeyboard('2026-03-07', '2026-03-09');
     await assertBusinessRange(superPage, multiDay, '2026-03-07', '2026-03-09', 71);
     assertCurrentMetricsEqual(initialReport, multiDay);
     await scan(superPage, axeSource, args.artifactRoot, report, 'desktop', 'analytics-custom-dst-multi-day');
 
-    const sameDay = await applyCustomFromKeyboard('2026-11-01', '2026-11-01');
+    const sameDay = await applyCustomWithFilledValues('2026-11-01', '2026-11-01');
     await assertBusinessRange(superPage, sameDay, '2026-11-01', '2026-11-01', 25);
     assertCurrentMetricsEqual(initialReport, sameDay);
     await scan(superPage, axeSource, args.artifactRoot, report, 'desktop', 'analytics-custom-dst-same-day');
@@ -1066,6 +1104,7 @@ async function runAnalytics(browser, args, axeSource, report) {
     scopeKeepsAppliedDatesAndDraft: true,
     presetOmitsCustomDates: true,
     keyboardApplyAndValidationFocus: true,
+    keyboardOnlyCustomApply: true,
     preDispatchFailureRetry: true,
     customInvalidScopeRecovery: true,
     mobileCustomSameDay: true,

@@ -12,7 +12,8 @@ journeys use the Testing Kestrel fixtures:
   revisions, operational catalog retirement/reactivation after Settings commits,
   and stale rejection, queued notification, reopen and silent close.
   Analytics coverage includes unapplied custom drafts, scope retention,
-  business-date and DST summaries, retry recovery, and a library-only mobile view.
+  keyboard date entry and Apply, business-date and DST summaries, retry recovery,
+  and a library-only mobile view.
 - `request-links.cjs`: 18 desktop/mobile success and failure states covering
   native bigint links, scope, missing records, and type-qualified request links.
 - `patron-submit-session.cjs`: controlled frontend response/session races.
