@@ -190,7 +190,7 @@ public sealed partial class PatronJourneyTests
             }
             await ExecuteNonQueryAsync("""
                 DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [OrganizationId]=@org);
-                DELETE FROM [asap].[EmailOutbox] WHERE [OrganizationId]=@org;
+                DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [OrganizationId]=@org); DELETE FROM [asap].[EmailOutbox] WHERE [OrganizationId]=@org;
                 DELETE FROM [asap].[PickupPreferenceOperation] WHERE [LibraryOrganizationId]=@org;
                 DELETE FROM [asap].[FormatAutoClaimRule] WHERE [LibraryOrganizationId]=@org;
                 DELETE FROM [asap].[StaffUser] WHERE [Id]=@claimant;

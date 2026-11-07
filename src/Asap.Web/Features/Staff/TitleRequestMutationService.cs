@@ -250,6 +250,7 @@ public sealed partial class TitleRequestMutationService(
             assignee,
             request,
             $"title-assignment:{request.Id}:{Convert.ToHexString(expectedVersion)}:{assignee.Id}",
+            "assignment",
             "ASAP request assigned",
             $"{request.Title} has been assigned to you.",
             readiness.IsConfigured,
@@ -832,7 +833,7 @@ public sealed partial class TitleRequestMutationService(
             if (reminderRequested)
             {
                 var outbox = await AddStaffNotificationAsync(context, locked.Staff[actor.Id], request,
-                    $"additional-copy-reminder:{additionalCopy.Id}", "ASAP additional-copy reminder",
+                    $"additional-copy-reminder:{additionalCopy.Id}", "additional_copy_reminder", "ASAP additional-copy reminder",
                     $"Additional-copy task {additionalCopy.Id} for {request.Title} (BIB {request.BibId}) was created.",
                     transportConfigured, cancellationToken);
                 notificationStatus = outbox?.Status == "pending" ? "queued" : "suppressed";
@@ -851,6 +852,7 @@ public sealed partial class TitleRequestMutationService(
                 locked.Staff[actor.Id],
                 request,
                 $"purchase-reminder:{request.Id}:{Convert.ToHexString(expectedVersion)}",
+                "purchase_reminder",
                 "ASAP purchase reminder",
                 $"Purchase requested for {request.Title}.",
                 transportConfigured,
@@ -1411,15 +1413,12 @@ public sealed partial class TitleRequestMutationService(
         StaffUser recipient,
         TitleRequest request,
         string businessKey,
+        string messageKind,
         string subject,
         string body,
         bool transportConfigured,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(recipient.NotificationEmail))
-        {
-            return null;
-        }
         var system = await context.EmailSettings.AsNoTracking()
             .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var library = await context.EmailSettings.AsNoTracking()
@@ -1429,7 +1428,7 @@ public sealed partial class TitleRequestMutationService(
         string? suppressionReason = null;
         if (!StaffEmail.TryNormalize(recipient.NotificationEmail, out var toAddress) || toAddress is null)
         {
-            suppressionReason = "recipient_invalid";
+            suppressionReason = string.IsNullOrWhiteSpace(recipient.NotificationEmail) ? "recipient_missing" : "recipient_invalid";
         }
         else if (!recipientDomainPolicy.IsAllowed(toAddress))
         {
@@ -1448,6 +1447,8 @@ public sealed partial class TitleRequestMutationService(
         {
             OrganizationId = request.LibraryOrganizationId,
             BusinessKey = businessKey,
+            TitleRequestId = request.Id,
+            MessageKind = messageKind,
             DeliveryClass = "staff_authorization_sensitive",
             RecipientStaffUserId = recipient.Id,
             RecipientAuthenticationEmail = recipient.NormalizedUserPrincipalName,
@@ -1465,6 +1466,7 @@ public sealed partial class TitleRequestMutationService(
             SuppressedUtc = suppressionReason is null ? null : now
         };
         context.EmailOutbox.Add(outbox);
+        RequestEmailEvidence.AddInitial(context, outbox);
         await context.SaveChangesAsync(cancellationToken);
         return outbox;
     }
@@ -1537,6 +1539,8 @@ public sealed partial class TitleRequestMutationService(
         {
             OrganizationId = request.LibraryOrganizationId,
             BusinessKey = $"staff-patron-action:{templateKey}:{request.Id}:{Convert.ToHexString(expectedVersion)}",
+            TitleRequestId = request.Id,
+            MessageKind = templateKey,
             DeliveryClass = "business_event",
             ToAddress = toAddress,
             FromAddress = fromAddress,
@@ -1551,6 +1555,7 @@ public sealed partial class TitleRequestMutationService(
             SuppressedUtc = suppressionReason is null ? null : now
         };
         context.EmailOutbox.Add(outbox);
+        RequestEmailEvidence.AddInitial(context, outbox);
         await context.SaveChangesAsync(cancellationToken);
         return outbox;
     }
@@ -1608,6 +1613,8 @@ public sealed partial class TitleRequestMutationService(
         {
             OrganizationId = request.LibraryOrganizationId,
             BusinessKey = $"rejection:{request.Id}:{Convert.ToHexString(expectedVersion)}",
+            TitleRequestId = request.Id,
+            MessageKind = "rejection",
             DeliveryClass = "business_event",
             ToAddress = toAddress,
             FromAddress = fromAddress,
@@ -1622,6 +1629,7 @@ public sealed partial class TitleRequestMutationService(
             SuppressedUtc = suppressionReason is null ? null : now
         };
         context.EmailOutbox.Add(outbox);
+        RequestEmailEvidence.AddInitial(context, outbox);
         await context.SaveChangesAsync(cancellationToken);
         return outbox;
     }

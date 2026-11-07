@@ -252,7 +252,33 @@ class SqlLifecycleTests(unittest.TestCase):
                 f"else: Path({str(pidfile)!r}).write_text(str(os.getpid())); time.sleep(60)\n", encoding="utf-8")
             docker.chmod(0o755)
             output = root / "evidence"
-            args = [sys.executable, "-B", str(Path(perf.__file__).resolve()), "--output", str(output), "--interval", ".03", "--", sys.executable, "-c", "import time; time.sleep(.4); raise SystemExit(33)"]
+            # Observe flushed host progress while SQL is stalled, independent
+            # of how long the collector's initial Docker probes take.
+            source = textwrap.dedent(f"""
+                import json,time
+                from pathlib import Path
+                samples = Path({str(output / 'samples.jsonl')!r})
+                pidfile = Path({str(pidfile)!r})
+                deadline = time.monotonic() + 2
+                baseline = None
+                while time.monotonic() < deadline:
+                    pid = pidfile.read_text() if pidfile.exists() else ''
+                    stat = Path('/proc', pid, 'stat')
+                    if pid.isdigit() and stat.exists() and stat.read_text().rsplit(')', 1)[1].split()[0] not in ('Z', 'X'):
+                        host = 0
+                        for line in samples.read_text().splitlines():
+                            try:
+                                host += json.loads(line).get('kind') == 'host'
+                            except json.JSONDecodeError:
+                                pass
+                        if baseline is None:
+                            baseline = host
+                        if host - baseline >= 4:
+                            raise SystemExit(33)
+                    time.sleep(.01)
+                raise SystemExit('Host samples did not advance while the SQL helper was live.')
+                """)
+            args = [sys.executable, "-B", str(Path(perf.__file__).resolve()), "--output", str(output), "--interval", ".03", "--", sys.executable, "-c", source]
             env = dict(os.environ, PATH=str(root), ASAP_TEST_SQL_SA_PASSWORD=SECRET, ASAP_CI_SQL_CONTAINER="asap-sql-wrapper-fixture")
             started = time.monotonic()
             result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=5)

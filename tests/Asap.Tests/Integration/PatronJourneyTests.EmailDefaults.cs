@@ -102,7 +102,7 @@ public sealed partial class PatronJourneyTests
                 request.Id == item.TitleRequestId && request.LibraryOrganizationId == library)).ExecuteDeleteAsync();
             await cleanup.TitleRequestEvents.Where(item => cleanup.TitleRequests.Any(request =>
                 request.Id == item.TitleRequestId && request.LibraryOrganizationId == library)).ExecuteDeleteAsync();
-            await cleanup.EmailOutbox.Where(item => item.OrganizationId == library).ExecuteDeleteAsync();
+            await DeleteOwnedEmailFixtureAsync(cleanup, cleanup.EmailOutbox.Where(item => item.OrganizationId == library));
             await cleanup.TitleRequests.Where(item => item.LibraryOrganizationId == library).ExecuteDeleteAsync();
             foreach (var saved in original)
             {

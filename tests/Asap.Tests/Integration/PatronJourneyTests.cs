@@ -8481,7 +8481,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 await cleanup.OpenAsync();
                 await using var removeOutbox = cleanup.CreateCommand();
                 removeOutbox.CommandText =
-                    "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @requestId);";
+                    "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @requestId)); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @requestId);";
                 removeOutbox.Parameters.Add("@requestId", SqlDbType.BigInt);
                 foreach (var requestId in requestIds)
                 {
@@ -8694,7 +8694,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 {
                     await cleanup.OpenAsync();
                     await using var removeOutbox = new SqlCommand(
-                        "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @id);",
+                        "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @id)); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = N'patron-submission:' + CONVERT(nvarchar(40), @id);",
                         cleanup);
                     removeOutbox.Parameters.AddWithValue("@id", requestId);
                     await removeOutbox.ExecuteNonQueryAsync();

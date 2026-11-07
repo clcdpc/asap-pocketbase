@@ -4,6 +4,16 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { JSDOM } = require('jsdom');
 
+// Flat history responses are paged even in controller fixtures. Keep the query
+// identity and safe display labels explicit when testing other controller work.
+exports.emailHistoryPage = (result, path) => {
+  const query = new URL(path, 'https://localhost').searchParams;
+  const scope = query.get('scope') || query.get('organizationId') || 'all';
+  return { count: result.items.length, page: Number(query.get('page') || 1), pageSize: 25,
+    scope: scope === '1' ? 'system' : scope, libraries: [], types: [], ...result,
+    items: result.items.map(item => ({ typeLabel: item.deliveryClass, detailLabel: item.lastErrorCode || item.suppressionReason, ...item })) };
+};
+
 exports.fixture = async journey => {
   const frontend = path.join(__dirname, '../../src/Asap.Web/Frontend');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-controller-'));

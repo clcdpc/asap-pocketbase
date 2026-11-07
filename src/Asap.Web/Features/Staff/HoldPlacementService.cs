@@ -1952,6 +1952,8 @@ public sealed class HoldPlacementService(
         {
             OrganizationId = request.LibraryOrganizationId,
             BusinessKey = $"title-hold-placed:{request.Id}:{operation.AttemptNumber}",
+            TitleRequestId = request.Id,
+            MessageKind = "hold_placed",
             DeliveryClass = "business_event",
             ToAddress = to,
             FromAddress = from,
@@ -1965,6 +1967,7 @@ public sealed class HoldPlacementService(
             SuppressedUtc = suppression is null ? null : now
         };
         context.EmailOutbox.Add(outbox);
+        RequestEmailEvidence.AddInitial(context, outbox);
         return outbox;
     }
 

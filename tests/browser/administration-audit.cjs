@@ -233,8 +233,9 @@ async function main() {
         }
         await page.locator('#operations-email-tab').click();
         await page.locator('#email-view-scope').selectOption(scope); await page.locator('#refresh-operations:not([disabled])').waitFor();
+        await page.locator('#email-operations-table:not([aria-busy])').waitFor();
         assert.deepEqual((await page.locator('#email-operations-table th').allTextContents()).slice(0, 2), ['Reference', 'Created']);
-        assert.match(await page.locator('#email-operations-table').textContent(), /recipient_domain_not_allowed/);
+        assert.match(await page.locator('#email-operations-table').textContent(), /Recipient domain not allowed/);
         assert.match(await page.locator('#email-operations-table').textContent(), /Provider accepted/);
         assert.equal(await page.locator('#operations-email-test [data-email-test=refresh], #operations-email-test [data-email-test=operations]').count(), 0);
         if (width === 1440) {

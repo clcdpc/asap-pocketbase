@@ -1,5 +1,6 @@
 using System.Data;
 using System.Runtime.ExceptionServices;
+using System.Text.Json;
 using Hangfire;
 using Microsoft.Data.SqlClient;
 using Asap.Web.Features.Staff;
@@ -174,6 +175,11 @@ public sealed class EmailOutboxJobs(
                 exception);
             return;
         }
+        catch (Exception exception) when (cancellationToken.IsCancellationRequested)
+        {
+            await RecordProviderFailurePreservingOriginalAsync(claim, "provider_cancelled", exception.GetType().Name, exception);
+            throw;
+        }
 
         if (result.Outcome == EmailSendOutcome.NotConfigured)
         {
@@ -203,6 +209,29 @@ public sealed class EmailOutboxJobs(
         var ids = new HashSet<long>();
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        var trackedIds = new HashSet<long>();
+        var expiredIds = new List<long>();
+        await using (var expired = new SqlCommand("""
+            SELECT [Id] FROM [asap].[EmailOutbox] WITH (UPDLOCK, ROWLOCK)
+            WHERE [Status] = N'sending' AND [LeaseExpiresUtc] <= SYSUTCDATETIME()
+            ORDER BY [Id];
+            """, connection, transaction))
+        await using (var reader = await expired.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                expiredIds.Add(reader.GetInt64(0));
+            }
+        }
+        foreach (var id in expiredIds)
+        {
+            if (await RequestEmailEvidence.PreserveSnapshotAsync(connection, transaction, id, cancellationToken))
+            {
+                trackedIds.Add(id);
+            }
+        }
+        var recovered = new List<(long Id, string Status, Guid LeaseId, string? Reason)>();
 
         await using (var reclaim = new SqlCommand(
             """
@@ -237,13 +266,15 @@ public sealed class EmailOutboxJobs(
                     WHEN [LastErrorCode] = N'provider_start_deadline_exceeded'
                         THEN COALESCE([LastErrorDetail], N'Transport did not start within the post-claim deadline.')
                     ELSE [LastErrorDetail] END
-            OUTPUT inserted.[Id], inserted.[Status]
+            OUTPUT inserted.[Id], inserted.[Status], deleted.[LeaseId], inserted.[LastErrorCode]
             WHERE [Status] = N'sending'
-              AND [LeaseExpiresUtc] <= SYSUTCDATETIME();
+              AND [LeaseExpiresUtc] <= SYSUTCDATETIME()
+              AND [Id] IN (SELECT [value] FROM OPENJSON(@expiredIds) WITH ([value] bigint '$'));
             """,
-            connection))
+            connection, transaction))
         {
             reclaim.Parameters.Add("@now", SqlDbType.DateTime2).Value = timeProvider.GetUtcNow().UtcDateTime;
+            reclaim.Parameters.Add("@expiredIds", SqlDbType.NVarChar, -1).Value = JsonSerializer.Serialize(expiredIds);
             await using var reader = await reclaim.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -251,8 +282,16 @@ public sealed class EmailOutboxJobs(
                 {
                     ids.Add(reader.GetInt64(0));
                 }
+                recovered.Add((reader.GetInt64(0), reader.GetString(1), reader.GetGuid(2), NullableString(reader, 3)));
             }
         }
+        foreach (var row in recovered.Where(row => trackedIds.Contains(row.Id)))
+        {
+            var eventType = row.Status == "pending" ? "pre_send_released" : "lease_expired_ambiguous";
+            await RequestEmailEvidence.AppendAsync(connection, transaction, row.Id, $"lease:{row.LeaseId:N}:expired",
+                eventType, row.Reason, null, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
 
         await using (var due = new SqlCommand(
             """
@@ -287,6 +326,7 @@ public sealed class EmailOutboxJobs(
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.ReadCommitted,
             cancellationToken);
+        var track = await RequestEmailEvidence.PreserveSnapshotAsync(connection, transaction, outboxId, cancellationToken);
         await using var command = new SqlCommand(
             """
             UPDATE [asap].[EmailOutbox] WITH (UPDLOCK, READPAST, ROWLOCK, READCOMMITTEDLOCK)
@@ -345,6 +385,16 @@ public sealed class EmailOutboxJobs(
             }
         }
 
+        if (claim is null)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return null;
+        }
+        if (track)
+        {
+            await RequestEmailEvidence.AppendAsync(connection, transaction, claim.Id, $"lease:{claim.LeaseId:N}:claimed",
+                "claimed", null, null, now, cancellationToken);
+        }
         await transaction.CommitAsync(cancellationToken);
         return claim;
     }
@@ -450,7 +500,9 @@ public sealed class EmailOutboxJobs(
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             providerMessageId,
-            "the accepted provider result");
+            "the accepted provider result",
+            claim.AttemptDeliveryMode == "file" ? "captured" :
+                claim.AttemptDeliveryMode is "non_delivery" or "postmark_sandbox" ? "non_delivery" : "provider_accepted");
 
     private Task SuppressAsync(
         ClaimedEmail claim,
@@ -474,7 +526,8 @@ public sealed class EmailOutboxJobs(
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             reason,
-            cancellationToken);
+            cancellationToken,
+            "suppressed");
 
     private Task FailNotConfiguredAsync(
         ClaimedEmail claim) =>
@@ -494,7 +547,8 @@ public sealed class EmailOutboxJobs(
               AND [LeaseExpiresUtc] > SYSUTCDATETIME();
             """,
             "mail_not_configured",
-            "the definitive not-configured result");
+            "the definitive not-configured result",
+            "failed_no_send");
 
     private async Task ReleaseCancelledPreSendClaimAsync(ClaimedEmail claim)
     {
@@ -518,6 +572,8 @@ public sealed class EmailOutboxJobs(
     {
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        var track = await RequestEmailEvidence.PreserveSnapshotAsync(connection, transaction, claim.Id, cancellationToken);
         await using var command = new SqlCommand(
             """
             UPDATE [asap].[EmailOutbox]
@@ -533,11 +589,22 @@ public sealed class EmailOutboxJobs(
               AND [LeaseId] = @leaseId AND [RowVersion] = @rowVersion
               AND [LastErrorCode] = N'pre_send_check_pending';
             """,
-            connection);
+            connection, transaction);
         command.Parameters.Add("@now", SqlDbType.DateTime2).Value = timeProvider.GetUtcNow().UtcDateTime;
         command.Parameters.Add("@errorCode", SqlDbType.NVarChar, 100).Value = errorCode;
         AddFence(command, claim);
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        var affected = await command.ExecuteNonQueryAsync(cancellationToken);
+        if (affected != 1)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return;
+        }
+        if (track)
+        {
+            await RequestEmailEvidence.AppendAsync(connection, transaction, claim.Id, $"lease:{claim.LeaseId:N}:released",
+                "pre_send_released", errorCode, null, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private async Task<int> RecordAmbiguousFailureAsync(
@@ -548,6 +615,8 @@ public sealed class EmailOutboxJobs(
     {
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        var track = await RequestEmailEvidence.PreserveSnapshotAsync(connection, transaction, claim.Id, cancellationToken);
         await using var command = new SqlCommand(
             """
             UPDATE [asap].[EmailOutbox]
@@ -556,11 +625,24 @@ public sealed class EmailOutboxJobs(
             WHERE [Id] = @id AND [Status] = N'sending'
               AND [LeaseId] = @leaseId AND [RowVersion] = @rowVersion;
             """,
-            connection);
+            connection, transaction);
         command.Parameters.Add("@errorCode", SqlDbType.NVarChar, 100).Value = errorCode;
         command.Parameters.Add("@errorDetail", SqlDbType.NVarChar, -1).Value = errorDetail;
         AddFence(command, claim);
-        return await command.ExecuteNonQueryAsync(cancellationToken);
+        var affected = await command.ExecuteNonQueryAsync(cancellationToken);
+        if (affected != 1)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return affected;
+        }
+        if (track)
+        {
+            await RequestEmailEvidence.AppendAsync(connection, transaction, claim.Id, $"lease:{claim.LeaseId:N}:uncertain",
+                errorCode == "provider_start_deadline_exceeded" ? "pre_send_deferred" : "ambiguous",
+                errorCode, claim.AttemptDeliveryMode, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return affected;
     }
 
     private async Task RecordProviderFailurePreservingOriginalAsync(
@@ -602,7 +684,6 @@ public sealed class EmailOutboxJobs(
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.ReadCommitted,
             cancellationToken);
-
         if (claim.TestConfigurationVersion is not null)
         {
             var current = await EmailTestConfiguration.ReadLockedAsync(connection, transaction, claim.OrganizationId, cancellationToken);
@@ -632,6 +713,7 @@ public sealed class EmailOutboxJobs(
             return null;
         }
 
+        var track = await RequestEmailEvidence.PreserveSnapshotAsync(connection, transaction, claim.Id, cancellationToken);
         await using var command = new SqlCommand(
             """
             UPDATE [asap].[EmailOutbox]
@@ -652,6 +734,11 @@ public sealed class EmailOutboxJobs(
         {
             await transaction.RollbackAsync(CancellationToken.None);
             return null;
+        }
+        if (track)
+        {
+            await RequestEmailEvidence.AppendAsync(connection, transaction, claim.Id, $"lease:{claim.LeaseId:N}:send-intent",
+                "send_intent", null, claim.AttemptDeliveryMode, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -755,6 +842,7 @@ public sealed class EmailOutboxJobs(
         ClaimedEmail claim,
         CancellationToken cancellationToken)
     {
+        var track = await RequestEmailEvidence.PreserveSnapshotAsync(connection, transaction, claim.Id, cancellationToken);
         await using var command = new SqlCommand(
             """
             UPDATE [asap].[EmailOutbox]
@@ -783,17 +871,27 @@ public sealed class EmailOutboxJobs(
             return false;
         }
 
-        return Convert.ToInt64(suppressedId) == claim.Id;
+        if (Convert.ToInt64(suppressedId) != claim.Id)
+        {
+            return false;
+        }
+        if (track)
+        {
+            await RequestEmailEvidence.AppendAsync(connection, transaction, claim.Id, $"lease:{claim.LeaseId:N}:suppressed",
+                "suppressed", "recipient_authorization_changed", null, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+        }
+        return true;
     }
 
     private async Task FinalizeKnownOutcomeAsync(
         ClaimedEmail claim,
         string sql,
         string detail,
-        string outcomeDescription)
+        string outcomeDescription,
+        string eventType)
     {
         using var timeout = new CancellationTokenSource(SqlBookkeepingTimeout);
-        var affectedRows = await FinalizeAsync(claim, sql, detail, timeout.Token);
+        var affectedRows = await FinalizeAsync(claim, sql, detail, timeout.Token, eventType);
         if (affectedRows != 1)
         {
             throw new InvalidOperationException(
@@ -805,15 +903,32 @@ public sealed class EmailOutboxJobs(
         ClaimedEmail claim,
         string sql,
         string detail,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string eventType)
     {
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var command = new SqlCommand(sql, connection);
-        command.Parameters.Add("@now", SqlDbType.DateTime2).Value = timeProvider.GetUtcNow().UtcDateTime;
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        var track = await RequestEmailEvidence.PreserveSnapshotAsync(connection, transaction, claim.Id, cancellationToken);
+        await using var command = new SqlCommand(sql, connection, transaction);
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        command.Parameters.Add("@now", SqlDbType.DateTime2).Value = now;
         command.Parameters.Add("@detail", SqlDbType.NVarChar, 256).Value = detail;
         AddFence(command, claim);
-        return await command.ExecuteNonQueryAsync(cancellationToken);
+        var affected = await command.ExecuteNonQueryAsync(cancellationToken);
+        if (affected != 1)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return affected;
+        }
+        if (track)
+        {
+            await RequestEmailEvidence.AppendAsync(connection, transaction, claim.Id, $"lease:{claim.LeaseId:N}:{eventType}",
+                eventType, eventType is "suppressed" or "failed_no_send" ? detail : null,
+                claim.AttemptDeliveryMode, now, cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return affected;
     }
 
     private static void AddFence(SqlCommand command, ClaimedEmail claim)

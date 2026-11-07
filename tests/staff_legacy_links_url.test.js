@@ -22,6 +22,7 @@ new Function('holder', `${source}\nholder.result = {
   requestedStatusFromUrl,
   requestedRequestIdFromUrl,
   requestedSettingsPanelFromUrl,
+  requestedOperationsContextFromUrl,
   replaceRequestUrl,
   replaceStageUrl,
   requestUrl,
@@ -31,6 +32,7 @@ const {
   requestedStatusFromUrl,
   requestedRequestIdFromUrl,
   requestedSettingsPanelFromUrl,
+  requestedOperationsContextFromUrl,
   replaceRequestUrl,
   replaceStageUrl,
   requestUrl,
@@ -41,13 +43,22 @@ const origin = 'https://staff.example.test';
 const url = (query) => `${origin}/staff/${query}`;
 
 for (const destination of [
-  replaceRequestUrl(url('?stage=operations&opSection=audit&runScope=2&emailScope=system&auditSearch=person&auditScope=all'), '47'),
+  replaceRequestUrl(url('?stage=operations&opSection=audit&runScope=2&emailScope=system&emailTestScope=2&emailSearch=detail&emailReference=9223372036854775807&emailStatus=failed&emailType=operational_test&emailPage=3&emailSort=oldest&emailFrom=2026-11-01&emailThrough=2026-11-02&auditSearch=person&auditScope=all'), '47'),
   requestUrl(url('?stage=operations&opSection=audit&auditCategory=staff&auditActor=9007199254740993'), '47', 'suggestion'),
   replaceStageUrl(url('?stage=operations&opSection=email&emailScope=system&auditPage=3'), 'settings')
 ]) {
-  assert.equal([...new URL(destination, origin).searchParams.keys()].some(key => /^(opSection|runScope|emailScope|audit)/.test(key)), false,
+  assert.equal([...new URL(destination, origin).searchParams.keys()].some(key => /^(opSection|runScope|email|audit)/.test(key)), false,
     'Operations view/filter context must not travel into request or Settings routes');
 }
+
+const historyContext = { section: 'email', runScope: 'all', testScope: '2', email: { scope: 'system', search: 'safe detail',
+  status: 'failed', type: 'operational_test', from: '2026-11-01', through: '2026-11-02', sort: 'oldest', page: 3, reference: '9223372036854775807' } };
+const operationsUrl = new URL(replaceStageUrl(url('?stage=suggestion&scope=2&request=47'), 'operations', { operations: historyContext }), origin);
+const parsedOperations = requestedOperationsContextFromUrl(operationsUrl.href);
+assert.equal(parsedOperations.testScope, '2');
+assert.equal(parsedOperations.email.reference, '9223372036854775807', 'exact references survive route round trips');
+assert.deepEqual(parsedOperations.email, { ...historyContext.email, page: '3' });
+assert.equal(operationsUrl.searchParams.has('request'), false);
 
 for (const [query, expected] of [
   ['?stage=submitted', 'suggestion'],

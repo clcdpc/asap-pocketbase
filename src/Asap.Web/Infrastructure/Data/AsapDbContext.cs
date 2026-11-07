@@ -132,6 +132,23 @@ public sealed class AsapDbContext(DbContextOptions<AsapDbContext> options) : DbC
             .OnDelete(DeleteBehavior.NoAction);
         modelBuilder.Entity<TitleRequestWorkflowTag>()
             .HasKey(value => new { value.TitleRequestId, value.WorkflowTagId });
+        modelBuilder.Entity<EmailOutbox>()
+            .HasOne<TitleRequest>().WithMany().HasForeignKey(value => value.TitleRequestId)
+            .OnDelete(DeleteBehavior.SetNull);
+        modelBuilder.Entity<EmailOutbox>()
+            .HasIndex(value => new { value.TitleRequestId, value.OrganizationId, value.Id })
+            .HasDatabaseName("IX_EmailOutbox_TitleRequest").HasFilter("[TitleRequestId] IS NOT NULL");
+        modelBuilder.Entity<EmailDeliveryEvent>()
+            .HasOne(value => value.Outbox).WithMany().HasForeignKey(value => value.EmailOutboxId)
+            .OnDelete(DeleteBehavior.NoAction);
+        modelBuilder.Entity<EmailDeliveryEvent>()
+            .HasIndex(value => new { value.EmailOutboxId, value.LocalEventKey }).IsUnique()
+            .HasDatabaseName("UX_EmailDeliveryEvent_LocalEvent").HasFilter("[LocalEventKey] IS NOT NULL AND [EmailOutboxId] IS NOT NULL");
+        modelBuilder.Entity<EmailOutbox>().Property(value => value.MessageKind).HasMaxLength(40);
+        modelBuilder.Entity<EmailDeliveryEvent>().Property(value => value.LocalEventKey).HasMaxLength(100);
+        modelBuilder.Entity<EmailDeliveryEvent>().Property(value => value.ReasonCode).HasMaxLength(100);
+        modelBuilder.Entity<EmailDeliveryEvent>().Property(value => value.DeliveryMode).HasMaxLength(32);
+        modelBuilder.Entity<EmailDeliveryEvent>().Property(value => value.TimestampKind).HasMaxLength(32);
 
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())
         {

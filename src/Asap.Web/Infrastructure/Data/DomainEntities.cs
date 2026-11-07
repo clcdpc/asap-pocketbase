@@ -476,6 +476,8 @@ public sealed class EmailOutbox
     public long Id { get; set; }
     public int OrganizationId { get; set; }
     public string? BusinessKey { get; set; }
+    public long? TitleRequestId { get; set; }
+    public string? MessageKind { get; set; }
     public required string DeliveryClass { get; set; }
     public long? RecipientStaffUserId { get; set; }
     public string? RecipientAuthenticationEmail { get; set; }
@@ -512,11 +514,16 @@ public sealed class EmailDeliveryEvent
 {
     public long Id { get; set; }
     public long? EmailOutboxId { get; set; }
+    public EmailOutbox? Outbox { get; set; }
     public string? ProviderMessageId { get; set; }
     public string? ProviderEventId { get; set; }
     public required string EventType { get; set; }
     public DateTime ReceivedUtc { get; set; }
     public string? MetadataJson { get; set; }
+    public string? LocalEventKey { get; set; }
+    public string? ReasonCode { get; set; }
+    public string? DeliveryMode { get; set; }
+    public string? TimestampKind { get; set; }
 }
 
 public sealed class DeletedRequestAudit
