@@ -480,11 +480,18 @@ async function runSuperAdmin(browser, args, axeSource, report) {
 
     await open.click();
     await page.locator('#request-dialog[open]').waitFor();
-    await page.getByRole('link', { name: 'Open patron in LEAP' }).waitFor();
-    assert.equal(await page.getByRole('link', { name: 'Open patron in LEAP' }).getAttribute('href'),
-      'https://leap.example.test/patron/9901');
+    const patronName = page.locator('#request-dialog .patron-context .detail-grid > div')
+      .filter({ has: page.locator('dt', { hasText: /^Patron$/ }) }).locator('dd a');
+    const patronBarcode = page.locator('#request-dialog .patron-context .detail-grid > div')
+      .filter({ has: page.locator('dt', { hasText: /^Barcode$/ }) }).locator('dd a');
+    await patronName.waitFor(); await patronBarcode.waitFor();
+    assert.equal(await patronName.getAttribute('href'), 'https://leap.example.test/patron/9901');
+    assert.equal(await patronBarcode.getAttribute('href'), 'https://leap.example.test/patron/9901');
+    assert.equal(await page.locator('#request-dialog .polaris-edit-tools a[href*="/patron/"]').count(), 0,
+      'Patron navigation stays beside the patron name and barcode.');
+    await page.locator('#request-dialog .research-links').getByRole('link', { name: 'Browser vendor', exact: true }).waitFor();
     const researchLabels = await page.locator('.research-links a').allTextContents();
-    assert.deepEqual(researchLabels, ['Open patron in LEAP', 'Browser vendor', 'Search WorldCat']);
+    assert.deepEqual(researchLabels, ['Browser vendor', 'Search WorldCat']);
     assert.equal(await page.getByRole('link', { name: 'Search Goodreads' }).count(), 0);
     assert.match(await page.getByRole('link', { name: 'Browser vendor' }).getAttribute('href'),
       /q=Browser%20staff%20title%20edited/);
@@ -1025,7 +1032,13 @@ async function runStaleMutationCompletions(browser, args, report) {
       await detailResponse;
       await page.locator('#request-dialog-kicker').filter({ hasText: target.kicker }).waitFor();
       if (type === 'title_request') {
-        await page.getByRole('link', { name: 'Open patron in LEAP' }).waitFor();
+        await page.locator('#request-dialog .patron-context .detail-grid > div')
+          .filter({ has: page.locator('dt', { hasText: /^Patron$/ }) }).locator('dd a').waitFor();
+        assert.equal(await page.locator('#request-dialog .polaris-edit-tools a[href*="/patron/"]').count(), 0,
+          'Title details do not duplicate patron navigation in the editor.');
+        // Upper snapshot links can precede the accepted asynchronous research row.
+        // Settle that legitimate update before capturing B's exact stale-result oracle.
+        await page.locator('#request-dialog .research-links').getByRole('link', { name: 'Browser vendor', exact: true }).waitFor();
       }
       const beforeResponse = await context.request.get(`${args.baseOrigin}${target.apiPath}`);
       assert.equal(beforeResponse.status(), 200, await beforeResponse.text());
@@ -2963,14 +2976,16 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       await page.waitForFunction(() => document.querySelectorAll('#request-grid a.grid-open').length === 0);
       assert.equal(await page.locator('#similar-filter').inputValue(), 'all');
       assert.match(await page.locator('#queue-summary').textContent(), /Requests unavailable/);
-      assert.match(await page.locator('#status-count-state').textContent(), /Counts unavailable/);
+      assert.match(await page.locator('#status-count-state').textContent(), /Counts loading/,
+        'The deliberately held scope read keeps count feedback in its loading state');
     } finally {
       releaseScopedQueue();
       await scopedQueueResponse.catch(() => {});
       await page.unroute('**/api/asap/staff/title-requests?scope=2', holdScopedQueue);
     }
     await scopedQueueResponse;
-    await page.locator('#refresh-queue').waitFor({ state: 'visible' });
+    await page.locator('#refresh-queue:not([disabled])').waitFor();
+    await page.waitForFunction(() => document.querySelector('#status-count-state')?.textContent === '');
     const changedDetailPath = `**/api/asap/staff/title-requests/${args.primaryRequestId}*`;
     const changedListPath = '**/api/asap/staff/title-requests?scope=2';
     const changedDetail = async route => {
