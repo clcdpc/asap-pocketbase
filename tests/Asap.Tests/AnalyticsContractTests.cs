@@ -12,19 +12,86 @@ public sealed class AnalyticsContractTests
     {
         var now = new DateTimeOffset(2026, 11, 2, 5, 30, 0, TimeSpan.Zero);
 
-        var thisMonth = AnalyticsService.ResolveDateRange("thisMonth", now, "America/New_York");
+        var thisMonth = AssertDateRange("thisMonth", now);
         Assert.AreEqual("thisMonth", thisMonth.Key);
         Assert.AreEqual(new DateTime(2026, 11, 1, 4, 0, 0, DateTimeKind.Utc), thisMonth.StartUtc);
         Assert.AreEqual(new DateTime(2026, 11, 3, 5, 0, 0, DateTimeKind.Utc), thisMonth.EndExclusiveUtc);
 
-        var lastMonth = AnalyticsService.ResolveDateRange("lastMonth", now, "America/New_York");
+        var lastMonth = AssertDateRange("lastMonth", now);
         Assert.AreEqual(new DateTime(2026, 10, 1, 4, 0, 0, DateTimeKind.Utc), lastMonth.StartUtc);
         Assert.AreEqual(new DateTime(2026, 11, 1, 4, 0, 0, DateTimeKind.Utc), lastMonth.EndExclusiveUtc);
 
-        var unknown = AnalyticsService.ResolveDateRange("unknown", now, "America/New_York");
+        var unknown = AssertDateRange("unknown", now);
         Assert.AreEqual("last30", unknown.Key);
         Assert.AreEqual(new DateTime(2026, 10, 3, 4, 0, 0, DateTimeKind.Utc), unknown.StartUtc);
         Assert.AreEqual(new DateTime(2026, 11, 3, 5, 0, 0, DateTimeKind.Utc), unknown.EndExclusiveUtc);
+    }
+
+    [TestMethod]
+    [DataRow("2024-02-29", "2024-02-29", "2024-03-01")]
+    [DataRow("2026-12-31", "2026-12-31", "2027-01-01")]
+    [DataRow("2026-01-31", "2026-02-01", "2026-02-02")]
+    [DataRow("2050-01-01", "2050-12-31", "2051-01-01")]
+    [DataRow("0001-01-01", "0001-01-01", "0001-01-02")]
+    [DataRow("9999-12-30", "9999-12-30", "9999-12-31")]
+    public void CustomDatesUseCalendarTransitionsWithoutSpanOrFutureRestrictions(
+        string startDate,
+        string endDate,
+        string endExclusiveDate)
+    {
+        var result = AnalyticsService.ResolveDateRange(
+            "custom", new DateTimeOffset(2026, 11, 2, 5, 30, 0, TimeSpan.Zero), "UTC", startDate, endDate);
+
+        Assert.AreEqual(0, result.Errors.Count);
+        Assert.IsNotNull(result.Range);
+        Assert.AreEqual("custom", result.Range.Key);
+        Assert.AreEqual(DateOnly.ParseExact(startDate, "yyyy-MM-dd"), result.Range.StartDate);
+        Assert.AreEqual(DateOnly.ParseExact(endDate, "yyyy-MM-dd"), result.Range.EndDate);
+        Assert.AreEqual("UTC", result.Range.TimeZoneId);
+        Assert.AreEqual(DateOnly.ParseExact(startDate, "yyyy-MM-dd").ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            result.Range.StartUtc);
+        Assert.AreEqual(DateOnly.ParseExact(endExclusiveDate, "yyyy-MM-dd").ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            result.Range.EndExclusiveUtc);
+        Assert.AreEqual(result.Range.EndExclusiveUtc.AddTicks(-1), result.Range.End.UtcDateTime);
+    }
+
+    [TestMethod]
+    [DataRow("America/Sao_Paulo", "2018-11-04", "2018-11-04", "startDate")]
+    [DataRow("America/Sao_Paulo", "2018-11-03", "2018-11-03", "endDate")]
+    [DataRow("America/Havana", "2026-11-01", "2026-11-01", "startDate")]
+    [DataRow("America/Havana", "2026-10-31", "2026-10-31", "endDate")]
+    public void CustomDatesRejectMissingOrAmbiguousBusinessMidnights(
+        string timeZoneId,
+        string startDate,
+        string endDate,
+        string field)
+    {
+        var result = AnalyticsService.ResolveDateRange(
+            "custom", new DateTimeOffset(2026, 11, 2, 5, 30, 0, TimeSpan.Zero), timeZoneId, startDate, endDate);
+
+        Assert.IsNull(result.Range);
+        CollectionAssert.AreEquivalent(new[] { field }, result.Errors.Keys.ToArray());
+        StringAssert.Contains(result.Errors[field][0], "unambiguous midnight");
+    }
+
+    [TestMethod]
+    public void CustomDatesRejectUtcUnderflowInsteadOfClampingToTheMinimumInstant()
+    {
+        var result = AnalyticsService.ResolveDateRange(
+            "custom", new DateTimeOffset(2026, 11, 2, 5, 30, 0, TimeSpan.Zero),
+            "Etc/GMT-14", "0001-01-01", "0001-01-01");
+
+        Assert.IsNull(result.Range);
+        CollectionAssert.AreEquivalent(new[] { "startDate" }, result.Errors.Keys.ToArray());
+        StringAssert.Contains(result.Errors["startDate"][0], "cannot be represented in UTC");
+    }
+
+    private static AnalyticsResolvedDateRange AssertDateRange(string? key, DateTimeOffset now)
+    {
+        var result = AnalyticsService.ResolveDateRange(key, now, "America/New_York");
+        Assert.AreEqual(0, result.Errors.Count);
+        Assert.IsNotNull(result.Range);
+        return result.Range;
     }
 
     [TestMethod]

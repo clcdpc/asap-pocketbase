@@ -252,7 +252,27 @@ class SqlLifecycleTests(unittest.TestCase):
                 f"else: Path({str(pidfile)!r}).write_text(str(os.getpid())); time.sleep(60)\n", encoding="utf-8")
             docker.chmod(0o755)
             output = root / "evidence"
-            args = [sys.executable, "-B", str(Path(perf.__file__).resolve()), "--output", str(output), "--interval", ".03", "--", sys.executable, "-c", "import time; time.sleep(.4); raise SystemExit(33)"]
+            # End the workload after flushed host progress is observed with the stalled SQL helper still alive.
+            source = textwrap.dedent(f"""
+                import os, sys, time
+                from pathlib import Path
+                sys.path.insert(0, {str(Path(perf.__file__).resolve().parent)!r})
+                import performance as perf
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    host = [row for row in perf.read_samples(Path({str(output)!r}) / 'samples.jsonl') if row.get('kind') == 'host']
+                    try:
+                        helper = int(Path({str(pidfile)!r}).read_text())
+                        os.kill(helper, 0)
+                    except (OSError, ValueError):
+                        pass
+                    else:
+                        if len(host) >= 4:
+                            raise SystemExit(33)
+                    time.sleep(.01)
+                raise SystemExit(34)
+                """)
+            args = [sys.executable, "-B", str(Path(perf.__file__).resolve()), "--output", str(output), "--interval", ".03", "--", sys.executable, "-B", "-c", source]
             env = dict(os.environ, PATH=str(root), ASAP_TEST_SQL_SA_PASSWORD=SECRET, ASAP_CI_SQL_CONTAINER="asap-sql-wrapper-fixture")
             started = time.monotonic()
             result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=5)

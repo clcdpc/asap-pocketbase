@@ -2127,7 +2127,10 @@ test('Analytics view round trip preserves scope/range and rejects the prior acti
     const pending = [];
     const analyticsData = (scope, range, label) => ({
       scope: { mode: scope === 'all' ? 'all' : 'library', libraryOrgId: scope === 'all' ? null : Number(scope), label, superAdmin: true },
-      dateRange: { key: range, start: '2026-09-01', end: '2026-09-30' },
+      dateRange: {
+        key: range, start: '2026-09-01T04:00:00Z', end: '2026-10-01T03:59:59Z',
+        startDate: '2026-09-01', endDate: '2026-09-30', timeZoneId: 'America/New_York'
+      },
       availableLibraries: [{ orgId: 2, name: 'Library A' }], summary: {}, stageCounts: {},
       aging: {}, exceptions: {}, closedReasons: []
     });
@@ -2136,12 +2139,12 @@ test('Analytics view round trip preserves scope/range and rejects the prior acti
     ui.get('[data-view="analytics"]').click();
     await until(() => pending.length === 1, 'initial Analytics request');
     pending[0].resolve(response(200, analyticsData('all', 'lastMonth', 'All libraries')));
-    await until(() => ui.get('#analytics-scope'), 'Analytics controls');
+    await until(() => ui.get('#analytics-container').textContent.includes('All libraries:'), 'initial Analytics report');
     ui.get('#analytics-scope').value = '2';
     ui.get('#analytics-scope').dispatchEvent(new ui.dom.window.Event('change'));
     await until(() => pending.length === 2, 'library-scoped request');
     pending[1].resolve(response(200, analyticsData('2', 'lastMonth', 'Library A')));
-    await until(() => ui.get('#analytics-date-range'), 'scoped controls');
+    await until(() => ui.get('#analytics-container').textContent.includes('Library A:'), 'scoped Analytics report');
     ui.get('#analytics-date-range').value = 'last90';
     ui.get('#analytics-date-range').dispatchEvent(new ui.dom.window.Event('change'));
     await until(() => pending.length === 3, 'selected range request');
@@ -2152,7 +2155,7 @@ test('Analytics view round trip preserves scope/range and rejects the prior acti
     assert.equal(pending[3].parsed.searchParams.get('scope'), '2');
     assert.equal(pending[3].parsed.searchParams.get('range'), 'last90');
     pending[3].resolve(response(200, analyticsData('2', 'last90', 'Current activation')));
-    await until(() => ui.get('#analytics-scope'), 'reactivated controls');
+    await until(() => ui.get('#analytics-container').textContent.includes('Current activation'), 'reactivated report');
     assert.equal(ui.get('#analytics-scope').value, '2');
     assert.equal(ui.get('#analytics-date-range').value, 'last90');
     const focused = document.activeElement;
@@ -2161,6 +2164,57 @@ test('Analytics view round trip preserves scope/range and rejects the prior acti
     assert.match(ui.get('#analytics-container').textContent, /Current activation/);
     assert.doesNotMatch(ui.get('#analytics-container').textContent, /Stale activation/);
     assert.equal(document.activeElement, focused);
+
+    ui.get('#analytics-date-range').value = 'custom';
+    ui.get('#analytics-date-range').dispatchEvent(new ui.dom.window.Event('change'));
+    ui.edit('#analytics-start-date', '2026-11-01');
+    ui.edit('#analytics-end-date', '2026-11-02');
+    const beforeAnalyticsExit = pending.length;
+    ui.get('[data-view="profile"]').click(); await settle();
+    assert.equal(pending.length, beforeAnalyticsExit, 'drafting custom dates does not fetch on view exit');
+    ui.get('[data-view="analytics"]').click();
+    await until(() => pending.length === beforeAnalyticsExit + 1, 'report refresh after returning to Analytics');
+    assert.equal(pending.at(-1).parsed.searchParams.get('range'), 'last90');
+    pending.at(-1).resolve(response(200, analyticsData('2', 'last90', 'Custom draft restored')));
+    await until(() => ui.get('#analytics-container').textContent.includes('Custom draft restored'), 'restored Analytics report');
+    assert.equal(ui.get('#analytics-date-range').value, 'custom');
+    assert.equal(ui.get('#analytics-start-date').value, '2026-11-01');
+    assert.equal(ui.get('#analytics-end-date').value, '2026-11-02');
+  }));
+
+test('Analytics custom drafts leave without a prompt and Settings drafts keep their existing navigation guard', () =>
+  fixture('?stage=settings#settings-patron', async ui => {
+    await until(() => !ui.get('#settings-form').hidden, 'Settings editor loaded');
+    ui.edit('#patron-login-note', 'Unsaved Settings note');
+    ui.setApi(({ pathname }) => pathname.endsWith('/analytics') ? response(200, {
+      scope: { mode: 'all', libraryOrgId: null, label: 'All libraries', superAdmin: true },
+      dateRange: { key: 'lastMonth', start: '2026-10-01T04:00:00Z', end: '2026-11-01T03:59:59Z',
+        startDate: '2026-10-01', endDate: '2026-10-31', timeZoneId: 'America/New_York' },
+      availableLibraries: [], summary: {}, stageCounts: {}, closedReasons: [],
+      aging: { thresholdDays: 30, openOlderThanThreshold: 0, averageAgeByStage: [] },
+      exceptions: { holdFailures: 0, identifierFailures: 0 }
+    }) : undefined);
+
+    ui.get('[data-view="analytics"]').click(); await settle();
+    assert.equal(ui.params().get('stage'), 'settings');
+    assert.equal(ui.get('#patron-login-note').value, 'Unsaved Settings note');
+    assert.equal(ui.confirms.length, 1, 'Settings navigation still asks before discarding a draft');
+    ui.allowDiscard();
+    ui.get('[data-view="analytics"]').click();
+    await until(() => ui.params().get('stage') === 'analytics' &&
+      ui.get('#analytics-container').textContent.includes('All libraries:'), 'Analytics entered after Settings discard');
+    ui.get('#analytics-date-range').value = 'custom';
+    ui.get('#analytics-date-range').dispatchEvent(new ui.dom.window.Event('change'));
+    ui.edit('#analytics-start-date', '2026-11-01');
+    ui.edit('#analytics-end-date', '2026-11-02');
+    const confirmsBeforeExit = ui.confirms.length;
+    ui.get('[data-view="profile"]').click(); await settle();
+    assert.equal(ui.confirms.length, confirmsBeforeExit, 'Analytics date drafts do not add navigation prompts');
+    ui.get('[data-view="analytics"]').click();
+    await until(() => ui.params().get('stage') === 'analytics', 'returned to Analytics');
+    assert.equal(ui.get('#analytics-date-range').value, 'custom');
+    assert.equal(ui.get('#analytics-start-date').value, '2026-11-01');
+    assert.equal(ui.get('#analytics-end-date').value, '2026-11-02');
   }));
 
 test('programmatic hold-resolution Revert invalidates consent while a competing editor draft remains', () =>
