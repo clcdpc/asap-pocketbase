@@ -205,6 +205,7 @@ $sharedError = $null
 $finished = $false
 $imageAttempted = $false
 $imageCleanup = @{ image = $null; status = 'NOT RUN'; detail = '' }
+$cacheCleanup = @{ status = 'NOT RUN'; detail = '' }
 try {
     $repoRoot = (Invoke-ReviewNative git @('-C', $PSScriptRoot, 'rev-parse', '--show-toplevel') -Capture).Output
     $registered = @(Get-Content -LiteralPath (Join-Path $repoRoot 'tests/acceptance/suites/registry.json') -Raw | ConvertFrom-Json)
@@ -291,6 +292,20 @@ finally {
         try { Remove-ReviewBuildContext $context $buildRoot }
         catch { $sharedError = (@($sharedError, "Build context cleanup failed: $($_.Exception.Message)") | Where-Object { $_ }) -join "`n"; Write-Warning $sharedError }
     }
+    if ($imageAttempted) {
+        if ($imageCleanup.status -ne 'PASS' -or @($runs | Where-Object CleanupFailed).Count) {
+            $cacheCleanup = @{ status = 'SKIPPED'; detail = 'Owned resource cleanup was not confirmed; no shared cache was pruned.' }
+        }
+        else {
+            try { $cacheCleanup = Invoke-ReviewCacheCleanup }
+            catch {
+                $cacheCleanup = @{ status = 'BLOCKED'; detail = "Build-cache cleanup failed: $($_.Exception.Message)" }
+                $sharedError = (@($sharedError, $cacheCleanup.detail) | Where-Object { $_ }) -join "`n"
+                Write-Warning $cacheCleanup.detail
+            }
+        }
+        Write-Host "Build-cache cleanup: $($cacheCleanup.status); $($cacheCleanup.detail)"
+    }
     if (-not $finished -and -not $sharedError) { $sharedError = 'Acceptance invocation was interrupted.' }
     foreach ($run in $runs | Where-Object Status -eq 'NOT RUN') { $run.Detail = $sharedError }
     $counts = @{}
@@ -301,7 +316,8 @@ finally {
         try {
             if ($sharedError) { Add-Content -LiteralPath $sharedLog -Value "BLOCKED: $sharedError" -Encoding utf8NoBOM }
             "Image cleanup: $($imageCleanup.status); $($imageCleanup.image); $($imageCleanup.detail)" | Add-Content -LiteralPath $sharedLog -Encoding utf8NoBOM
-            @{ invocationId = $invocationId; overall = $overall; exitCode = $exitCode; counts = $counts; detail = $sharedError; imageCleanup = $imageCleanup;
+            "Build-cache cleanup: $($cacheCleanup.status); $($cacheCleanup.detail)" | Add-Content -LiteralPath $sharedLog -Encoding utf8NoBOM
+            @{ invocationId = $invocationId; overall = $overall; exitCode = $exitCode; counts = $counts; detail = $sharedError; imageCleanup = $imageCleanup; cacheCleanup = $cacheCleanup;
                 suites = @($runs | Select-Object Suite, Status, @{ Name = 'durationSeconds'; Expression = { $_.Duration.TotalSeconds } }, ArtifactPath, Detail) } |
                 ConvertTo-Json -Depth 10 | Set-Content -LiteralPath ([System.IO.Path]::ChangeExtension($sharedLog, '.json')) -Encoding utf8NoBOM
             Write-Host "Shared diagnostics: $sharedLog"

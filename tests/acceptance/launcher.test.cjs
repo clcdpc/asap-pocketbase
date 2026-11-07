@@ -57,6 +57,7 @@ async function fixture(t) {
 $script:actualReviewNative = \${function:Invoke-ReviewNative}
 $script:actualResolveCommit = \${function:Resolve-ApplicationCommit}
 $script:containerCases = @{}
+$script:idleChecks = 0
 function wslc { throw 'Mock WSLC must go through Invoke-ReviewNative.' }
 function Resolve-ApplicationCommit {
     param([string]$Repository, [int]$PullRequest, [string]$Revision)
@@ -141,8 +142,30 @@ function Invoke-ReviewNative {
         'logs' { $output = 'Synthetic container log' }
         'remove' { if ($script:containerCases[$Arguments[-1]] -in @('cleanup', 'failed-cleanup', 'startup-absent')) { throw 'Synthetic cleanup failure' } }
         'list' {
-            $name = $Arguments[[Array]::IndexOf($Arguments, '--filter') + 1] -replace '^name=', ''
-            if ($script:containerCases[$name] -ne 'startup-absent') { $output = 'still-existing-container-id' }
+            if ($Arguments -contains '--filter') {
+                $name = $Arguments[[Array]::IndexOf($Arguments, '--filter') + 1] -replace '^name=', ''
+                if ($script:containerCases[$name] -ne 'startup-absent') { $output = 'still-existing-container-id' }
+            }
+            else {
+                $script:idleChecks++
+                if ($case -eq 'cache-container-busy' -or ($case -eq 'cache-container-race' -and $script:idleChecks -gt 1)) { $output = 'unrelated-running-container' }
+            }
+        }
+        'system' {
+            if ($Arguments -contains 'df') {
+                if ($case -eq 'cache-unavailable') { throw 'Synthetic cache query unavailable' }
+                $output = switch ($case) {
+                    'cache-build-busy' { '{"Type":"Build Cache","Active":"2"}' }
+                    'cache-unknown' { '{"Type":"Images","Active":"0"}' }
+                    'cache-malformed' { '{"Type":"Build Cache","Active":"unknown"}' }
+                    default { '{"Type":"Build Cache","Active":"0"}' }
+                }
+            }
+            elseif ($Arguments -contains 'prune') {
+                if ($case -eq 'cache-prune-failed') { throw 'Synthetic cache prune failure' }
+                $output = 'Total reclaimed space: 123B'
+            }
+            else { throw 'Unexpected mock system call' }
         }
         'stop' { }
         default { throw 'Unexpected mock WSLC call' }
@@ -328,7 +351,10 @@ test('native array invocations share one revision/image preparation and isolate 
     assert.equal(new Set(runs.map(c => c[c.indexOf('--expected-commit') + 1])).size, 1);
     assert.equal(new Set(runs.map(c => c[c.indexOf('--suite') - 1])).size, 1, 'One immutable image for every suite');
     const image = builds[0][builds[0].indexOf('--tag') + 1];
-    assert.deepEqual(calls.at(-1), ['image', 'remove', '--no-prune', image], 'Image removed only after all suite containers');
+    const imageRemoval = calls.findIndex(c => c[0] === 'image' && c[1] === 'remove');
+    assert.deepEqual(calls[imageRemoval], ['image', 'remove', '--no-prune', image]);
+    assert.ok(imageRemoval > calls.findLastIndex(c => c[0] === 'remove'), 'Image removed only after all suite containers');
+    assert.ok(imageRemoval < calls.findIndex(c => c[0] === 'system'), 'Cache cleanup follows image removal');
     assert.equal(outcome.summary.imageCleanup.image, image);
     assert.equal(outcome.summary.imageCleanup.status, 'PASS');
     assert.deepEqual(calls.filter(c => ['run', 'stop', 'logs', 'remove'].includes(c[0])).map(c => c[0]),
@@ -483,7 +509,9 @@ test('pipeline interruption still exports logs, removes the active container and
   assert.match(report.environment.detail, /interrupted/);
   for (const name of ['container.log', 'fixture-first.png', 'diagnostics/web.log']) assert.equal(existsSync(path.join(directory, name)), true);
   assert.equal(outcome.summary.imageCleanup.status, 'PASS');
-  assert.deepEqual(outcome.calls.at(-1).arguments, ['image', 'remove', '--no-prune', outcome.summary.imageCleanup.image]);
+  assert.deepEqual(outcome.calls.find(c => c.arguments[0] === 'image' && c.arguments[1] === 'remove').arguments,
+    ['image', 'remove', '--no-prune', outcome.summary.imageCleanup.image]);
+  assert.equal(outcome.summary.cacheCleanup.status, 'PASS');
 });
 
 test('concurrent identical invocations remove only their own image tags', async t => {
@@ -497,7 +525,7 @@ test('concurrent identical invocations remove only their own image tags', async 
     assert.deepEqual(outcome.calls.filter(c => c.arguments[0] === 'image').map(c => c.arguments),
       [['image', 'remove', '--no-prune', image]]);
     assert.equal(outcome.summary.imageCleanup.status, 'PASS');
-    assert.ok(!outcome.calls.some(c => c.arguments.includes('prune') || c.arguments.includes('system')));
+    assert.ok(!outcome.calls.some(c => c.arguments[0] === 'image' && c.arguments.includes('prune')));
     return image;
   });
   assert.notEqual(images[0], images[1]);
@@ -509,6 +537,8 @@ test('image cleanup failures block the invocation without hiding suite evidence 
     const outcome = await f.launch({ customRoot, mode });
     assert.equal(outcome.code, 2, outcome.stdout + outcome.stderr);
     assert.equal(outcome.summary.imageCleanup.status, 'BLOCKED');
+    assert.equal(outcome.summary.cacheCleanup.status, 'SKIPPED');
+    assert.ok(!outcome.calls.some(c => c.arguments[0] === 'system'));
     assert.match(outcome.summary.detail, /wslc image remove --no-prune asap-acceptance:/);
     assert.equal(outcome.summary.suites[0].Status, mode === 'failed-image-cleanup' ? 'FAIL' : 'PASS');
     assert.equal(existsSync(path.join(outcome.artifactPath, 'fixture-first.png')), true);
@@ -517,6 +547,47 @@ test('image cleanup failures block the invocation without hiding suite evidence 
     assert.ok(!removal.arguments.includes('--force'));
     assert.deepEqual(outcome.calls.at(-1).arguments,
       ['image', 'list', '--filter', 'reference=' + outcome.summary.imageCleanup.image, '--quiet']);
+  }
+});
+
+test('idle cleanup prunes unused build cache after teardown without pruning images, containers or volumes', async t => {
+  const f = await fixture(t), customRoot = path.join(f.directory, 'idle cache cleanup');
+  const outcome = await f.launch({ customRoot });
+  assert.equal(outcome.code, 0, outcome.stdout + outcome.stderr);
+  assert.equal(outcome.summary.cacheCleanup.status, 'PASS');
+  assert.match(outcome.summary.cacheCleanup.detail, /Total reclaimed space/);
+  const calls = outcome.calls.map(c => c.arguments);
+  assert.deepEqual(calls.slice(-4), [
+    ['list', '--quiet'],
+    ['system', 'session', 'run', 'docker', 'system', 'df', '--format', 'json'],
+    ['list', '--quiet'],
+    ['system', 'session', 'run', 'docker', 'builder', 'prune', '--builder', 'default', '--all', '--force']
+  ]);
+  assert.equal(calls.filter(c => c.includes('prune')).length, 1);
+  assert.equal(existsSync(path.join(outcome.artifactPath, 'fixture-first.png')), true);
+});
+
+test('cache cleanup skips busy containers, active builds, newly started containers and unconfirmed owned cleanup', async t => {
+  const f = await fixture(t), customRoot = path.join(f.directory, 'busy cache');
+  for (const mode of ['cache-container-busy', 'cache-build-busy', 'cache-container-race', 'cleanup']) {
+    const outcome = await f.launch({ customRoot, mode });
+    assert.equal(outcome.code, mode === 'cleanup' ? 2 : 0, outcome.stdout + outcome.stderr);
+    assert.equal(outcome.summary.cacheCleanup.status, 'SKIPPED');
+    assert.ok(!outcome.calls.some(c => c.arguments.includes('prune')));
+    assert.ok(!outcome.calls.some(c => c.arguments.includes('terminate') || c.arguments.includes('--shutdown')));
+    if (mode === 'cache-container-busy') assert.ok(!outcome.calls.some(c => c.arguments[0] === 'system'));
+  }
+});
+
+test('unknown cache activity or failed prune is reported without hiding passed acceptance', async t => {
+  const f = await fixture(t), customRoot = path.join(f.directory, 'failed cache cleanup');
+  for (const mode of ['cache-unavailable', 'cache-unknown', 'cache-malformed', 'cache-prune-failed']) {
+    const outcome = await f.launch({ customRoot, mode });
+    assert.equal(outcome.code, 2, outcome.stdout + outcome.stderr);
+    assert.equal(outcome.summary.cacheCleanup.status, 'BLOCKED');
+    assert.equal(outcome.summary.suites[0].Status, 'PASS');
+    assert.match(outcome.summary.detail, /Build-cache cleanup failed/);
+    if (mode !== 'cache-prune-failed') assert.ok(!outcome.calls.some(c => c.arguments.includes('prune')));
   }
 });
 

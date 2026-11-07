@@ -115,12 +115,33 @@ suite results. A forced termination of the launcher process itself may require
 `wslc remove --force <printed-container-name>` followed by
 `wslc image remove --no-prune <printed-image-tag>`.
 
-This does not prune shared build cache, base images, historical acceptance tags,
-or other workloads. Shared layers remain while referenced. BuildKit can retain
-unreferenced build records, so removing a tag does not guarantee all its layers
-are freed. Previously accumulated cache/images require separate deliberate
-maintenance; reclaiming free space inside WSLC does not automatically compact
-the Windows VHDX. The launcher never shuts down WSL or compacts its disks.
+After owned image/container teardown, the launcher also removes unused build
+cache from WSLC's default builder when no containers are running and Docker
+reports no active build-cache records. It checks containers again immediately
+before invoking `docker builder prune --builder default --all --force` through
+`wslc system session run`. This includes unused cache from other projects in that
+same builder, so their next builds may be slower. It never prunes images, volumes,
+other builders or containers. Shared image layers remain while referenced.
+
+The idle checks are best effort, not a global lock. If unrelated work begins
+after the checks, BuildKit protects its in-use records; no build is stopped and
+cache files are never deleted directly. Busy cleanup is SKIPPED until a later
+invocation. Unknown activity, runtime errors and failed pruning are reported as
+BLOCKED (exit 2), preserving the actual suite results. The aggregate JSON and
+shared log record `cacheCleanup` separately. Unconfirmed owned resource cleanup
+skips cache pruning as well. Normal layers can be reused within an invocation;
+successful idle cleanup deliberately removes their inter-invocation build cache.
+
+Freeing guest space allows the existing VHDX to reuse it, but is not a promise of
+immediate physical shrink. WSLC 3.0.3 creates a non-sparse storage VHDX and mounts
+its ext4 filesystem with discard; `.wslconfig` sparse settings do not apply to
+WSLC. Physical compaction requires a detached or read-only disk and appropriate
+Windows privileges. No running containers alone does not prove the disk is idle:
+builds and guest commands can still use it. The launcher never shuts down WSL,
+terminates a shared session, elevates itself or compacts a VHDX. Historical
+acceptance images remain separate from build cache and are not removed.
+See [WSLC settings](https://learn.microsoft.com/en-us/windows/wsl/wsl-container-settings)
+and [Windows compaction requirements](https://learn.microsoft.com/en-us/powershell/module/hyper-v/optimize-vhd).
 
 Default artifacts survive worktree deletion. Historical runs remain until you
 explicitly delete them; earlier artifacts under `.artifacts/acceptance/` in
@@ -165,8 +186,8 @@ Node 24, the locked npm dependencies and matching Playwright/Chromium binaries.
 It contains no SDK, real configuration, credentials or initialized database.
 Dependency/browser layers remain reusable when application or tooling changes.
 Image tags include application SHA, tooling content digest and invocation ID;
-working changes cannot silently reuse an older image. Build layers remain reusable
-after the invocation-owned tag is removed.
+working changes cannot silently reuse an older image. Referenced image layers
+remain shared; unused default-builder cache is pruned only after the idle checks.
 
 The Bash entrypoint generates local secrets and configuration, starts SQL on
 localhost, waits for an authenticated connection, runs the existing initializer,

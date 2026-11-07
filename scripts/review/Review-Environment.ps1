@@ -93,9 +93,12 @@ function Invoke-ReviewNative {
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    # WSLC session commands require a valid stdin handle even when noninteractive.
+    $start.RedirectStandardInput = $true
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
     $process = [System.Diagnostics.Process]::Start($start)
     try {
+        $process.StandardInput.Close()
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
         $waitClock = [System.Diagnostics.Stopwatch]::StartNew()
@@ -203,4 +206,32 @@ function Remove-ReviewImage {
         $remaining = Invoke-ReviewNative wslc @('image', 'list', '--filter', "reference=$Image", '--quiet') -Capture
         if (-not [string]::IsNullOrWhiteSpace($remaining.Output)) { throw "Image still exists: $Image" }
     }
+}
+
+function Invoke-ReviewCacheCleanup {
+    # This is engine-wide unused build cache, not just acceptance cache. Never
+    # prune images/volumes or remove cache files directly. BuildKit protects
+    # in-use records if external work starts after these best-effort idle checks.
+    $running = Invoke-ReviewNative wslc @('list', '--quiet') -Capture
+    if (-not [string]::IsNullOrWhiteSpace($running.Output)) {
+        return @{ status = 'SKIPPED'; detail = 'Other containers are running; build cache was left untouched.' }
+    }
+    $usage = Invoke-ReviewNative wslc @('system', 'session', 'run', 'docker', 'system', 'df', '--format', 'json') -Capture
+    $rows = @($usage.Output -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_ | ConvertFrom-Json })
+    $cache = @($rows | Where-Object Type -eq 'Build Cache')
+    $active = 0
+    if ($cache.Count -ne 1 -or -not [int]::TryParse([string]$cache[0].Active, [ref]$active) -or $active -lt 0) {
+        throw 'Cannot establish whether WSLC build cache is idle; no cache was pruned.'
+    }
+    if ($active -gt 0) {
+        return @{ status = 'SKIPPED'; detail = 'Build cache is in use; no cache was pruned.' }
+    }
+    # Recheck after the potentially slower disk-usage query. This is not a claim
+    # of global exclusion: unrelated WSLC clients do not participate in a lock.
+    $running = Invoke-ReviewNative wslc @('list', '--quiet') -Capture
+    if (-not [string]::IsNullOrWhiteSpace($running.Output)) {
+        return @{ status = 'SKIPPED'; detail = 'A container started during the idle check; no cache was pruned.' }
+    }
+    $pruned = Invoke-ReviewNative wslc @('system', 'session', 'run', 'docker', 'builder', 'prune', '--builder', 'default', '--all', '--force') -Capture -TimeoutSeconds 300
+    return @{ status = 'PASS'; detail = $pruned.Output }
 }

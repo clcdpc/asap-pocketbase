@@ -382,9 +382,24 @@ cleanup; a failed build confirms that its tag was removed or never created.
 Unconfirmed image cleanup makes the invocation BLOCKED (exit 2), preserves the
 suite results and evidence, and prints an exact recovery command. Its outcome is
 recorded in the aggregate invocation JSON's `imageCleanup` object and shared log.
-Shared BuildKit cache and base layers, historical images and other workloads are
-not pruned. BuildKit may still reference build layers after tag deletion, so this
-does not promise all build space is freed or compact the WSLC VHDX.
+After owned teardown, the launcher checks for running containers and active
+BuildKit records, rechecks containers, then prunes unused cache from WSLC's
+default builder. This intentionally includes unused cache from other projects
+in that builder; subsequent builds may be slower. Images, volumes, other
+builders and historical acceptance tags are not pruned. Referenced image layers
+remain shared. BuildKit's in-use protections apply if external work starts after
+the best-effort checks; the launcher does not stop that work or delete cache files.
+Busy cleanup is SKIPPED until a later invocation. Uncertain activity or failed
+pruning is BLOCKED (exit 2), without changing suite results. Aggregate JSON/logs
+retain the separate `cacheCleanup` result. Unconfirmed image/container cleanup
+also skips shared-cache pruning.
+
+Cache pruning frees space inside the WSLC filesystem for reuse. It does not
+guarantee a smaller Windows VHDX. WSLC 3.0.3 uses a non-sparse disk with online
+discard; `.wslconfig` sparse settings do not apply to it. Compaction requires
+detached/read-only storage and appropriate privileges, not merely zero running
+containers. No automatic elevation, shared-session termination, WSL shutdown,
+disk compaction or historical-image deletion is performed.
 
 Optionally open the newest default run directory in File Explorer:
 
@@ -442,7 +457,7 @@ npm test
 
 Plumbing tests check native multi-suite binding, complete selection validation,
 single shared resolution/build (including forced rebuild), invocation-owned image
-removal, concurrent isolation, failed/interrupted builds, sequential fresh
+removal, concurrent isolation, idle/busy/failed cache cleanup, failed/interrupted builds, sequential fresh
 containers, mixed outcomes, pipeline interruption, atomic timestamp collisions,
 local-offset metadata, default/read-only/legacy modes, revision selection, tooling snapshots, reports, mutation
 guards, TLS trust, normal cookie transport, HostingStartup loading, native zoom
