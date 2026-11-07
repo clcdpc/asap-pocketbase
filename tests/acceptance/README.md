@@ -15,6 +15,9 @@ and desktop/mobile/short/native-200% geometry. Existing synthetic fixtures are
 reused without changing their values. Each scenario verifies that the fixture
 rows/versions and outbox evidence are unchanged. The existing browser, external
 request, image, overflow and serious/critical axe guards remain active.
+The header scenario also opens Search from custom-date Analytics, checks the
+selected library, visits request Activity and returns with both the applied
+report dates and newer unapplied date drafts intact.
 
 The exact same-origin `POST /api/asap/staff/search` is a read, including with
 `-ReadOnly`; it is not recorded as a workflow mutation. No sibling path, other

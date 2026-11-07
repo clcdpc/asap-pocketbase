@@ -81,6 +81,16 @@ Seeding warms SQL buffers; no server cache flush or cold-machine claim is made.
 The plan uses substring predicates over library index ranges and bounded sorting; measurements do not justify
 a speculative index. Browser receipts separately measure input-to-results time.
 
+The recorded first-context all-library request took **2.410 seconds**, missing
+the 2-second engineering target. Warm requests took 211–756ms and met the
+1-second target. Preserve this limit through integration; it is not a passed
+cold-query target. A focused follow-up should repeat the same 12,038-row fixture
+with first-request HTTP, EF/SqlClient and SQL compilation/execution timings,
+separating the count and bounded-page queries. The original first request spent
+1,014ms on counts and 1,271ms on the page, but has no first-request plan or host
+trace to establish a cause. Compare warm runs before proposing an index or
+startup change; no live-provider access or cache flush is needed.
+
 Consolidated human acceptance remains pending in #398: record build SHA,
 tester/date, role/scope, OS/browser/actual screen reader; verify opening, typing,
 scope/count/loading/error announcements, arrows/Enter, View all/filter/paging,

@@ -114,7 +114,41 @@ const scenarios = [
         assert.ok(!t.page.url().includes('ACCEPTANCE41013'));
         assert.equal(await t.page.evaluate(() => JSON.stringify(localStorage).includes('ACCEPTANCE41013')), false);
       }
-      await write(t, { sections: 5, keyboard: true, compositionDoesNotNavigate: true, queryInUrlOrLocalStorage: false });
+      // Exercise the shared Analytics/Search boundary with applied dates and a later draft.
+      await start(t, 'analytics');
+      await t.page.locator('.analytics-range-summary').waitFor();
+      const scopedReport = t.page.waitForResponse(r => new URL(r.url()).pathname === '/api/asap/staff/analytics' &&
+        new URL(r.url()).searchParams.get('scope') === '2');
+      await t.page.locator('#analytics-scope').selectOption('2');
+      assert.equal((await scopedReport).status(), 200);
+      await t.page.locator('#analytics-date-range').selectOption('custom');
+      await t.page.locator('#analytics-start-date').fill('2026-10-01');
+      await t.page.locator('#analytics-end-date').fill('2026-10-02');
+      const appliedReport = t.page.waitForResponse(r => new URL(r.url()).pathname === '/api/asap/staff/analytics' &&
+        new URL(r.url()).searchParams.get('range') === 'custom');
+      await t.page.locator('#analytics-apply-range').click();
+      assert.equal((await appliedReport).status(), 200);
+      await t.page.waitForFunction(() => document.querySelector('.analytics-range-summary').textContent.includes('Oct 1, 2026 through Oct 2, 2026'));
+      await t.page.locator('#analytics-start-date').fill('2026-10-03');
+      await t.page.locator('#analytics-end-date').fill('2026-10-04');
+      await open(t, true);
+      assert.equal(await t.page.locator('#search-quick-scope').inputValue(), '2');
+      await search(t, 'ACCEPTANCE41013');
+      await input(t.page).press('ArrowDown'); await input(t.page).press('Enter');
+      await t.page.locator('#request-dialog[open]').getByRole('heading', { name: 'Acceptance d1-closed', exact: true }).waitFor();
+      await t.page.locator('#request-dialog').getByRole('tab', { name: 'Activity', exact: true }).click();
+      await t.page.locator('#request-dialog [role=tabpanel]:visible').getByRole('heading', { name: 'Activity', exact: true }).waitFor();
+      await t.page.keyboard.press('Escape');
+      await t.page.locator('#request-dialog').waitFor({ state: 'hidden' });
+      await t.page.locator('[data-view="analytics"]').click();
+      await t.page.locator('#analytics-view').waitFor({ state: 'visible' });
+      assert.equal(await t.page.locator('#analytics-start-date').inputValue(), '2026-10-03');
+      assert.equal(await t.page.locator('#analytics-end-date').inputValue(), '2026-10-04');
+      assert.equal(await t.page.locator('#analytics-scope').inputValue(), '2');
+      assert.match(await t.page.locator('.analytics-range-summary').innerText(), /Oct 1, 2026 through Oct 2, 2026/);
+      await checkpoint(t.page, t.directory, t.id + '-analytics-return');
+      await write(t, { sections: 5, keyboard: true, compositionDoesNotNavigate: true, queryInUrlOrLocalStorage: false,
+        analyticsSearchScope: '2', analyticsAppliedDatesRetained: true, analyticsDraftDatesRetained: true, searchDetailActivityReachable: true });
     } },
   { id: 'i467-full-results-scope-and-filter', writes: false,
     requirements: ['#467: View all retains query/scope with authoritative counts, page boundaries and type/status filters'], run: async t => {

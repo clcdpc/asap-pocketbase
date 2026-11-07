@@ -100,6 +100,7 @@ async function flush() {
     await flush();
     assert.match(container.textContent, /Library Two/);
     assert.equal(container.querySelector('#analytics-scope').value, '2');
+    assert.equal(analytics.currentScope(), '2', 'Search inherits the current Analytics scope after a stale response');
     assert.ok(!container.querySelector('.analytics-range-summary').textContent.includes('All libraries'));
 
     const range = container.querySelector('#analytics-date-range');
@@ -138,6 +139,7 @@ async function flush() {
       ['2', 'all']
     );
     assert.equal(container.querySelector('#analytics-scope').value, 'all');
+    assert.equal(analytics.currentScope(), 'all', 'Search follows Analytics scope recovery');
     assert.equal(container.querySelector('#analytics-date-range').value, 'last90');
     assert.ok(container.querySelector('#analytics-scope').options.length >= 3);
     assert.match(container.textContent, /All libraries after recovery/);
