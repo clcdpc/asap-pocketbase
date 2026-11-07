@@ -2962,7 +2962,8 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       await scopedQueueStarted;
       await page.waitForFunction(() => document.querySelectorAll('#request-grid a.grid-open').length === 0);
       assert.equal(await page.locator('#similar-filter').inputValue(), 'all');
-      assert.match(await page.locator('#queue-automation').textContent(), /appear with requests/);
+      assert.match(await page.locator('#queue-summary').textContent(), /Requests unavailable/);
+      assert.match(await page.locator('#status-count-state').textContent(), /Counts unavailable/);
     } finally {
       releaseScopedQueue();
       await scopedQueueResponse.catch(() => {});

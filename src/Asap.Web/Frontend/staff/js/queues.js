@@ -177,7 +177,6 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     tag: root.querySelector('#tag-filter'),
     similar: root.querySelector('#similar-filter'),
     similarField: root.querySelector('#similar-filter-field'),
-    queueAutomation: root.querySelector('#queue-automation'),
     refresh: root.querySelector('#refresh-queue'),
     summary: root.querySelector('#queue-summary'),
     grid: root.querySelector('#request-grid'),
@@ -205,7 +204,6 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     wrapper.tabIndex = 0;
     wrapper.setAttribute('role', 'region');
     wrapper.setAttribute('aria-label', 'Title requests');
-    wrapper.setAttribute('aria-describedby', 'request-table-help');
     for (const header of wrapper.querySelectorAll('thead th')) {
       const button = header.querySelector('button.gridjs-sort');
       if (!button) continue;
@@ -296,6 +294,15 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     if (disposed || !owner) return false;
     const load = reads.begin('queue');
     const sequence = ++state.sequence;
+    const focusContext = getContext();
+    const focusAnchor = root.querySelector('#queue-title');
+    const restoreRefresh = document.activeElement === dom.refresh && focusContext.activeView === 'queue' && focusAnchor?.isConnected;
+    let focusMoved = false;
+    const moved = () => { focusMoved = true; };
+    if (restoreRefresh) {
+      focusAnchor.focus();
+      document.addEventListener('focusin', moved);
+    }
     // A canceled authoritative reload still requires a read on navigation, while
     // accepted rows remain usable to open fresh details during that reload.
     state.refreshRequired = true;
@@ -323,11 +330,19 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
           !options.silent && !isAbortError(error) && error.status !== 401) announce(error.message || 'Requests could not be loaded.', 'error');
       return false;
     } finally {
+      document.removeEventListener('focusin', moved);
       if (typeof clearLoading === 'function') clearLoading();
       if (!disposed && load.isCurrent()) {
         dom.refresh.disabled = false;
         if (state.countState === 'loading') state.countState = 'unavailable';
         renderCounts();
+      }
+      const currentContext = getContext();
+      if (restoreRefresh && !focusMoved && !disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) &&
+          focusContext.activeView === 'queue' && currentContext.activeView === 'queue' &&
+          currentContext.scope === focusContext.scope && currentContext.status === focusContext.status &&
+          focusAnchor.isConnected && dom.refresh.isConnected && document.activeElement === focusAnchor) {
+        dom.refresh.focus();
       }
       reads.finish('queue', load.token);
     }
@@ -419,16 +434,6 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
   function scopeForLibraryOrAll(libraryOrgId) {
     const libraryScope = String(libraryOrgId);
     return [...dom.scope.options].some(option => option.value === libraryScope) ? libraryScope : 'all';
-  }
-
-  function workflowLabel(request) {
-    const workflow = request.workflowContext;
-    if (!workflow) return 'Unavailable';
-    if (getContext().status === 'suggestion') return timeoutLabel(workflow.outstandingTimeoutEnabled, workflow.outstandingTimeoutDays);
-    if (getContext().status === 'outstanding_purchase') return workflow.autoPromote ? 'On' : 'Off';
-    if (getContext().status === 'pending_hold') return timeoutLabel(workflow.pendingHoldTimeoutEnabled, workflow.pendingHoldTimeoutDays);
-    if (getContext().status === 'hold_placed') return timeoutLabel(workflow.holdPickupTimeoutEnabled, workflow.holdPickupTimeoutDays);
-    return '—';
   }
 
   function queueColumns() {
@@ -554,15 +559,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     dom.summary.textContent = state.stale ? 'Requests unavailable. Refresh to load current requests.'
       : `${requests.length} ${statusLabel(getContext().status).toLocaleLowerCase()} request${requests.length === 1 ? '' : 's'}`;
     dom.empty.hidden = state.stale || requests.length !== 0;
-    if (state.stale) {
-      dom.queueAutomation.textContent = getContext().status === 'closed' ? '' : 'Workflow rules will appear with requests in this stage.';
-      return;
-    }
-    const stageRequests = state.requests.filter(request => request.status === getContext().status);
-    dom.queueAutomation.textContent = getContext().status === 'closed' ? ''
-      : getContext().scope === 'all' ? 'Workflow rules follow each request’s library; open Details to review.'
-      : stageRequests.length ? `${({ suggestion: 'Suggestion timeout', outstanding_purchase: 'Auto promotion', pending_hold: 'Pending timeout', hold_placed: 'Pickup timeout' })[getContext().status]}: ${workflowLabel(stageRequests[0])}.`
-        : 'Workflow rules will appear with requests in this stage.';
+    if (state.stale) return;
     const definitions = queueColumns();
     const rows = requests.map(request => definitions.map(column => column.value(request)));
     const currentPage = state.grid?.page() ?? 0;

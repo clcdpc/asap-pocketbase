@@ -2731,9 +2731,13 @@ for (const copy of [false, true]) {
             committed = true;
             return response(200, { code: 'saved', data: { orgId: JSON.parse(init.body).orgId, version: 'v2' } });
           }
+          const item = copy ? ui.readCopyRequest() : ui.readRequest();
+          if (!copy && pathname.endsWith(`/title-requests/${item.id}`)) {
+            return response(200, { ...item,
+              workflowContext: { outstandingTimeoutEnabled: true, outstandingTimeoutDays: committed ? 9 : 5 } });
+          }
           if (pathname.endsWith(copy ? '/additional-copies' : '/title-requests')) {
             queueReads++;
-            const item = copy ? ui.readCopyRequest() : ui.readRequest();
             return response(200, { scope: parsed.searchParams.get('scope'), status: 'open',
               organizations: [{ id: 2, name: 'Library A', organizationCodeId: 2 }],
               availableLibraries: [{ id: 2, name: 'Library A', organizationCodeId: 2 }],
@@ -2763,9 +2767,16 @@ for (const copy of [false, true]) {
           assert.match(ui.get(grid).textContent, /Old format/);
         } else {
           await until(() => queueReads === before + 1 && /New format/.test(ui.get(grid).textContent), 'affected same-scope DTO refreshed');
-          const automation = copy ? ui.get(grid) : ui.get('#queue-automation');
-          assert.match(automation.textContent, /9 days/);
-          assert.doesNotMatch(`${ui.get(grid).textContent} ${automation.textContent}`, /Old format|5 days/);
+          if (copy) {
+            assert.match(ui.get(grid).textContent, /9 days/);
+            assert.doesNotMatch(ui.get(grid).textContent, /Old format|5 days/);
+          } else {
+            await ui.open();
+            await until(() => /Suggestion timeout: 9 days/.test(ui.get('#request-dialog-body .workflow-context')?.textContent || ''),
+              'per-request workflow details use the refreshed configuration');
+            assert.doesNotMatch(ui.get('#request-dialog-body').textContent, /Old format|5 days/);
+            await ui.closeDetail();
+          }
         }
       }, { copyRequest: {} }));
   }
