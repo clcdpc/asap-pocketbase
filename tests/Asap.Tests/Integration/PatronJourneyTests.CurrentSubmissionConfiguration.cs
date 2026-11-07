@@ -327,7 +327,7 @@ public sealed partial class PatronJourneyTests
                 await DeleteTestPatronSessionAsync(sessionId);
             }
             await ExecuteNonQueryAsync("""
-                DELETE FROM [asap].[EmailOutbox] WHERE [OrganizationId] = @org;
+                DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [OrganizationId] = @org); DELETE FROM [asap].[EmailOutbox] WHERE [OrganizationId] = @org;
                 DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] = @org;
                 DELETE FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = @org;

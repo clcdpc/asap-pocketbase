@@ -44,7 +44,7 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
-            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @key;", ("@key", key));
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @key); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @key;", ("@key", key));
         }
     }
 
@@ -152,7 +152,7 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
-            await context.EmailOutbox.Where(item => item.Id == row.Id).ExecuteDeleteAsync();
+            await DeleteOwnedEmailFixtureAsync(context, context.EmailOutbox.Where(item => item.Id == row.Id));
         }
     }
 
@@ -527,7 +527,8 @@ public sealed partial class PatronJourneyTests
 
             Assert.AreEqual("staff_scope_forbidden",
                 (await service.QueueTestAsync(ordinaryStaff, 2, CancellationToken.None)).Code);
-            Assert.AreEqual(0, (await service.ListAsync(ordinaryStaff, 2, null, CancellationToken.None)).Count);
+            Assert.AreEqual("staff_scope_forbidden", (await service.ListAsync(ordinaryStaff,
+                new EmailOperationsQuery(LibraryScope.ForLibrary(2)), CancellationToken.None)).Code);
             Assert.AreEqual("staff_scope_forbidden",
                 (await service.RetryAsync(ordinaryStaff, queuedId, StaffVersion.Encode(outbox.RowVersion), CancellationToken.None)).Code);
         }
@@ -603,7 +604,7 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
-            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [Id] = @id;", ("@id", outboxId));
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [Id] = @id); DELETE FROM [asap].[EmailOutbox] WHERE [Id] = @id;", ("@id", outboxId));
             await ExecuteNonQueryAsync(
                 "UPDATE [asap].[StaffUser] SET [IsActive] = 0 WHERE [Id] = @id;",
                 ("@id", admin.Id));
@@ -644,17 +645,19 @@ public sealed partial class PatronJourneyTests
 
         try
         {
-            var result = await service.ListAsync(actor, 2, null, CancellationToken.None);
             var expectedId = ids[0].ToString(System.Globalization.CultureInfo.InvariantCulture);
-            Assert.IsTrue(result.Any(item => item.Id == expectedId && item.Status == "failed"));
-            var failedOnly = await service.ListAsync(actor, 2, "failed", CancellationToken.None);
-            Assert.IsTrue(failedOnly.Any(item => item.Id == expectedId));
-            Assert.IsTrue(failedOnly.All(item => item.Status == "failed"));
+            var result = await service.ListAsync(actor,
+                new EmailOperationsQuery(LibraryScope.ForLibrary(2), Reference: expectedId), CancellationToken.None);
+            Assert.IsTrue(((EmailOperationsPage)result.Data!).Items.Any(item => item.Id == expectedId && item.Status == "failed"));
+            var failedOnly = await service.ListAsync(actor,
+                new EmailOperationsQuery(LibraryScope.ForLibrary(2), Status: "failed"), CancellationToken.None);
+            Assert.IsTrue(((EmailOperationsPage)failedOnly.Data!).Items.Any(item => item.Id == expectedId));
+            Assert.IsTrue(((EmailOperationsPage)failedOnly.Data!).Items.All(item => item.Status == "failed"));
         }
         finally
         {
             await ExecuteNonQueryAsync(
-                "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;",
+                "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;",
                 ("@prefix", $"{businessKeyPrefix}:%"));
             await DeactivateCorrectiveStaffAsync(admin.Id);
         }
@@ -768,7 +771,7 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await ExecuteNonQueryAsync(
-                "DELETE FROM [asap].[EmailOutbox] WHERE [Id] IN (@id, @markerId); DBCC CHECKIDENT ('asap.EmailOutbox', RESEED);",
+                "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [Id] IN (@id, @markerId)); DELETE FROM [asap].[EmailOutbox] WHERE [Id] IN (@id, @markerId); DBCC CHECKIDENT ('asap.EmailOutbox', RESEED);",
                 ("@id", largeId), ("@markerId", dispatchedMarkerId));
         }
     }

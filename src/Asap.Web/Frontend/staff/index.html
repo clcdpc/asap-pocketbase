@@ -19,6 +19,7 @@
     </a>
     <div id="session-actions" class="session-actions" hidden>
       <span id="staff-identity"></span>
+      <button id="search-asap" class="secondary-button header-search" type="button" aria-haspopup="dialog" aria-controls="search-dialog" title="Search ASAP (Ctrl or Command + K)">Search ASAP <kbd>⌘/Ctrl K</kbd></button>
       <button id="profile-button" class="icon-button header-profile" type="button" data-view="profile"
               aria-controls="profile-view" aria-label="Profile" title="Profile">
         <i class="fa fa-user" aria-hidden="true"></i>
@@ -66,6 +67,20 @@
         </button>
       </nav>
 
+      <section id="search-view" class="submission-search" aria-labelledby="search-title" hidden>
+        <h1 id="search-title" tabindex="-1">Search ASAP results</h1>
+        <div class="search-controls" data-search="controls"></div>
+        <div class="search-filters" data-search="filters"></div>
+        <p data-search="summary" role="status" aria-live="polite"></p>
+        <button type="button" data-search="retry" hidden>Retry search</button>
+        <div class="search-results-list" data-search="list"></div>
+        <div class="search-pagination">
+          <button type="button" data-search="previous">Previous results</button>
+          <span data-search="page"></span>
+          <button type="button" data-search="next">Next results</button>
+        </div>
+      </section>
+
       <section id="queue-view" aria-labelledby="queue-title">
         <div class="section-heading">
           <div>
@@ -84,23 +99,23 @@
           </div>
         </div>
 
-        <div id="status-tabs" class="status-tabs" role="tablist" aria-label="Request status" aria-describedby="status-count-help">
+        <div id="status-tabs" class="status-tabs" role="tablist" aria-label="Request status">
           <button type="button" role="tab" data-status="suggestion" aria-selected="true">Suggestions</button>
           <button type="button" role="tab" data-status="outstanding_purchase" aria-selected="false">Purchases</button>
           <button type="button" role="tab" data-status="pending_hold" aria-selected="false">Pending holds</button>
           <button type="button" role="tab" data-status="hold_placed" aria-selected="false">Placed holds</button>
           <button type="button" role="tab" data-status="closed" aria-selected="false">Closed</button>
         </div>
-        <p id="status-count-help" class="request-table-help">Tab counts show all requests in the selected library scope. <span id="status-count-state">Counts unavailable. Refresh to load them.</span></p>
+        <p id="status-count-state" class="status-count-state" role="status" aria-live="polite">Counts unavailable. Refresh to load them.</p>
 
         <div class="queue-filters" aria-label="Request filters">
           <label class="search-field">
-            <span class="sr-only">Search requests</span>
+            <span class="sr-only">Filter current Requests tab</span>
             <i class="fa fa-search" aria-hidden="true"></i>
-            <input id="request-search" type="search" placeholder="Search title, patron, barcode, or identifier">
+            <input id="request-search" type="search" placeholder="Filter current tab">
           </label>
           <label class="compact-field">
-            <span>Claims</span>
+            <span class="sr-only">Claims filter</span>
             <select id="claim-filter">
               <option value="all">All claims</option>
               <option value="mine_unclaimed">Mine + unclaimed</option>
@@ -109,11 +124,11 @@
             </select>
           </label>
           <label class="compact-field">
-            <span>Tag</span>
+            <span class="sr-only">Tag filter</span>
             <select id="tag-filter"><option value="all">All tags</option></select>
           </label>
           <label id="similar-filter-field" class="compact-field">
-            <span>Similarity</span>
+            <span class="sr-only">Similarity filter</span>
             <select id="similar-filter">
               <option value="all">All</option>
               <option value="similar">Similar</option>
@@ -125,9 +140,6 @@
           </button>
         </div>
 
-        <p id="queue-automation" class="queue-automation"></p>
-
-        <p id="request-table-help" class="request-table-help">Scroll the table horizontally to reach every column. Use a request title to open details.</p>
         <div id="request-grid" class="request-grid"></div>
         <p id="queue-empty" class="empty-state" role="status" aria-live="polite" hidden>No requests match these filters.</p>
       </section>
@@ -154,7 +166,7 @@
           <label class="search-field">
             <span class="sr-only">Search additional-copy tasks</span>
             <i class="fa fa-search" aria-hidden="true"></i>
-            <input id="additional-copy-search" type="search" placeholder="Search title, BIB, author, or identifier">
+            <input id="additional-copy-search" type="search" placeholder="Filter current tab" aria-label="Filter current Additional copies tab">
           </label>
           <label class="compact-field">
             <span>Claims</span>
@@ -252,10 +264,11 @@
         <section id="operations-email-panel" role="tabpanel" aria-labelledby="operations-email-tab" hidden>
           <div class="section-heading">
             <div><h2 id="email-operations-title">Email operations</h2><p>Review queued messages and recorded sending outcomes.</p></div>
-            <label id="email-view-scope-field" class="compact-field" hidden><span>View scope</span><select id="email-view-scope"></select></label>
           </div>
         <fieldset id="operations-email-test" class="settings-fieldset" data-settings-ignore="true">
           <legend>Test email</legend>
+          <label id="email-test-scope-field" class="compact-field" hidden><span>Test settings scope</span><select id="email-test-scope" aria-describedby="email-test-scope-help"></select></label>
+          <p id="email-test-scope-help" class="field-help">History filters do not change the saved settings used by this test.</p>
           <div data-email-test="context"></div>
           <div class="form-actions">
             <button id="send-test-email" data-email-test="send" class="secondary-button" type="button">Send test email</button>
@@ -266,7 +279,21 @@
             <p>Client retirement does not cancel a delayed server request. A message may still arrive. Keep these references for operator review during this browser session.</p><ul></ul>
           </details>
         </fieldset>
-          <div id="email-operations-table" class="operations-table email-operations-table" role="region" aria-label="Email operations log" aria-live="polite" tabindex="0"></div>
+          <form id="email-filters" class="audit-filters" role="search" aria-label="Email history filters">
+            <label class="audit-search"><span>Search history</span><input id="email-search" type="search" maxlength="200" placeholder="Exact reference, type, or safe outcome detail"></label>
+            <label id="email-view-scope-field"><span>View scope</span><select id="email-view-scope"></select></label>
+            <label><span>Status</span><select id="email-status"><option value="">All statuses</option><option value="pending">Queued</option><option value="sending">Submitting</option><option value="sent">Recorded acceptance or capture</option><option value="failed">Failed or unconfirmed</option><option value="suppressed">Suppressed</option></select></label>
+            <label><span>Type</span><select id="email-type"></select></label>
+            <label><span>Created From</span><input id="email-from" type="date"></label>
+            <label><span>Created Through</span><input id="email-through" type="date"></label>
+            <label><span>Sort</span><select id="email-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
+            <div class="audit-filter-footer"><button id="email-clear" class="secondary-button" type="button">Clear filters</button><span id="email-timezone" class="operations-meta"></span></div>
+          </form>
+          <div id="email-reference-context" class="status-message" hidden><span id="email-reference-value"></span> <button id="email-reference-clear" class="secondary-button" type="button">Clear reference</button></div>
+          <p id="email-history-status" class="status-message" role="status" aria-live="polite"></p>
+          <strong id="email-count" aria-live="polite"></strong>
+          <div id="email-operations-table" class="operations-table email-operations-table" role="region" aria-label="Email operations log" tabindex="0"></div>
+          <div class="audit-pagination"><span id="email-page" class="operations-meta"></span><div><button id="email-prev" class="secondary-button" type="button" aria-label="Previous email history page" disabled>Previous</button><button id="email-next" class="secondary-button" type="button" aria-label="Next email history page" disabled>Next</button></div></div>
         </section>
         <section id="operations-audit-panel" role="tabpanel" aria-labelledby="operations-audit-tab" hidden>
           <h2>Administration audit</h2><p class="operations-description">Find changes to staff access, settings, and library participation.</p>
@@ -780,6 +807,18 @@
     </div>
   </main>
 
+  <dialog id="search-dialog" class="submission-search" aria-labelledby="search-dialog-title">
+    <div class="search-dialog-shell">
+      <header class="dialog-header"><h2 id="search-dialog-title">Search ASAP</h2><button type="button" data-search="close" aria-label="Close Search ASAP">Close</button></header>
+      <div class="search-controls" data-search="controls"></div>
+      <p class="search-guidance">Across authorized title requests and additional copies. Use ↑/↓ and Enter to open a result.</p>
+      <p class="search-summary" data-search="summary" role="status" aria-live="polite"></p>
+      <button class="search-retry" type="button" data-search="retry" hidden>Retry search</button>
+      <div id="search-suggestions" class="search-suggestions" data-search="list"></div>
+      <footer class="search-footer"><button type="button" data-search="all" hidden>View all results</button></footer>
+    </div>
+  </dialog>
+
   <dialog id="request-dialog" aria-labelledby="request-dialog-title">
     <div class="dialog-shell">
       <header class="dialog-header">
@@ -788,7 +827,8 @@
           <h2 id="request-dialog-title">Request</h2>
           <p id="request-dialog-status" class="status-badge request-header-status" role="status" hidden></p>
         </div>
-        <button id="close-request" class="icon-button" type="button" title="Close details" aria-label="Close request details">
+        <button id="detail-search-asap" class="secondary-button" type="button" aria-haspopup="dialog">Search ASAP</button>
+        <button id="close-request" class="icon-button" type="button" title="Close details" aria-label="Close request details" data-dialog-close>
           <i class="fa fa-times" aria-hidden="true"></i>
         </button>
       </header>

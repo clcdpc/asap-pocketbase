@@ -134,7 +134,7 @@ public sealed partial class PatronJourneyTests
                 await DeleteRequestAsync(id);
             }
             await ExecuteNonQueryAsync("""
-                DELETE FROM [asap].[EmailOutbox] WHERE [OrganizationId] IN (@a,@b);
+                DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [OrganizationId] IN (@a,@b)); DELETE FROM [asap].[EmailOutbox] WHERE [OrganizationId] IN (@a,@b);
                 DELETE FROM [asap].[Organization] WHERE [Id] IN (@ra,@rb,@first,@later,@pb);
                 DELETE FROM [asap].[Organization] WHERE [Id] IN (@a,@b);
                 """, ("@a", libraryA), ("@b", libraryB), ("@ra", registeredA), ("@rb", registeredB),

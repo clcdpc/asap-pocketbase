@@ -1,5 +1,55 @@
 # ASAP automated acceptance
 
+The focused `i467` suite checks Search ASAP against a pinned application in a
+fresh disposable SQL Server 2022 runtime with the normal reviewer cookie:
+
+```powershell
+.\scripts\review\Invoke-AsapReview.ps1 -Commit <full-application-sha> -Suite i467
+```
+
+Seven read-only scenarios cover all seven status/type groups, literal and exact
+matching, full patron names, independent library/all-library counts, stable
+pagination, entry from five staff sections, keyboard/IME/focus, full results,
+fresh typed details, failure/retry/stale responses, Settings draft cancellation,
+and desktop/mobile/short/native-200% geometry. Existing synthetic fixtures are
+reused without changing their values. Each scenario verifies that the fixture
+rows/versions and outbox evidence are unchanged. The existing browser, external
+request, image, overflow and serious/critical axe guards remain active.
+The header scenario also opens Search from custom-date Analytics, checks the
+selected library, visits request Activity and returns with both the applied
+report dates and newer unapplied date drafts intact.
+
+The exact same-origin `POST /api/asap/staff/search` is a read, including with
+`-ReadOnly`; it is not recorded as a workflow mutation. No sibling path, other
+method or remote request receives this exemption. Retained guard tests prove
+the boundary. This suite does not impersonate library staff, alter identities,
+or replace the retained direct-HTTP role/revocation tests and 12,038-row SQL
+performance receipt. Those two coverage-gap rows and actual human visual/screen
+reader acceptance stay explicit in its report. See [i467-evidence.md](i467-evidence.md).
+
+The targeted `i479` suite covers Requests cleanup (#457, #476 and #458).
+Run `./scripts/review/Invoke-AsapReview.ps1 -Pr 480 -Suite i479` from this
+tooling checkout. Six scenarios cover 84 Claims/status/scope cells against
+authoritative SQL-backed rows, both queues, replacement/refresh/reload,
+15 desktop/mobile/native-200 queue layouts, accessible filter names and focus,
+contained scrolling, upper patron-name/barcode links without the lower duplicate,
+research draft updates, six injected unavailable/unsafe patron-link cases and
+guarded Close/Reopen follow-up refresh retention.
+Only the mutation-retention scenario writes, through the existing D1 fixture and
+confirmation helper. `-ReadOnly` skips that required scenario and exits incomplete.
+The suite adds no fixture, auth endpoint, provider call or mutation permission.
+The disposable default omits LEAP patterns. The link scenarios inject valid or
+invalid patterns into real initial/later read responses while keeping the SQL
+fixture's patron identity; they do not claim persisted provider configuration.
+
+The retained `shared-claims.cjs` native SQL/browser owner and focused frontend
+tests additionally own actor isolation, delayed old-actor reads, Profile fallback
+and preference saves. `leap-consumers.cjs` and focused research/details tests own
+delayed valid-link upgrade cases. Those are declared gaps
+in this single-reviewer runner suite, not fabricated execution. Exact LEAP hrefs,
+new-tab and safe-rel semantics are verified locally; no external LEAP navigation
+is attempted. Human visual/screen-reader acceptance remains under #398.
+
 The focused `i471` suite checks Settings identities and history, Add rule,
 inheritance, compact rows, draft blockers and save recovery using disposable SQL.
 Run from this tooling checkout against an immutable application commit:

@@ -457,8 +457,10 @@ public static class AdministrationEndpoints
 
     private static async Task<IResult> ListEmailOperationsAsync(
         HttpContext context,
+        string? scope,
         int? organizationId,
-        string? status,
+        string? search, string? status, string? type, DateTimeOffset? fromUtc, DateTimeOffset? beforeUtc,
+        string? sort, int? page, int? pageSize, string? reference,
         EmailOperationsService service,
         CancellationToken cancellationToken)
     {
@@ -467,12 +469,23 @@ public static class AdministrationEndpoints
         {
             return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
         }
-        if (actor.Role != StaffRole.SuperAdmin && organizationId.HasValue && organizationId != actor.OrganizationId)
+        var defaultScope = actor.Role == StaffRole.SuperAdmin ? LibraryScope.All : LibraryScope.ForLibrary(actor.OrganizationId);
+        if (scope is not null && organizationId.HasValue ||
+            !LibraryScope.TryParse(scope ?? organizationId?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                defaultScope, out var requestedScope))
         {
-            return Results.Json(new { code = "staff_scope_forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+            return Results.BadRequest(new { code = "email_query_invalid" });
         }
-        var items = await service.ListAsync(actor, organizationId, status, cancellationToken);
-        return Results.Json(new { items });
+        var result = await service.ListAsync(actor, new EmailOperationsQuery(requestedScope, search, status, type,
+            fromUtc, beforeUtc, sort ?? "newest", page ?? 1, pageSize ?? 25, reference), cancellationToken);
+        return result.Code == "ok" ? Results.Json(result.Data) :
+            Results.Json(new { code = result.Code }, statusCode: result.Code switch
+            {
+                "staff_scope_forbidden" => StatusCodes.Status403Forbidden,
+                "staff_session_invalid" => StatusCodes.Status401Unauthorized,
+                "organization_not_found" => StatusCodes.Status404NotFound,
+                _ => StatusCodes.Status400BadRequest
+            });
     }
 
     private static async Task<IResult> QueueTestEmailAsync(

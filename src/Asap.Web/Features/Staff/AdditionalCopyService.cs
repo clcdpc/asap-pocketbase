@@ -141,7 +141,9 @@ public sealed class AdditionalCopyService(
         CurrentStaff actor,
         string id,
         string? claimClearedReason,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        LibraryScope? scope = null,
+        bool searchResult = false)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var requestId = await RequestLinkResolver.ResolveAsync(
@@ -156,6 +158,19 @@ public sealed class AdditionalCopyService(
         var request = await context.AdditionalCopyRequests.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == requestId.Value, cancellationToken);
         if (request is null || !CanAccess(actor, request.LibraryOrganizationId))
+        {
+            return null;
+        }
+        if (scope is { } selected && (selected.Kind == LibraryScopeKind.System ||
+            actor.Role == StaffRole.SuperAdmin && selected.Kind == LibraryScopeKind.Library &&
+                selected.OrganizationId != request.LibraryOrganizationId))
+        {
+            return null;
+        }
+        if ((searchResult || scope is { Kind: LibraryScopeKind.Library }) &&
+            !await context.Organizations.AsNoTracking().AnyAsync(item => item.Id == request.LibraryOrganizationId &&
+                item.Id > 1 && item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive,
+                cancellationToken))
         {
             return null;
         }
@@ -325,6 +340,8 @@ public sealed class AdditionalCopyService(
                 context,
                 locked.Staff[actor.Id],
                 source.LibraryOrganizationId,
+                request.SourceTitleRequestId,
+                "additional_copy_reminder",
                 $"additional-copy-reminder:{request.Id}",
                 "ASAP additional-copy reminder",
                 $"Additional-copy task {request.Id} for {request.Title} (BIB {request.BibId}) was created.",
@@ -517,6 +534,8 @@ public sealed class AdditionalCopyService(
                 context,
                 assignee,
                 request.LibraryOrganizationId,
+                request.SourceTitleRequestId,
+                "additional_copy_assignment",
                 $"additional-copy-assignment:{request.Id}:{Convert.ToHexString(expectedVersion)}:{assignee.Id}",
                 "ASAP additional-copy task assigned",
                 $"Additional-copy task {request.Id} for {request.Title} has been assigned to you.",
@@ -768,16 +787,14 @@ public sealed class AdditionalCopyService(
         AsapDbContext context,
         StaffUser recipient,
         int organizationId,
+        long? sourceTitleRequestId,
+        string messageKind,
         string businessKey,
         string subject,
         string body,
         bool transportConfigured,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(recipient.NotificationEmail))
-        {
-            return null;
-        }
         var system = await context.EmailSettings.AsNoTracking()
             .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var library = await context.EmailSettings.AsNoTracking()
@@ -787,7 +804,7 @@ public sealed class AdditionalCopyService(
         string? suppressionReason = null;
         if (!StaffEmail.TryNormalize(recipient.NotificationEmail, out var toAddress) || toAddress is null)
         {
-            suppressionReason = "recipient_invalid";
+            suppressionReason = string.IsNullOrWhiteSpace(recipient.NotificationEmail) ? "recipient_missing" : "recipient_invalid";
         }
         else if (!recipientDomainPolicy.IsAllowed(toAddress))
         {
@@ -802,10 +819,15 @@ public sealed class AdditionalCopyService(
             suppressionReason = "mail_not_configured";
         }
         var now = UtcNow();
+        var linkedRequestId = sourceTitleRequestId.HasValue && await context.TitleRequests.AnyAsync(item =>
+            item.Id == sourceTitleRequestId.Value && item.LibraryOrganizationId == organizationId, cancellationToken)
+            ? sourceTitleRequestId : null;
         var outbox = new EmailOutbox
         {
             OrganizationId = organizationId,
             BusinessKey = businessKey,
+            TitleRequestId = linkedRequestId,
+            MessageKind = linkedRequestId.HasValue ? messageKind : null,
             DeliveryClass = "staff_authorization_sensitive",
             RecipientStaffUserId = recipient.Id,
             RecipientAuthenticationEmail = recipient.NormalizedUserPrincipalName,
@@ -823,6 +845,7 @@ public sealed class AdditionalCopyService(
             SuppressedUtc = suppressionReason is null ? null : now
         };
         context.EmailOutbox.Add(outbox);
+        RequestEmailEvidence.AddInitial(context, outbox);
         await context.SaveChangesAsync(cancellationToken);
         return outbox;
     }

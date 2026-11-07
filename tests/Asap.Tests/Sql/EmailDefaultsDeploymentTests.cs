@@ -11,7 +11,7 @@ namespace Asap.Tests.Sql;
 
 [TestClass]
 [DoNotParallelize]
-public sealed class EmailDefaultsDeploymentTests
+public sealed partial class EmailDefaultsDeploymentTests
 {
     private string databaseName = null!;
     private string master = null!;

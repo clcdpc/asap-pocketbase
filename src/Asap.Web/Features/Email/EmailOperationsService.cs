@@ -5,6 +5,8 @@ using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Data.SqlClient;
 
 namespace Asap.Web.Features.Email;
 
@@ -12,7 +14,6 @@ public sealed record EmailOperationItem(
     string Id,
     int OrganizationId,
     string Status,
-    string? BusinessKey,
     string DeliveryClass,
     string? RecipientAddressKind,
     int AttemptCount,
@@ -22,7 +23,9 @@ public sealed record EmailOperationItem(
     DateTime? SentUtc,
     string Version,
     bool CanRetry,
-    string DeliveryMode);
+    string DeliveryMode,
+    string TypeLabel,
+    string? DetailLabel);
 
 public sealed record EmailOperationResult(string Code, object? Data = null);
 
@@ -30,7 +33,7 @@ public sealed record EmailTestContext(
     int OrganizationId, string ScopeName, string? FromAddress, string? FromName,
     string? Recipient, string DeliveryMode, string State, string? BlockingReason, string ConfigurationVersion);
 
-public sealed class EmailOperationsService(
+public sealed partial class EmailOperationsService(
     IDbContextFactory<AsapDbContext> contextFactory,
     IEmailOutboxDispatcher dispatcher,
     IEmailSender emailSender,
@@ -330,68 +333,6 @@ public sealed class EmailOperationsService(
                 dispatchDelayed, version = StaffVersion.Encode(outbox.RowVersion) });
     }
 
-    public async Task<IReadOnlyList<EmailOperationItem>> ListAsync(
-        CurrentStaff actor,
-        int? organizationId,
-        string? status,
-        CancellationToken cancellationToken)
-    {
-        if (!TryResolveScope(actor, organizationId, out var scope))
-        {
-            return [];
-        }
-
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var query = context.EmailOutbox.AsNoTracking();
-        if (scope.HasValue)
-        {
-            query = query.Where(item => item.OrganizationId == scope.Value);
-        }
-
-        if (string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
-        {
-            query = query.Where(item => item.Status == "failed");
-        }
-        var rows = await query
-            .OrderByDescending(item => item.Status == "failed")
-            .ThenByDescending(item => item.CreatedUtc)
-            .Take(500)
-            .Select(item => new
-            {
-                item.Id,
-                item.OrganizationId,
-                item.Status,
-                item.BusinessKey,
-                item.DeliveryClass,
-                item.RecipientAddressKind,
-                item.AttemptCount,
-                item.LastErrorCode,
-                item.SuppressionReason,
-                item.CreatedUtc,
-                item.SentUtc,
-                item.RowVersion,
-                item.ProviderMessageId,
-                item.AttemptDeliveryMode,
-                item.SendingStartedUtc,
-                item.LeaseId,
-                item.LeaseExpiresUtc,
-                item.NextAttemptUtc
-            })
-            .ToListAsync(cancellationToken);
-        return rows.Select(item => new EmailOperationItem(
-            item.Id.ToString(CultureInfo.InvariantCulture), item.OrganizationId, item.Status,
-            item.BusinessKey, item.DeliveryClass,
-            item.RecipientAddressKind, item.AttemptCount, item.LastErrorCode, item.SuppressionReason,
-            DateTime.SpecifyKind(item.CreatedUtc, DateTimeKind.Utc),
-            item.SentUtc.HasValue ? DateTime.SpecifyKind(item.SentUtc.Value, DateTimeKind.Utc) : null,
-            StaffVersion.Encode(item.RowVersion),
-            IsCertifiedForRetry(item.Status, item.LastErrorCode, item.ProviderMessageId, item.SendingStartedUtc,
-                item.LeaseId, item.LeaseExpiresUtc, item.NextAttemptUtc),
-            item.AttemptDeliveryMode ??
-                (item.ProviderMessageId?.StartsWith("file:", StringComparison.Ordinal) == true ? "file" : "unknown")))
-            .ToArray();
-    }
-
     public async Task<EmailOperationResult> RetryAsync(
         CurrentStaff actor,
         long id,
@@ -460,6 +401,9 @@ public sealed class EmailOperationsService(
             return new EmailOperationResult("email_not_retryable");
         }
 
+        var sqlConnection = (SqlConnection)context.Database.GetDbConnection();
+        var sqlTransaction = (SqlTransaction)transaction.GetDbTransaction();
+        var track = await RequestEmailEvidence.PreserveSnapshotAsync(sqlConnection, sqlTransaction, row.Id, cancellationToken);
         row.Status = "pending";
         row.NextAttemptUtc = timeProvider.GetUtcNow().UtcDateTime;
         row.LastErrorCode = null;
@@ -467,6 +411,12 @@ public sealed class EmailOperationsService(
         try
         {
             await context.SaveChangesAsync(cancellationToken);
+            if (track)
+            {
+                await RequestEmailEvidence.AppendAsync(sqlConnection, sqlTransaction, row.Id,
+                    $"retry:{Convert.ToHexString(expectedVersion)}", "retry_queued", null, null,
+                    row.NextAttemptUtc!.Value, cancellationToken);
+            }
             await transaction.CommitAsync(cancellationToken);
         }
         catch (DbUpdateConcurrencyException)

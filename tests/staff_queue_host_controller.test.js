@@ -19,6 +19,12 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.equal(first.isCurrent(), false);
     first.heading('Stale', 'Stale'); first.show();
     second.content.append(secondRoot); second.heading('Current', 'Current'); second.show();
+    const resume = host.suspendForSearch();
+    assert.equal(get('#request-dialog').open, false);
+    assert.equal(host.isOpen(), true, 'suspension preserves the mounted departure owner');
+    assert.equal(second.isCurrent(), true);
+    second.show(); assert.equal(get('#request-dialog').open, false, 'a retained read cannot stack a suspended detail above Search');
+    resume(); assert.equal(get('#request-dialog').open, true);
     get('#request-dialog').dispatchEvent(new dom.window.Event('cancel', { cancelable: true }));
     assert.equal(closed, 1);
     assert.equal(get('#request-dialog-title').textContent, 'Current');
@@ -30,9 +36,11 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
   for (const copy of [false, true]) {
     await fixture(async ({ load, get, dom }) => {
       const { createSessionIdentity } = await load('session-identity');
+      const { createClaimsFilter } = await load('claims-filter');
       const { createTitleQueue, createCopyQueue } = await load('queues');
       const { createStaffShell } = await load('shell');
       const session = createSessionIdentity(); session.accept(staff);
+      const claimsFilter = createClaimsFilter({ sessionIdentity: session });
       let context = Object.freeze({ scope: '2', status: 'suggestion', additionalCopyStatus: 'open', activeView: copy ? 'additional-copies' : 'queue' });
       const calls = [], notices = [], grids = [], opened = [];
       const shell = createStaffShell({ root: document, sessionIdentity: session, getContext: () => context,
@@ -49,7 +57,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
         forceRender() { return this; } destroy() { this.destroyed = true; }
       } };
       const owner = (copy ? createCopyQueue : createTitleQueue)({ root: get(copy ? '#additional-copy-view' : '#queue-view'),
-        sessionIdentity: session, getContext: () => context, announce: message => {
+        sessionIdentity: session, claimsFilter, getContext: () => context, announce: message => {
           notices.push(message);
           return shell.announce(message);
         },
@@ -58,7 +66,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
         recovery: { current: () => null, begin() {}, loaded() {}, acknowledge() {} },
         request: (path, init) => { const pending = deferred(); calls.push({ path, init, pending }); return pending.promise; }
       });
-      owner.setStaff(staff);
+      owner.setStaff(session.preferences());
       const old = owner.refresh();
       context = Object.freeze({ ...context, scope: '3' }); owner.contextChanged(context, { ...context, scope: '2' });
       const current = owner.refresh();
@@ -102,10 +110,10 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       assert.ok(grids.every(grid => grid.destroyed));
       assert.equal(notices.includes('0 authorized requests loaded.'), false, 'disposed read cannot announce');
       const replacement = (copy ? createCopyQueue : createTitleQueue)({ root: get(copy ? '#additional-copy-view' : '#queue-view'),
-        sessionIdentity: session, getContext: () => context, announce() {}, onScopeAccepted() {}, onLibraries() {}, onRefreshed() {}, onRendered() {},
+        sessionIdentity: session, claimsFilter, getContext: () => context, announce() {}, onScopeAccepted() {}, onLibraries() {}, onRefreshed() {}, onRendered() {},
         onOpen() {}, onScopeIntent() {}, onStatusIntent() {}, recovery: { current: () => null, begin() {}, loaded() {}, acknowledge() {} },
         request: async () => ({ items: [], scope: '3', status: 'open' }) });
-      replacement.setStaff(staff); await replacement.refresh();
+      replacement.setStaff(session.preferences()); await replacement.refresh();
       const liveGrid = get(copy ? '#additional-copy-grid' : '#request-grid');
       owner.dispose(); owner.signedOut(); owner.contextChanged({ ...context, scope: '2' }, context);
       assert.equal(get(copy ? '#additional-copy-grid' : '#request-grid'), liveGrid, 'retired lifecycle cannot detach the replacement grid');

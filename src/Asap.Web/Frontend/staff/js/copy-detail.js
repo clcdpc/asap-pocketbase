@@ -27,13 +27,18 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
     invalidate(); drafts.dispose(); current = null; actor = null; returnFocus = null; activeAttempt = null; lease = null;
   }
 
-  async function prepare(id) {
+  async function prepare(id, options = {}) {
     const owner = sessionIdentity.preferences();
     if (disposed || !owner) return null;
     const load = reads.begin('detail-target'), ticket = ++targetGeneration;
-    const live = () => !disposed && !load.signal.aborted && ticket === targetGeneration && sessionIdentity.isCurrent(owner);
+    const signal = options.signal ? window.AbortSignal.any([load.signal, options.signal]) : load.signal;
+    const live = () => !disposed && !signal.aborted && ticket === targetGeneration && sessionIdentity.isCurrent(owner);
     try {
-      const request = await send(`/api/asap/staff/additional-copies/${encodeURIComponent(id)}`, { signal: load.signal });
+      const path = `/api/asap/staff/additional-copies/${encodeURIComponent(id)}`;
+      const query = new URLSearchParams();
+      if (options.scope) query.set('scope', options.scope);
+      if (options.searchScope) query.set('searchResult', 'true');
+      const request = await send(query.size ? `${path}?${query}` : path, { signal });
       return live() ? { request, owner, isCurrent: live } : null;
     } finally { reads.finish('detail-target', load.token); }
   }
@@ -59,7 +64,7 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
     const owner = sessionIdentity.preferences(), prior = current;
     announce('Loading additional-copy details...');
     try {
-      const target = await prepare(id);
+      const target = await prepare(id, options);
       if (!target?.isCurrent() || !departure.isCurrent()) return false;
       const alignment = await onAlign(target.request, options, owner, departure);
       if (!alignment || !target.isCurrent() || !departure.isCurrent()) return false;

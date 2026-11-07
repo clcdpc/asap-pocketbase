@@ -13,7 +13,7 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
     identity: get('#staff-identity'), recent: get('#recent-work'), recentList: get('#recent-request-list') };
   const views = { queue: ['#queue-view', '#queue-title'], 'additional-copies': ['#additional-copy-view', '#additional-copy-title'],
     settings: ['#settings-view', '#settings-title'], analytics: ['#analytics-view', '#analytics-title'],
-    profile: ['#profile-view', '#profile-title'], operations: ['#operations-view', '#operations-title'] };
+    profile: ['#profile-view', '#profile-title'], operations: ['#operations-view', '#operations-title'], search: ['#search-view', '#search-title'] };
   const tabs = [...root.querySelectorAll('.view-tab, #profile-button')];
   const profileEntry = tabs.find(tab => tab.dataset.view === 'profile');
   const reads = createLatestLoad(), events = new window.AbortController(), receipts = new Map();

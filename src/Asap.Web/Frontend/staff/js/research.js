@@ -79,7 +79,8 @@ export function researchRecordUrl(research, kind, bibId = null) {
     return id ? researchUrl(research?.leapBibUrlPattern, { bibid: id }, 'bibid') : '';
   }
   const id = positivePolarisId(research?.patronId), pattern = research?.leapPatronUrlPattern;
-  if (!id || !(pattern?.includes('{{patron-id}}') || pattern?.includes('{{patronId}}'))) return '';
+  if (!id || typeof pattern !== 'string' ||
+      !(pattern.includes('{{patron-id}}') || pattern.includes('{{patronId}}'))) return '';
   return researchUrl(pattern, { 'patron-id': id, patronId: id });
 }
 
@@ -95,19 +96,13 @@ export function renderResearchLinks(container, request, research, draft = {}) {
   const values = {
     title: draft.title ?? request.title,
     identifier: draft.identifier ?? request.identifier,
-    bibid: positivePolarisId(draft.bibId ?? request.bibid),
-    'patron-id': research?.patronId,
-    patronId: research?.patronId
+    bibid: positivePolarisId(draft.bibId ?? request.bibid)
   };
   const add = (label, url) => {
     if (url) links.push(node('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text: label }));
   };
   if (values.bibid !== null) {
     add('Open BIB in LEAP', researchUrl(research?.leapBibUrlPattern, values, 'bibid'));
-  }
-  const patronPattern = research?.leapPatronUrlPattern;
-  if (patronPattern?.includes('{{patron-id}}') || patronPattern?.includes('{{patronId}}')) {
-    add('Open patron in LEAP', researchUrl(patronPattern, values));
   }
   const providers = Array.isArray(research?.externalSearchProviders)
     ? [...research.externalSearchProviders].sort((a, b) => a.sortOrder - b.sortOrder)

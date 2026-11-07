@@ -11,6 +11,15 @@ const { parse, run, runScenarios } = require('./run.cjs');
 const { screenshot, registerScreenshotPage } = require('./helpers/accessibility.cjs');
 const appSha = 'a'.repeat(40), toolSha = 'b'.repeat(40);
 const repository = path.resolve(__dirname, '../..');
+test('Requests cleanup suite preserves its issue map and guarded mutation owner', () => {
+  const suite = require('./suites/i479.cjs');
+  assert.equal(suite.id, 'i479');
+  assert.equal(suite.scenarios.length, 6);
+  assert.deepEqual(suite.scenarios.filter(s => s.writes).map(s => s.id), ['i479-mutation-retention']);
+  assert.ok(suite.scenarios.every(s => s.requirements.some(r => /#45[78]|#476/.test(r))));
+  assert.ok(suite.human.some(row => row[1].includes('#398')));
+  assert.ok(suite.uncovered.some(row => row[0] === 'i479-native-identity-and-invalid-links'));
+});
 test('confirmation failure is observed while its trigger is still pending', async () => {
   const { decideConfirmation } = require('../browser/confirmation.cjs');
   const page = { locator: () => ({ waitFor: async () => { throw new Error('Synthetic confirmation unavailable'); } }) };
@@ -281,6 +290,18 @@ test('read-only mode rejects accidental writes of every method and skips require
   assert.equal(skipped.report.scenarios[0].status, 'NOT RUN'); assert.equal(exitCode(skipped.report), 2);
 });
 
+test('read-only Search POST is narrowly exempt without admitting writes or remote requests', async t => {
+  const search = await dispatchProbe(t, { readOnly: true, path: '/api/asap/staff/search' });
+  assert.equal(search.dispatched, 1); assert.equal(search.aborted, 0);
+  assert.deepEqual(search.metadata, []); assert.equal(search.report.scenarios[0].status, 'PASS');
+  for (const input of [{ path: '/api/asap/staff/search/action' }, { path: '/api/asap/staff/search/' },
+    { path: '/api/asap/staff/search', method: 'DELETE' },
+    { path: 'https://example.org/api/asap/staff/search' }]) {
+    const rejected = await dispatchProbe(t, { readOnly: true, ...input });
+    assert.equal(rejected.dispatched, 0); assert.equal(rejected.aborted, 1);
+  }
+});
+
 test('existing frontend/browser entry points and full CI guard remain; artifacts are Git ignored', async () => {
   // Preserve the current main baseline, including its discovery/reuse guards.
   for (const file of ['package.json', 'tests/browser/run.cjs', 'scripts/ci/selection.py']) {
@@ -374,6 +395,10 @@ test('registered suites match discovered modules and retain their mutation bound
   assert.equal(registry.smoke.mutations, true);
   assert.equal(registry.s1.mutations, false);
   assert.equal(registry.s1.scenarios.length, 6);
+  assert.equal(registry.i467.id, 'i467');
+  assert.equal(registry.i467.mutations, false);
+  assert.equal(registry.i467.scenarios.length, 7);
+  assert.ok(registry.i467.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));
   assert.ok(registry.s1.scenarios.every(scenario => scenario.writes === false));
   assert.equal(registry.i390.id, 'i390');
   assert.equal(registry.i390.mutations, false);

@@ -79,9 +79,20 @@ CREATE TABLE [asap].[EmailOutbox]
     [TestConfigurationVersion] varchar(64) NULL,
     [IntendedDeliveryMode] nvarchar(32) NULL,
     [AttemptDeliveryMode] nvarchar(32) NULL,
+    [TitleRequestId] bigint NULL,
+    [MessageKind] nvarchar(40) NULL,
     CONSTRAINT [FK_EmailOutbox_Organization] FOREIGN KEY ([OrganizationId]) REFERENCES [asap].[Organization]([Id]),
     CONSTRAINT [FK_EmailOutbox_RecipientStaffUser] FOREIGN KEY ([RecipientStaffUserId]) REFERENCES [asap].[StaffUser]([Id]),
     CONSTRAINT [FK_EmailOutbox_AuthorizationOrganization] FOREIGN KEY ([AuthorizationOrganizationId]) REFERENCES [asap].[Organization]([Id]),
+    -- Request deletion detaches mail; it never deletes the durable delivery evidence.
+    CONSTRAINT [FK_EmailOutbox_TitleRequest] FOREIGN KEY ([TitleRequestId]) REFERENCES [asap].[TitleRequest]([Id]) ON DELETE SET NULL,
+    CONSTRAINT [CK_EmailOutbox_RequestMessage] CHECK
+    (
+        ([TitleRequestId] IS NULL OR [MessageKind] IS NOT NULL) AND
+        ([MessageKind] IS NULL OR ([DeliveryClass] <> N'operational_test' AND [MessageKind] IN
+            (N'confirmation', N'assignment', N'purchase_reminder', N'purchase_approved', N'already_owned',
+             N'rejection', N'hold_placed', N'timeout', N'additional_copy_reminder', N'additional_copy_assignment')))
+    ),
     CONSTRAINT [CK_EmailOutbox_DeliveryClass] CHECK ([DeliveryClass] IN (N'business_event', N'staff_authorization_sensitive', N'operational_test')),
     CONSTRAINT [CK_EmailOutbox_Status] CHECK ([Status] IN (N'pending', N'sending', N'sent', N'failed', N'suppressed')),
     CONSTRAINT [CK_EmailOutbox_AttemptCount] CHECK ([AttemptCount] >= 0),
@@ -157,6 +168,10 @@ CREATE TABLE [asap].[EmailDeliveryEvent]
     [EventType] nvarchar(100) NOT NULL,
     [ReceivedUtc] datetime2(7) NOT NULL,
     [MetadataJson] nvarchar(max) NULL,
+    [LocalEventKey] nvarchar(100) NULL,
+    [ReasonCode] nvarchar(100) NULL,
+    [DeliveryMode] nvarchar(32) NULL,
+    [TimestampKind] nvarchar(32) NULL,
     CONSTRAINT [FK_EmailDeliveryEvent_Outbox] FOREIGN KEY ([EmailOutboxId]) REFERENCES [asap].[EmailOutbox]([Id]),
     CONSTRAINT [CK_EmailDeliveryEvent_MetadataJson] CHECK ([MetadataJson] IS NULL OR ISJSON([MetadataJson]) = 1)
 );
@@ -168,4 +183,12 @@ GO
 
 CREATE INDEX [IX_EmailDeliveryEvent_OutboxReceived]
     ON [asap].[EmailDeliveryEvent]([EmailOutboxId], [ReceivedUtc], [Id]);
+GO
+
+CREATE UNIQUE INDEX [UX_EmailDeliveryEvent_LocalEvent]
+    ON [asap].[EmailDeliveryEvent]([EmailOutboxId], [LocalEventKey]) WHERE [LocalEventKey] IS NOT NULL AND [EmailOutboxId] IS NOT NULL;
+GO
+
+CREATE INDEX [IX_EmailOutbox_TitleRequest]
+    ON [asap].[EmailOutbox]([TitleRequestId], [OrganizationId], [Id]) WHERE [TitleRequestId] IS NOT NULL;
 GO

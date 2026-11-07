@@ -369,7 +369,9 @@ class LifecycleTests(unittest.TestCase):
     def test_sigint_sigterm_forwarded_cleanup_and_partial_artifacts(self):
         for signum in (signal.SIGINT, signal.SIGTERM):
             ready = self.root / ("ready-" + str(signum))
-            child = subprocess.Popen(self.arguments("import os,time; from pathlib import Path; Path(" + repr(str(ready)) + ").write_text(str(os.getpid())); time.sleep(60)"), cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            # Publish readiness only after write_text has closed the complete PID file.
+            source = f"import os,time; from pathlib import Path; ready=Path({str(ready)!r}); pending=ready.with_suffix('.tmp'); pending.write_text(str(os.getpid())); pending.replace(ready); time.sleep(60)"
+            child = subprocess.Popen(self.arguments(source), cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             try:
                 deadline = time.monotonic() + 5
                 while not ready.exists() and time.monotonic() < deadline:

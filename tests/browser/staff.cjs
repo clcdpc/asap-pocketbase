@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
-const { verifyRoster: verifyStaffRosterNativeZoom } = require('./staff-native-zoom.cjs');
+const { verifyRoster: verifyStaffRosterNativeZoom, verifyAnalytics: verifyStaffAnalyticsNativeZoom } = require('./staff-native-zoom.cjs');
 const settingsSpacingRecorder = require('./settings-spacing.cjs');
 
 async function revealRequestActions(page) {
@@ -52,9 +52,10 @@ function sameOrigin(url, origin) {
   try { return new URL(url).origin === origin; } catch { return false; }
 }
 
-async function createContext(browser, viewport, baseOrigin, identity) {
+async function createContext(browser, viewport, baseOrigin, identity, browserOptions = {}) {
   const context = await browser.newContext({
     viewport,
+    ...browserOptions,
     extraHTTPHeaders: identity ? {
       'X-ASAP-Test-Staff-Id': identity.staffId,
       'X-ASAP-Test-Tenant-Id': identity.tenantId,
@@ -480,11 +481,18 @@ async function runSuperAdmin(browser, args, axeSource, report) {
 
     await open.click();
     await page.locator('#request-dialog[open]').waitFor();
-    await page.getByRole('link', { name: 'Open patron in LEAP' }).waitFor();
-    assert.equal(await page.getByRole('link', { name: 'Open patron in LEAP' }).getAttribute('href'),
-      'https://leap.example.test/patron/9901');
+    const patronName = page.locator('#request-dialog .patron-context .detail-grid > div')
+      .filter({ has: page.locator('dt', { hasText: /^Patron$/ }) }).locator('dd a');
+    const patronBarcode = page.locator('#request-dialog .patron-context .detail-grid > div')
+      .filter({ has: page.locator('dt', { hasText: /^Barcode$/ }) }).locator('dd a');
+    await patronName.waitFor(); await patronBarcode.waitFor();
+    assert.equal(await patronName.getAttribute('href'), 'https://leap.example.test/patron/9901');
+    assert.equal(await patronBarcode.getAttribute('href'), 'https://leap.example.test/patron/9901');
+    assert.equal(await page.locator('#request-dialog .polaris-edit-tools a[href*="/patron/"]').count(), 0,
+      'Patron navigation stays beside the patron name and barcode.');
+    await page.locator('#request-dialog .research-links').getByRole('link', { name: 'Browser vendor', exact: true }).waitFor();
     const researchLabels = await page.locator('.research-links a').allTextContents();
-    assert.deepEqual(researchLabels, ['Open patron in LEAP', 'Browser vendor', 'Search WorldCat']);
+    assert.deepEqual(researchLabels, ['Browser vendor', 'Search WorldCat']);
     assert.equal(await page.getByRole('link', { name: 'Search Goodreads' }).count(), 0);
     assert.match(await page.getByRole('link', { name: 'Browser vendor' }).getAttribute('href'),
       /q=Browser%20staff%20title%20edited/);
@@ -657,26 +665,90 @@ async function runAnalytics(browser, args, axeSource, report) {
     browser,
     { width: 1280, height: 900 },
     args.baseOrigin,
-    args.superIdentity
+    args.superIdentity,
+    { timezoneId: 'America/Los_Angeles' }
   );
   const superPage = await superContextState.context.newPage();
   const superErrors = [];
+  const analyticsRequests = [];
   superPage.on('pageerror', error => superErrors.push(error.message)); rejectNativeDialogs(superPage, superErrors);
+  superPage.on('request', request => {
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname === '/api/asap/staff/analytics') analyticsRequests.push(url);
+  });
+  const waitForApplied = page => page.waitForFunction(() =>
+    document.querySelector('.analytics-status')?.textContent.includes('Analytics report updated.'));
+  const assertReportMetrics = async (page, data) => {
+    const valueFor = async label => Number((await page.locator('.analytics-card')
+      .filter({ has: page.getByText(label, { exact: true }) })
+      .locator('.analytics-card-value').textContent()).replaceAll(',', ''));
+    assert.equal(await valueFor('New suggestions'), Number(data.summary.newSuggestions));
+    assert.equal(await valueFor('Open requests'), Number(data.summary.openRequests));
+    assert.equal(await valueFor('Closed requests'), Number(data.summary.closedRequests));
+    const average = Number(data.summary.averageDaysToHold || 0);
+    const expectedAverage = average === 0 ? 'N/A' : average.toFixed(average >= 10 ? 0 : 1);
+    assert.equal(await page.locator('.analytics-card').filter({ hasText: 'Avg days to hold' })
+      .locator('.analytics-card-value').textContent(), expectedAverage);
+  };
+  const assertCurrentMetricsEqual = (expected, actual) => {
+    assert.equal(actual.summary.openRequests, expected.summary.openRequests);
+    assert.deepEqual(actual.stageCounts, expected.stageCounts);
+    assert.deepEqual(actual.aging, expected.aging);
+    assert.deepEqual(actual.exceptions, expected.exceptions);
+  };
+  const formatBusinessDate = value => new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric'
+  }).format(new Date(`${value}T00:00:00Z`));
+  const assertBusinessRange = async (page, data, startDate, endDate, hours) => {
+    assert.equal(data.dateRange.key, 'custom');
+    assert.equal(data.dateRange.startDate, startDate);
+    assert.equal(data.dateRange.endDate, endDate);
+    assert.equal(data.dateRange.timeZoneId, 'America/New_York');
+    const start = Date.parse(data.dateRange.start);
+    const endExclusive = Date.parse(data.dateRange.endExclusiveUtc);
+    const startOffset = startDate === '2026-11-01' ? '-04:00' : '-05:00';
+    assert.equal(start, Date.parse(`${startDate}T00:00:00${startOffset}`));
+    assert.equal((endExclusive - start) / 3600000, hours);
+    const summary = await page.locator('.analytics-range-summary').textContent();
+    assert.ok(summary.includes(formatBusinessDate(startDate)));
+    assert.ok(summary.includes(formatBusinessDate(endDate)));
+    assert.ok(summary.includes('America/New_York'));
+    await assertReportMetrics(page, data);
+  };
   try {
+    const initialReportPromise = superPage.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
+        url.searchParams.get('scope') === 'all' && url.searchParams.get('range') === 'lastMonth' && response.status() === 200;
+    });
     await superPage.goto(`${args.baseOrigin}/staff/?stage=analytics`, { waitUntil: 'networkidle' });
     await superPage.locator('#analytics-container .analytics-shell').waitFor();
+    const initialReport = await (await initialReportPromise).json();
+    await waitForApplied(superPage);
     assert.equal(await superPage.evaluate(() => document.activeElement.id), 'analytics-title');
     assert.equal(await superPage.locator('#analytics-scope').inputValue(), 'all');
     assert.equal(await superPage.locator('#analytics-date-range').inputValue(), 'lastMonth');
+    assert.equal(await superPage.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone), 'America/Los_Angeles');
+    assert.equal(initialReport.dateRange.timeZoneId, 'America/New_York');
+    const initialSummary = await superPage.locator('.analytics-range-summary').textContent();
+    assert.ok(initialSummary.includes(formatBusinessDate(initialReport.dateRange.startDate)));
+    assert.ok(initialSummary.includes(formatBusinessDate(initialReport.dateRange.endDate)));
+    await assertReportMetrics(superPage, initialReport);
     await superPage.getByText('Requests by stage', { exact: true }).waitFor();
     await superPage.getByText('New suggestions', { exact: true }).waitFor();
 
     let invalidScopeInjected = false;
     let allScopeRecoveryRequests = 0;
+    let awaitingInitialRecovery = false;
+    let failNextCustomRequest = false;
+    let invalidCustomScopeInjected = false;
     await superPage.route('**/api/asap/staff/analytics*', async route => {
       const url = new URL(route.request().url());
-      if (!invalidScopeInjected && url.searchParams.get('scope') === '2') {
+      const scope = url.searchParams.get('scope');
+      const range = url.searchParams.get('range');
+      if (!invalidScopeInjected && scope === '2') {
         invalidScopeInjected = true;
+        awaitingInitialRecovery = true;
         await route.fulfill({
           status: 400,
           contentType: 'application/json',
@@ -684,10 +756,32 @@ async function runAnalytics(browser, args, axeSource, report) {
         });
         return;
       }
-      if (url.searchParams.get('scope') === 'all') allScopeRecoveryRequests += 1;
+      if (awaitingInitialRecovery && scope === 'all') {
+        awaitingInitialRecovery = false;
+        allScopeRecoveryRequests += 1;
+      }
+      if (failNextCustomRequest && range === 'custom') {
+        failNextCustomRequest = false;
+        await route.abort('failed');
+        return;
+      }
+      if (!invalidCustomScopeInjected && scope === '82' && range === 'custom') {
+        invalidCustomScopeInjected = true;
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'invalid_scope', message: 'The analytics scope is invalid.' })
+        });
+        return;
+      }
       await route.continue();
     });
 
+    const recoveredBaselinePromise = superPage.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
+        url.searchParams.get('scope') === 'all' && response.status() === 200;
+    });
     await Promise.all([
       superPage.waitForResponse(response => {
         const url = new URL(response.url());
@@ -705,14 +799,22 @@ async function runAnalytics(browser, args, axeSource, report) {
       }),
       superPage.locator('#analytics-scope').selectOption('2')
     ]);
-    await superPage.locator('#analytics-container .analytics-shell').waitFor();
+    const recoveredBaseline = await (await recoveredBaselinePromise).json();
+    await waitForApplied(superPage);
     assert.equal(invalidScopeInjected, true);
     assert.equal(allScopeRecoveryRequests, 1, 'Analytics invalid_scope recovery must issue one all-scope request');
     assert.equal(await superPage.locator('#analytics-scope').inputValue(), 'all');
     assert.equal(await superPage.locator('#analytics-scope').isEnabled(), true);
     assert.equal(await superPage.locator('#analytics-date-range').isEnabled(), true);
     assert.equal(await superPage.evaluate(() => document.activeElement.id), 'analytics-title');
+    await assertReportMetrics(superPage, recoveredBaseline);
+    assertCurrentMetricsEqual(initialReport, recoveredBaseline);
 
+    const last90ReportPromise = superPage.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
+        url.searchParams.get('scope') === 'all' && url.searchParams.get('range') === 'last90' && response.status() === 200;
+    });
     await Promise.all([
       superPage.waitForResponse(response => {
         const url = new URL(response.url());
@@ -723,10 +825,195 @@ async function runAnalytics(browser, args, axeSource, report) {
       }),
       superPage.locator('#analytics-date-range').selectOption('last90')
     ]);
-    await superPage.locator('#analytics-container .analytics-shell').waitFor();
+    const last90Report = await (await last90ReportPromise).json();
+    await waitForApplied(superPage);
     assert.equal(await superPage.locator('#analytics-scope').inputValue(), 'all');
     assert.equal(await superPage.locator('#analytics-date-range').inputValue(), 'last90');
+    await assertReportMetrics(superPage, last90Report);
+    assertCurrentMetricsEqual(initialReport, last90Report);
     await scan(superPage, axeSource, args.artifactRoot, report, 'desktop', 'analytics-super-admin');
+
+    const dateRange = superPage.locator('#analytics-date-range');
+    const startInput = superPage.locator('#analytics-start-date');
+    const endInput = superPage.locator('#analytics-end-date');
+    const apply = superPage.locator('#analytics-apply-range');
+    const beforeCustomSelect = analyticsRequests.length;
+    await dateRange.focus();
+    await superPage.keyboard.press('End');
+    assert.equal(await dateRange.inputValue(), 'custom', 'Keyboard selection should choose Custom');
+    await superPage.keyboard.press('Enter');
+    await superPage.keyboard.press('Escape');
+    await superPage.locator('.analytics-custom-range:not([hidden])').waitFor();
+    assert.equal(analyticsRequests.length, beforeCustomSelect, 'Selecting Custom must not send a report request');
+    const activeAnalyticsControl = () => superPage.evaluate(() => document.activeElement.id);
+    const tabToAnalyticsControl = async controlId => {
+      const path = [];
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        if (await activeAnalyticsControl() === controlId) return path;
+        await superPage.keyboard.press('Tab');
+        path.push(await activeAnalyticsControl());
+      }
+      assert.fail(`Keyboard Tab did not reach ${controlId}: ${path.join(' → ')}`);
+    };
+    const rangeToStartPath = await tabToAnalyticsControl('analytics-start-date');
+    assert.ok(rangeToStartPath.length > 0, 'Keyboard navigation should leave the native range select');
+    await tabToAnalyticsControl('analytics-apply-range');
+    await superPage.keyboard.press('Enter');
+    assert.equal(analyticsRequests.length, beforeCustomSelect, 'Incomplete custom dates must not send a report request');
+    assert.equal(await startInput.getAttribute('aria-invalid'), 'true');
+    assert.equal(await startInput.getAttribute('aria-describedby'), 'analytics-start-date-error');
+    assert.equal(await activeAnalyticsControl(), 'analytics-start-date');
+
+    const applyCustomFromKeyboard = async (startDate, endDate) => {
+      assert.equal(await activeAnalyticsControl(), 'analytics-start-date',
+        'The validation response should focus the first date field');
+      await superPage.keyboard.type('03072026');
+      assert.equal(await startInput.inputValue(), startDate, 'Keyboard input should complete the native start date');
+      await tabToAnalyticsControl('analytics-end-date');
+      await superPage.keyboard.type('03092026');
+      assert.equal(await endInput.inputValue(), endDate, 'Keyboard input should complete the native end date');
+      await tabToAnalyticsControl('analytics-apply-range');
+      const responsePromise = superPage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
+          url.searchParams.get('range') === 'custom' && url.searchParams.get('startDate') === startDate &&
+          url.searchParams.get('endDate') === endDate && response.status() === 200;
+      });
+      await superPage.keyboard.press('Enter');
+      const response = await responsePromise;
+      const data = await response.json();
+      await waitForApplied(superPage);
+      assert.equal(await superPage.evaluate(() => document.activeElement.id), 'analytics-apply-range',
+        'Keyboard Apply keeps focus on its stable control after a successful render');
+      return data;
+    };
+
+    const applyCustomWithFilledValues = async (startDate, endDate) => {
+      await startInput.fill(startDate);
+      await endInput.fill(endDate);
+      const responsePromise = superPage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
+          url.searchParams.get('range') === 'custom' && url.searchParams.get('startDate') === startDate &&
+          url.searchParams.get('endDate') === endDate && response.status() === 200;
+      });
+      await apply.click();
+      const response = await responsePromise;
+      const data = await response.json();
+      await waitForApplied(superPage);
+      return data;
+    };
+
+    const multiDay = await applyCustomFromKeyboard('2026-03-07', '2026-03-09');
+    await assertBusinessRange(superPage, multiDay, '2026-03-07', '2026-03-09', 71);
+    assertCurrentMetricsEqual(initialReport, multiDay);
+    await scan(superPage, axeSource, args.artifactRoot, report, 'desktop', 'analytics-custom-dst-multi-day');
+
+    const sameDay = await applyCustomWithFilledValues('2026-11-01', '2026-11-01');
+    await assertBusinessRange(superPage, sameDay, '2026-11-01', '2026-11-01', 25);
+    assertCurrentMetricsEqual(initialReport, sameDay);
+    await scan(superPage, axeSource, args.artifactRoot, report, 'desktop', 'analytics-custom-dst-same-day');
+
+    await startInput.fill('2026-11-10');
+    await endInput.fill('2026-11-11');
+    const previousAppliedSummary = await superPage.locator('.analytics-range-summary').textContent();
+    const beforePendingScope = analyticsRequests.length;
+    const selectedLibraryResponsePromise = superPage.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
+        url.searchParams.get('scope') === '2' && url.searchParams.get('range') === 'custom' &&
+        url.searchParams.get('startDate') === '2026-11-01' && url.searchParams.get('endDate') === '2026-11-01' &&
+        response.status() === 200;
+    });
+    await superPage.locator('#analytics-scope').selectOption('2');
+    const selectedLibraryReport = await (await selectedLibraryResponsePromise).json();
+    await waitForApplied(superPage);
+    assert.ok(analyticsRequests.length > beforePendingScope);
+    assert.equal(await startInput.inputValue(), '2026-11-10');
+    assert.equal(await endInput.inputValue(), '2026-11-11');
+    assert.notEqual(await superPage.locator('.analytics-range-summary').textContent(), previousAppliedSummary);
+    await assertBusinessRange(superPage, selectedLibraryReport, '2026-11-01', '2026-11-01', 25);
+
+    const selectedPresetPromise = superPage.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
+        url.searchParams.get('scope') === '2' && url.searchParams.get('range') === 'last90' && response.status() === 200;
+    });
+    await dateRange.selectOption('last90');
+    const selectedPreset = await (await selectedPresetPromise).json();
+    await waitForApplied(superPage);
+    const last90Summary = await superPage.locator('.analytics-range-summary').textContent();
+    const presetUrl = analyticsRequests.at(-1);
+    assert.equal(presetUrl.searchParams.has('startDate'), false);
+    assert.equal(presetUrl.searchParams.has('endDate'), false);
+    const beforeReturningCustom = analyticsRequests.length;
+    await dateRange.selectOption('custom');
+    assert.equal(analyticsRequests.length, beforeReturningCustom, 'Returning to Custom preserves drafts without fetching');
+    assert.equal(await startInput.inputValue(), '2026-11-10');
+    assert.equal(await endInput.inputValue(), '2026-11-11');
+    await assertReportMetrics(superPage, selectedPreset);
+
+    await startInput.fill('2026-11-11');
+    await endInput.fill('2026-11-10');
+    const beforeReversedApply = analyticsRequests.length;
+    await apply.focus(); await superPage.keyboard.press('Enter');
+    assert.equal(analyticsRequests.length, beforeReversedApply, 'Reversed dates must fail before request dispatch');
+    assert.equal(await endInput.getAttribute('aria-invalid'), 'true');
+    assert.equal(await superPage.evaluate(() => document.activeElement.id), 'analytics-end-date');
+    assert.match(await superPage.locator('#analytics-end-date-error').textContent(), /on or after/);
+    await scan(superPage, axeSource, args.artifactRoot, report, 'desktop', 'analytics-custom-invalid');
+
+    await startInput.fill('2026-11-10');
+    await endInput.fill('2026-11-11');
+    failNextCustomRequest = true;
+    const failedRequest = superPage.waitForEvent('requestfailed', request =>
+      request.url().includes('/api/asap/staff/analytics') && request.url().includes('startDate=2026-11-10'));
+    await apply.focus(); await superPage.keyboard.press('Enter');
+    await failedRequest;
+    const retry = superPage.getByRole('button', { name: 'Retry report', exact: true });
+    await retry.waitFor({ state: 'visible' });
+    assert.equal(await superPage.locator('.analytics-range-summary').textContent(), last90Summary,
+      'A pre-dispatch failure keeps the last successful report summary');
+    await scan(superPage, axeSource, args.artifactRoot, report, 'desktop', 'analytics-custom-failed');
+    const retryResponsePromise = superPage.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
+        url.searchParams.get('scope') === '2' && url.searchParams.get('range') === 'custom' &&
+        url.searchParams.get('startDate') === '2026-11-10' && url.searchParams.get('endDate') === '2026-11-11' &&
+        response.status() === 200;
+    });
+    await retry.click();
+    const retried = await (await retryResponsePromise).json();
+    await waitForApplied(superPage);
+    await assertBusinessRange(superPage, retried, '2026-11-10', '2026-11-11', 48);
+
+    await startInput.fill('2026-11-12');
+    await endInput.fill('2026-11-13');
+    const customInvalidScopePromise = superPage.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/api/asap/staff/analytics' && url.searchParams.get('scope') === '82' &&
+        url.searchParams.get('range') === 'custom' && response.status() === 400;
+    });
+    const allCustomRecoveryPromise = superPage.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/api/asap/staff/analytics' && url.searchParams.get('scope') === 'all' &&
+        url.searchParams.get('range') === 'custom' && url.searchParams.get('startDate') === '2026-11-10' &&
+        url.searchParams.get('endDate') === '2026-11-11' && response.status() === 200;
+    });
+    await superPage.locator('#analytics-scope').selectOption('82');
+    const [, customRecoveryResponse] = await Promise.all([customInvalidScopePromise, allCustomRecoveryPromise]);
+    const customRecoveredReport = await customRecoveryResponse.json();
+    await waitForApplied(superPage);
+    assert.equal(await superPage.locator('#analytics-scope').inputValue(), 'all');
+    assert.equal(await dateRange.inputValue(), 'custom');
+    assert.equal(await startInput.inputValue(), '2026-11-12');
+    assert.equal(await endInput.inputValue(), '2026-11-13');
+    await assertBusinessRange(superPage, customRecoveredReport, '2026-11-10', '2026-11-11', 48);
+    assertCurrentMetricsEqual(initialReport, customRecoveredReport);
+    await scan(superPage, axeSource, args.artifactRoot, report, 'desktop', 'analytics-custom-recovery');
+    assert.equal(invalidCustomScopeInjected, true);
+    assert.equal(allScopeRecoveryRequests, 1, 'Analytics invalid_scope recovery must issue one all-scope request');
+
     assert.deepEqual(superErrors, [], `Super-admin Analytics raised a browser error: ${superErrors.join('; ')}`);
     assert.equal(superContextState.traffic.externalRequests, 0, 'Super-admin Analytics requested an external asset');
   } finally {
@@ -737,15 +1024,23 @@ async function runAnalytics(browser, args, axeSource, report) {
     browser,
     { width: 390, height: 844 },
     args.baseOrigin,
-    args.staffIdentity
+    args.staffIdentity,
+    { timezoneId: 'America/Los_Angeles' }
   );
   const staffPage = await staffContextState.context.newPage();
   const staffErrors = [];
   staffPage.on('pageerror', error => staffErrors.push(error.message)); rejectNativeDialogs(staffPage, staffErrors);
   try {
+    const mobileAnalyticsRequests = [];
+    staffPage.on('request', request => {
+      const url = new URL(request.url());
+      if (request.method() === 'GET' && url.pathname === '/api/asap/staff/analytics') mobileAnalyticsRequests.push(url);
+    });
     await staffPage.goto(`${args.baseOrigin}/staff/?stage=analytics`, { waitUntil: 'networkidle' });
     await staffPage.locator('#analytics-container .analytics-shell').waitFor();
+    await waitForApplied(staffPage);
     assert.equal(await staffPage.evaluate(() => document.activeElement.id), 'analytics-title');
+    assert.equal(await staffPage.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone), 'America/Los_Angeles');
     assert.equal(await staffPage.locator('#analytics-scope').count(), 0);
     assert.equal(await staffPage.locator('#analytics-date-range').inputValue(), 'lastMonth');
     assert.match(await staffPage.locator('.analytics-range-summary').textContent(), /Test Library/);
@@ -758,22 +1053,69 @@ async function runAnalytics(browser, args, axeSource, report) {
       }),
       staffPage.locator('#analytics-date-range').selectOption('last90')
     ]);
-    await staffPage.locator('#analytics-container .analytics-shell').waitFor();
+    await waitForApplied(staffPage);
     assert.equal(await staffPage.locator('#analytics-date-range').inputValue(), 'last90');
     assert.match(await staffPage.locator('.analytics-range-summary').textContent(), /Test Library/);
     await scan(staffPage, axeSource, args.artifactRoot, report, 'mobile', 'analytics-library-staff');
+
+    await staffPage.locator('#analytics-date-range').selectOption('custom');
+    await staffPage.locator('.analytics-custom-range:not([hidden])').waitFor();
+    await scan(staffPage, axeSource, args.artifactRoot, report, 'mobile', 'analytics-library-custom-editor');
+    const mobileStart = staffPage.locator('#analytics-start-date');
+    const mobileEnd = staffPage.locator('#analytics-end-date');
+    await mobileStart.fill('2026-11-01');
+    await mobileEnd.fill('2026-11-01');
+    const mobileSameDayResponsePromise = staffPage.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
+        url.searchParams.get('range') === 'custom' && url.searchParams.get('startDate') === '2026-11-01' &&
+        url.searchParams.get('endDate') === '2026-11-01' && response.status() === 200;
+    });
+    await staffPage.locator('#analytics-apply-range').focus();
+    await staffPage.keyboard.press('Enter');
+    const mobileSameDay = await (await mobileSameDayResponsePromise).json();
+    await waitForApplied(staffPage);
+    assert.equal(mobileAnalyticsRequests.at(-1).searchParams.get('scope'), '2',
+      'Ordinary staff reports remain scoped to their own library');
+    await assertBusinessRange(staffPage, mobileSameDay, '2026-11-01', '2026-11-01', 25);
+    await scan(staffPage, axeSource, args.artifactRoot, report, 'mobile', 'analytics-library-custom-same-day');
     assert.deepEqual(staffErrors, [], `Library-staff Analytics raised a browser error: ${staffErrors.join('; ')}`);
     assert.equal(staffContextState.traffic.externalRequests, 0, 'Library-staff Analytics requested an external asset');
   } finally {
     await staffContextState.context.close();
   }
 
+  const analyticsNativeZoom = await verifyStaffAnalyticsNativeZoom({
+    baseURL: args.baseOrigin,
+    artifacts: args.artifactRoot,
+    headers: {
+      'X-ASAP-Test-Staff-Id': args.superIdentity.staffId,
+      'X-ASAP-Test-Tenant-Id': args.superIdentity.tenantId,
+      'X-ASAP-Test-Staff-Email': args.superIdentity.email
+    }
+  });
+
   report.analytics = {
     desktopSuperAdminScope: 'all',
     desktopRange: 'last90',
     invalidScopeRecovery: true,
     allScopeRecoveryRequests: 1,
-    mobileLibraryOnly: true
+    mobileLibraryOnly: true,
+    browserTimezone: 'America/Los_Angeles',
+    businessTimezone: 'America/New_York',
+    appliedMetricsMatchEndpoint: true,
+    currentMetricsUnchangedAcrossRanges: true,
+    customMultiDayDstHours: 71,
+    customSameDayDstHours: 25,
+    incompleteDraftNoDispatch: true,
+    scopeKeepsAppliedDatesAndDraft: true,
+    presetOmitsCustomDates: true,
+    keyboardApplyAndValidationFocus: true,
+    keyboardOnlyCustomApply: true,
+    preDispatchFailureRetry: true,
+    customInvalidScopeRecovery: true,
+    mobileCustomSameDay: true,
+    nativeZoom: analyticsNativeZoom
   };
 }
 
@@ -1025,7 +1367,13 @@ async function runStaleMutationCompletions(browser, args, report) {
       await detailResponse;
       await page.locator('#request-dialog-kicker').filter({ hasText: target.kicker }).waitFor();
       if (type === 'title_request') {
-        await page.getByRole('link', { name: 'Open patron in LEAP' }).waitFor();
+        await page.locator('#request-dialog .patron-context .detail-grid > div')
+          .filter({ has: page.locator('dt', { hasText: /^Patron$/ }) }).locator('dd a').waitFor();
+        assert.equal(await page.locator('#request-dialog .polaris-edit-tools a[href*="/patron/"]').count(), 0,
+          'Title details do not duplicate patron navigation in the editor.');
+        // Upper snapshot links can precede the accepted asynchronous research row.
+        // Settle that legitimate update before capturing B's exact stale-result oracle.
+        await page.locator('#request-dialog .research-links').getByRole('link', { name: 'Browser vendor', exact: true }).waitFor();
       }
       const beforeResponse = await context.request.get(`${args.baseOrigin}${target.apiPath}`);
       assert.equal(beforeResponse.status(), 200, await beforeResponse.text());
@@ -2962,14 +3310,17 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       await scopedQueueStarted;
       await page.waitForFunction(() => document.querySelectorAll('#request-grid a.grid-open').length === 0);
       assert.equal(await page.locator('#similar-filter').inputValue(), 'all');
-      assert.match(await page.locator('#queue-automation').textContent(), /appear with requests/);
+      assert.match(await page.locator('#queue-summary').textContent(), /Requests unavailable/);
+      assert.match(await page.locator('#status-count-state').textContent(), /Counts loading/,
+        'The deliberately held scope read keeps count feedback in its loading state');
     } finally {
       releaseScopedQueue();
       await scopedQueueResponse.catch(() => {});
       await page.unroute('**/api/asap/staff/title-requests?scope=2', holdScopedQueue);
     }
     await scopedQueueResponse;
-    await page.locator('#refresh-queue').waitFor({ state: 'visible' });
+    await page.locator('#refresh-queue:not([disabled])').waitFor();
+    await page.waitForFunction(() => document.querySelector('#status-count-state')?.textContent === '');
     const changedDetailPath = `**/api/asap/staff/title-requests/${args.primaryRequestId}*`;
     const changedListPath = '**/api/asap/staff/title-requests?scope=2';
     const changedDetail = async route => {
@@ -4267,7 +4618,7 @@ async function main() {
     await runSettingsLayout(browser, args, axeSource, report);
     await runOperationalCatalogCommits(browser, args, axeSource, report);
     await runRejectionNotificationAndReopen(browser, args, axeSource, report);
-    assert.equal(report.states.length, 74, 'Expected seventy-four major staff browser states');
+    assert.equal(report.states.length, 81, 'Expected eighty-one major staff browser states');
     await fs.writeFile(
       path.join(args.artifactRoot, 'staff-browser-results.json'),
       JSON.stringify(report, null, 2),

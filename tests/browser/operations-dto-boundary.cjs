@@ -15,7 +15,7 @@ async function main() {
     ...(process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH
       ? { executablePath: process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH } : {}) });
   const axeSource = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
-  const report = { externalRequests: 0, pageErrors: [], states: [], localClocks: {} };
+  const report = { externalRequests: 0, pageErrors: [], writes: 0, states: [], localClocks: {} };
   const contexts = [];
   const scenarios = [
     { zone: 'America/New_York', width: 1280, expected: ['3/8 1:59', '3/8 3:1', '11/1 1:59', '11/1 1:1', '1/15 10:0', '7/15 11:0'] },
@@ -26,30 +26,43 @@ async function main() {
 
   const endpoint = (response, pathname) => response.request().method() === 'GET' &&
     new URL(response.url()).pathname === pathname;
-  async function refresh(page, action) {
-    const queues = page.waitForResponse(response => endpoint(response, '/api/asap/staff/workflow/queues'));
+  async function refresh(page, action, { emailOnly = false } = {}) {
+    const queues = emailOnly ? Promise.resolve(null) : page.waitForResponse(response => endpoint(response, '/api/asap/staff/workflow/queues'));
     const emails = page.waitForResponse(response => endpoint(response, '/api/asap/staff/email-operations'));
     await action();
     const responses = await Promise.all([queues, emails]);
-    for (const response of responses) assert.equal(response.status(), 200, await response.text());
+    for (const response of responses.filter(Boolean)) assert.equal(response.status(), 200, await response.text());
+    // Main Refresh also reads history while Workflow owns the visible panel.
+    // Completion is independent of which section is currently displayed.
+    await page.waitForFunction(() => {
+      const table = document.querySelector('#email-operations-table');
+      return table && !table.hasAttribute('aria-busy');
+    });
     await page.locator('#refresh-operations:not([disabled])').waitFor();
   }
 
   async function verifyProjection(page, scenario) {
+    await page.locator('#operations-workflow-tab').click();
+    await page.locator('#queue-progress-table').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#operations-scope').inputValue(), scope);
+    const queueDom = await page.locator('#queue-progress-table').evaluate(root => Object.fromEntries(
+      [...root.querySelectorAll('tbody tr')].map(row => [row.cells[0].textContent, {
+        cells: [...row.cells].map(cell => cell.textContent), datetime: row.querySelector('time')?.getAttribute('datetime')
+      }])));
+    await page.locator('#operations-email-tab').click();
+    await page.locator('#email-operations-table').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#email-view-scope').inputValue(), scope);
+    assert.equal(await page.locator('#email-test-scope').inputValue(), '1', 'Run and history scopes do not rebind saved test settings.');
     const actual = await page.evaluate(async scope => {
       const [queue, email] = await Promise.all([
         fetch(`/api/asap/staff/workflow/queues?organizationId=${scope}`).then(response => response.json()),
         fetch(`/api/asap/staff/email-operations?organizationId=${scope}`).then(response => response.json())
       ]);
-      const rows = [...document.querySelectorAll('#queue-progress-table tbody tr')];
-      const queueDom = Object.fromEntries(rows.map(row => [row.cells[0].textContent, {
-        cells: [...row.cells].map(cell => cell.textContent), datetime: row.querySelector('time')?.getAttribute('datetime')
-      }]));
       const emailDom = Object.fromEntries([...document.querySelectorAll('#email-operations-table tbody tr')]
         .map(row => [row.cells[0].textContent, { cells: [...row.cells].map(cell => cell.textContent),
           datetime: row.querySelector('time')?.getAttribute('datetime') }]));
       const local = value => new Date(value).toLocaleString();
-      return { queue, email, queueDom, emailDom,
+      return { queue, email, emailDom,
         localized: Object.fromEntries(queue.items.map(row => [row.queueName, {
           created: row.lastCreatedUtc ? local(row.lastCreatedUtc) : null, updated: local(row.updatedUtc)
         }])),
@@ -60,6 +73,7 @@ async function main() {
             return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:${date.getMinutes()}`;
           }) };
     }, scope);
+    actual.queueDom = queueDom;
     assert.equal(actual.queue.scopeOrganizationId, Number(scope));
     assert.equal(actual.queue.items.length, 6);
     assert.equal(actual.email.items.length, 3);
@@ -89,7 +103,7 @@ async function main() {
     assert.equal(queue.IdentifierProcessing.lastOutcomeUtc, '2026-07-15T15:00:00.7654321Z');
     assert.equal(queue.PendingHoldTimeout.lastCreatedUtc, null);
     assert.equal(queue.PendingHoldTimeout.lastOutcomeUtc, null);
-    assert.equal(actual.email.items[0].status, 'failed', 'failed operations retain first priority');
+    assert.equal(actual.email.items[0].status, 'sent', 'normal history starts with the newest recorded operation');
     for (const row of actual.email.items) {
       assert.equal(row.organizationId, Number(scope));
       assert.match(row.createdUtc, /Z$/);
@@ -100,6 +114,7 @@ async function main() {
     assert.equal(actual.email.items.find(row => row.status === 'failed').sentUtc, null);
     assert.deepEqual(actual.clocks, scenario.expected, scenario.zone);
     report.localClocks[`${scenario.zone}-${scenario.width}`] = actual.clocks;
+    await page.locator('#operations-workflow-tab').click();
   }
 
   async function verifyInvalidFallback(page) {
@@ -123,6 +138,8 @@ async function main() {
       await route.fulfill({ response, json: body });
     });
     await refresh(page, () => page.locator('#refresh-operations').click());
+    await page.locator('#operations-email-tab').click();
+    await page.locator('#email-operations-table').waitFor({ state: 'visible' });
     const fallback = await page.locator('#operations-view').evaluate(root => ({
       queues: [...root.querySelectorAll('#queue-progress-table tbody tr')].map(row => ({
         cursor: row.cells[3].textContent, updated: row.cells[5].textContent,
@@ -143,6 +160,7 @@ async function main() {
     assert.equal(fallback.invalidDate, false);
     await page.unroute('**/api/asap/staff/workflow/queues*');
     await page.unroute('**/api/asap/staff/email-operations*');
+    await page.locator('#operations-workflow-tab').click();
     report.invalidFallback = true;
   }
 
@@ -160,16 +178,23 @@ async function main() {
       });
       const page = await context.newPage();
       page.on('pageerror', error => report.pageErrors.push(error.message)); rejectNativeDialogs(page, report.pageErrors);
+      page.on('request', request => {
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) report.writes++;
+      });
       await page.goto(`${origin}/staff/?stage=operations`, { waitUntil: 'networkidle' });
       await page.locator('#operations-view').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#operations-scope').inputValue(), 'all');
       await page.locator('#operations-email-tab').click();
-      await refresh(page, () => page.locator('#email-view-scope').selectOption(scope));
+      assert.equal(await page.locator('#email-view-scope').inputValue(), 'all');
+      await refresh(page, () => page.locator('#email-view-scope').selectOption(scope), { emailOnly: true });
       await page.locator('#operations-workflow-tab').click();
       await refresh(page, () => page.locator('#operations-scope').selectOption(scope));
       await verifyProjection(page, scenario);
       await refresh(page, () => page.locator('#operations-scope').selectOption('2'));
       assert.equal(await page.locator('#queue-progress-table').getByText('9007199254740995', { exact: true }).count(), 0,
         'changing scope retires the former library cursor');
+      assert.equal(await page.locator('#email-view-scope').inputValue(), scope,
+        'Changing Run scope retains the independent email history scope.');
       await refresh(page, () => page.locator('#operations-scope').selectOption(scope));
       await verifyProjection(page, scenario);
       await page.reload({ waitUntil: 'networkidle' });
@@ -202,6 +227,7 @@ async function main() {
     }
     assert.equal(report.externalRequests, 0);
     assert.deepEqual(report.pageErrors, []);
+    assert.equal(report.writes, 0, 'Projection, scope and fallback checks issue no HTTP writes.');
     console.log('Operations SQL/HTTP browser timezone, DST, bigint, scope, reload and safe fallback checks passed.');
   } finally {
     await fs.writeFile(path.join(artifacts, 'browser-results.json'), JSON.stringify(report, null, 2));

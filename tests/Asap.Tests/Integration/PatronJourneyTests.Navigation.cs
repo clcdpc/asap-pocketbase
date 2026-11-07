@@ -13,12 +13,7 @@ public sealed partial class PatronJourneyTests
         using var startup = factory!.CreateClient();
         await startup.GetAsync("/api/asap/staff/session");
         var superAdmin = await ReadConfiguredSuperAdminAsync();
-        var libraryStaff = superAdmin with
-        {
-            Role = "staff",
-            OrganizationId = 2,
-            OrganizationCodeId = OrganizationAuthority.LibraryOrganizationCodeId
-        };
+        StaffUser? libraryStaffRecord = null;
         var contextFactory = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var title = $"Related navigation {Guid.NewGuid():N}";
         const int otherLibraryId = 93456;
@@ -99,6 +94,8 @@ public sealed partial class PatronJourneyTests
                 copyId = copy.Id;
             }
 
+            libraryStaffRecord = await CreateCorrectiveStaffAsync(superAdmin, StaffRole.Staff, 2);
+            var libraryStaff = await ReadCorrectiveStaffAsync(libraryStaffRecord);
             var titles = factory.Services.GetRequiredService<TitleRequestViewService>();
             var copies = factory.Services.GetRequiredService<AdditionalCopyService>();
             var scoped = await titles.ListAsync(libraryStaff, LibraryScope.All, CancellationToken.None);
@@ -168,6 +165,12 @@ public sealed partial class PatronJourneyTests
             system.AdditionalCopyTimeoutDays = originalSystemCopyDays;
             await context.SaveChangesAsync();
             await context.Organizations.Where(item => item.Id == otherLibraryId).ExecuteDeleteAsync();
+            if (libraryStaffRecord is not null)
+            {
+                var staffKey = libraryStaffRecord.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                await context.AdministrativeAudits.Where(item => item.TargetType == "StaffUser" && item.TargetId == staffKey).ExecuteDeleteAsync();
+                await context.StaffUsers.Where(item => item.Id == libraryStaffRecord.Id).ExecuteDeleteAsync();
+            }
         }
     }
 }

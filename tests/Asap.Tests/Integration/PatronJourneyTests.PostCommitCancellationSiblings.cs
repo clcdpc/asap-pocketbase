@@ -617,7 +617,7 @@ public sealed partial class PatronJourneyTests
             try
             {
                 await ExecuteNonQueryAsync(
-                    "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix; DELETE FROM [asap].[TitleRequest] WHERE [Barcode] = @barcode;",
+                    "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix; DELETE FROM [asap].[TitleRequest] WHERE [Barcode] = @barcode;",
                     ("@prefix", businessKeyPrefix + "%"), ("@barcode", barcode));
             }
             catch (Exception exception)
@@ -1058,7 +1058,7 @@ public sealed partial class PatronJourneyTests
         }
         await using var context = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
             .CreateDbContextAsync();
-        await context.EmailOutbox.Where(item => ids.Contains(item.Id)).ExecuteDeleteAsync();
+        await DeleteOwnedEmailFixtureAsync(context, context.EmailOutbox.Where(item => ids.Contains(item.Id)));
     }
 
     private async Task DeleteAdditionalCopyTestDataAsync(long sourceRequestId, long? taskId)
@@ -1122,7 +1122,7 @@ public sealed partial class PatronJourneyTests
     {
         await using var context = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
             .CreateDbContextAsync();
-        await context.EmailOutbox.Where(item => item.BusinessKey == businessKey).ExecuteDeleteAsync();
+        await DeleteOwnedEmailFixtureAsync(context, context.EmailOutbox.Where(item => item.BusinessKey == businessKey));
     }
 
     private sealed record EmailSettingsSnapshot(

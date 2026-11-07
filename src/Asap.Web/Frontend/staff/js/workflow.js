@@ -1,5 +1,6 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createSessionIdentity } from './session-identity.js';
+import { createClaimsFilter } from './claims-filter.js';
 import { createSessionCoordinator } from './session.js';
 import { createStaffShell } from './shell.js';
 import { createRouter } from './router.js';
@@ -17,10 +18,12 @@ import { createSettingsController } from './settings.js';
 import { createAnalyticsController } from './analytics.js';
 import { createPolarisLookup } from './research.js';
 import { disposeConfirmations } from './confirmation.js';
+import { createSubmissionSearch } from './search.js';
 
 export function createWorkflowApp() {
   const get = selector => document.querySelector(selector);
   const sessionIdentity = createSessionIdentity(), router = createRouter();
+  const claimsFilter = createClaimsFilter({ sessionIdentity });
   const detailHost = createDetailHost({ root: get('#request-dialog') });
   const shell = createStaffShell({ root: document, sessionIdentity,
     getContext: () => navigation.context(), settingsScope: () => settings.currentScope(), operationsScope: () => operations.currentScope(),
@@ -31,10 +34,12 @@ export function createWorkflowApp() {
   const polarisLookup = createPolarisLookup({ authorizedJson, isAbortError, announce, sessionIdentity, onReceipt, clearReceipt });
   const analytics = createAnalyticsController({ root: get('#analytics-container'), sessionIdentity });
   const navigation = createNavigationController({ router, sessionIdentity, detailHost, announce,
+    beforeDeparture: () => search.dismissForNavigation(),
     present: shell.presentView,
     onInvalidate: () => {
       titleDetail.invalidate(); copyDetail.invalidate(); titleQueue.invalidate(); copyQueue.invalidate();
       suggestion.invalidate(); operations.invalidate();
+      search.invalidate();
     },
     closeTransient: () => {
       if (detailHost.isOpen()) detailHost.requestClose({ navigation: true, guarded: true });
@@ -74,10 +79,10 @@ export function createWorkflowApp() {
         refresh: options => copyQueue.refresh(options), render: () => copyQueue.render(),
         prepare: context => copyQueue.prepare(context),
         isReady: context => copyQueue.isReady(context),
-        prepareDetail: id => copyDetail.prepare(id), presentDetail: (target, options, ticket) => copyDetail.present(target, null, options, ticket),
+        prepareDetail: (id, options) => copyDetail.prepare(id, options), presentDetail: (target, options, ticket) => copyDetail.present(target, null, options, ticket),
         refreshOnEntry: options => copyQueue.refreshOnEntry(options), setLibraries: libraries => populateScopes(libraries),
         resetFilters: () => copyQueue.resetFilters(),
-        openDetail: id => copyDetail.open(id, null, { fromDeepLink: true }),
+        openDetail: (id, opener, options = { fromDeepLink: true }) => copyDetail.open(id, opener, options),
         closeOverlay: () => detailHost.isOpen() ? detailHost.requestClose() : suggestion.isOpen() ? suggestion.close() : null
       },
       settings: { activate: options => { void settings.activate(options.panel); }, deactivate: () => settings.suspend(),
@@ -89,11 +94,12 @@ export function createWorkflowApp() {
         refresh: options => operations.refresh(options), refreshOnEntry: () => operations.refresh() },
       profile: { activate: () => profile.activate(), deactivate: () => profile.deactivate() },
       analytics: { activate: () => analytics.activate(), deactivate: () => analytics.deactivate(),
-        refresh: () => analytics.refresh(), refreshOnEntry: () => analytics.refresh() }
+        refresh: () => analytics.refresh(), refreshOnEntry: () => analytics.refresh() },
+      search: { activate: () => search.activate(), deactivate: () => search.deactivate() }
     }
   });
 
-  const titleQueue = createTitleQueue({ root: get('#queue-view'), sessionIdentity, announce, polarisLookup,
+  const titleQueue = createTitleQueue({ root: get('#queue-view'), sessionIdentity, claimsFilter, announce, polarisLookup,
     onCatalogCommitted: result => { if (result.additionalCopyRequestId) copyQueue.markStale(); },
     getContext: navigation.context, onOpen: (id, opener, options = {}) => titleDetail.open(id, opener, { history: 'push', ...options }),
     onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) }),
@@ -121,7 +127,7 @@ export function createWorkflowApp() {
     getFocusReturn: (id, opener) => copyQueue.focusReturn(id, opener), refreshQueue: options => copyQueue.refresh(options),
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner)
   });
-  const copyQueue = createCopyQueue({ root: get('#additional-copy-view'), sessionIdentity, announce,
+  const copyQueue = createCopyQueue({ root: get('#additional-copy-view'), sessionIdentity, claimsFilter, announce,
     getContext: navigation.context, onOpen: (id, opener) => copyDetail.open(id, opener, { history: 'push' }),
     onScopeIntent: scope => navigation.changeQueueContext('additional-copies', { scope }),
     onStatusIntent: additionalCopyStatus => navigation.changeQueueContext('additional-copies', { additionalCopyStatus }),
@@ -140,6 +146,15 @@ export function createWorkflowApp() {
     getFocusReturn: (id, opener) => titleQueue.focusReturn(id, opener), refreshQueue: options => titleQueue.refresh(options), queueSequence: titleQueue.sequence,
     rememberOpened: shell.rememberOpened, forgetUnavailable: shell.forgetUnavailable,
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),
+    onOpenEmailOperation: async intent => {
+      const owner = sessionIdentity.preferences();
+      if (!sessionIdentity.isCurrent(owner) || typeof intent?.isCurrent !== 'function' || !intent.isCurrent()) return false;
+      if (!await navigation.switchView('operations') || !sessionIdentity.isCurrent(owner) ||
+          navigation.context().activeView !== 'operations') return false;
+      // Accepted navigation deliberately disposes the source detail. Its old
+      // lease is checked before departure; the destination owns reads afterward.
+      return operations.openEmailReference(intent);
+    },
     onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) })
   });
   const suggestion = createSuggestionController({ root: get('#staff-suggestion-dialog'), trigger: get('#new-suggestion'), sessionIdentity, polarisLookup, announce,
@@ -203,7 +218,14 @@ export function createWorkflowApp() {
       }
     }
   });
-  const features = [bulk, suggestion, titleDetail, copyCreation, copyDetail, detailHost, polarisLookup,
+  const search = createSubmissionSearch({ dialog: get('#search-dialog'), view: get('#search-view'), launcher: get('#search-asap'),
+    detailLauncher: get('#detail-search-asap'), detailHost, sessionIdentity, announce,
+    getScope: () => navigation.context().activeView === 'settings' ? settings.currentScope()
+      : navigation.context().activeView === 'operations' ? operations.currentScope()
+        : navigation.context().activeView === 'analytics' ? analytics.currentScope() : navigation.context().scope,
+    canOpen: () => ![session, polarisLookup, titleDetail, copyDetail, suggestion, settings, operations].some(feature => feature.inspectDeparture?.().blocked),
+    openResult: navigation.openSearchResult, openAll: () => navigation.switchView('search') });
+  const features = [search, bulk, suggestion, titleDetail, copyCreation, copyDetail, detailHost, polarisLookup,
     operations, titleQueue, copyQueue, profile, settings, analytics];
   const session = createSessionCoordinator({ identity: sessionIdentity, shell, navigation, getFeatures: () => features,
     onAccepted: staff => navigation.align({ scope: staff.role === 'super_admin' ? 'all' : String(staff.organizationId) }),

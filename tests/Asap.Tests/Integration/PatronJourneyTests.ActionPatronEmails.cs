@@ -182,6 +182,7 @@ public sealed partial class PatronJourneyTests
             item.BusinessKey != null && item.BusinessKey.StartsWith($"staff-patron-action:purchase_approved:{purchase.Id}:"));
         Assert.AreEqual("business_event", approved.DeliveryClass);
         Assert.AreEqual("pending", approved.Status);
+        await AssertRequestMailEvidenceAsync(approved, purchase.Id, "purchase_approved");
         CollectionAssert.Contains(purchaseResult.DispatchOutboxIds!.ToArray(), approved.Id);
         Assert.AreEqual("current-patron@example.org", approved.ToAddress);
         Assert.AreEqual("Library purchase: Purchase title", approved.Subject);
@@ -196,12 +197,14 @@ public sealed partial class PatronJourneyTests
             item.BusinessKey != null && item.BusinessKey.StartsWith($"staff-patron-action:already_owned:{alreadyOwned.Id}:"));
         Assert.AreEqual("Library owns: Owned title", owned.Subject);
         Assert.AreEqual("Hello Current, Owned title exists", owned.BodyText);
+        await AssertRequestMailEvidenceAsync(owned, alreadyOwned.Id, "already_owned");
         Assert.AreEqual("closed", (await verify.TitleRequests.AsNoTracking()
             .SingleAsync(item => item.Id == alreadyOwned.Id)).Status);
         var suppressed = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
             item.BusinessKey != null && item.BusinessKey.StartsWith($"staff-patron-action:already_owned:{missingRecipient.Id}:"));
         Assert.AreEqual("suppressed", suppressed.Status);
         Assert.AreEqual("recipient_invalid", suppressed.SuppressionReason);
+        await AssertRequestMailEvidenceAsync(suppressed, missingRecipient.Id, "already_owned");
         var unavailable = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
             item.BusinessKey != null && item.BusinessKey.StartsWith($"staff-patron-action:already_owned:{unavailableRecipient.Id}:"));
         Assert.AreEqual("suppressed", unavailable.Status);
@@ -210,11 +213,13 @@ public sealed partial class PatronJourneyTests
         var rejection = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
             item.BusinessKey != null && item.BusinessKey.StartsWith($"rejection:{rejected.Id}:"));
         Assert.AreEqual("current-patron@example.org", rejection.ToAddress);
+        await AssertRequestMailEvidenceAsync(rejection, rejected.Id, "rejection");
         var suppressedRejection = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
             item.BusinessKey != null && item.BusinessKey.StartsWith($"rejection:{rejectedUnavailable.Id}:"));
         Assert.AreEqual("suppressed", suppressedRejection.Status);
         Assert.AreEqual("patron_refresh_unavailable", suppressedRejection.SuppressionReason);
         Assert.IsNull(suppressedRejection.ToAddress);
+        await AssertRequestMailEvidenceAsync(suppressedRejection, rejectedUnavailable.Id, "rejection");
         Assert.AreEqual("suggestion", (await verify.TitleRequests.AsNoTracking()
             .SingleAsync(item => item.Id == cancelledPurchase.Id)).Status);
         Assert.IsFalse(await verify.EmailOutbox.AnyAsync(item => item.BusinessKey != null &&
@@ -223,7 +228,7 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await using var cleanup = await contexts.CreateDbContextAsync();
-            await cleanup.EmailOutbox.Where(item => item.OrganizationId == libraryId).ExecuteDeleteAsync();
+            await DeleteOwnedEmailFixtureAsync(cleanup, cleanup.EmailOutbox.Where(item => item.OrganizationId == libraryId));
             var requestIds = await cleanup.TitleRequests.Where(item => item.LibraryOrganizationId == libraryId)
                 .Select(item => item.Id).ToArrayAsync();
             await cleanup.TitleRequestWorkflowTags.Where(item => requestIds.Contains(item.TitleRequestId))

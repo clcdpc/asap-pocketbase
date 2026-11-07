@@ -1009,9 +1009,8 @@ public sealed partial class PatronJourneyTests
         {
             await using (var cleanup = await contexts.CreateDbContextAsync())
             {
-                await cleanup.EmailOutbox.Where(item => item.BusinessKey != null &&
-                        item.BusinessKey.StartsWith(businessKeyPrefix))
-                    .ExecuteDeleteAsync();
+                await DeleteOwnedEmailFixtureAsync(cleanup, cleanup.EmailOutbox.Where(item => item.BusinessKey != null &&
+                        item.BusinessKey.StartsWith(businessKeyPrefix)));
                 var system = await cleanup.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
                 system.StaffApplicationUrl = originalStaffUrl;
                 var recipient = await cleanup.StaffUsers.SingleAsync(item => item.Id == staff.Id);
