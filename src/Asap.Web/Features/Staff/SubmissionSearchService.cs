@@ -27,7 +27,8 @@ public sealed partial class SubmissionSearchService(IDbContextFactory<AsapDbCont
     public static bool TryNormalize(SubmissionSearchInput input, out string query)
     {
         query = "";
-        if (input.Query?.Length > MaxQueryLength || input.Page is < 1 or > 100000 ||
+        // Windows-collation LIKE ignores NUL; rejecting it preserves literal and idle semantics.
+        if (input.Query?.Length > MaxQueryLength || input.Query?.Contains('\0') == true || input.Page is < 1 or > 100000 ||
             input.PageSize is < 1 or > 50 || input.Group is not (null or "") && !GroupKeys.Contains(input.Group))
         {
             return false;

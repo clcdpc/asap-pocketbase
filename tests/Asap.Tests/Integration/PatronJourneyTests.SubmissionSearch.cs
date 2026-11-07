@@ -81,6 +81,14 @@ public sealed partial class PatronJourneyTests
             CollectionAssert.AreEqual(before, await SearchStateAsync(), "Search must not change rows, rowversions, journals, audits or jobs.");
             Assert.AreEqual(providerCalls, provider.Calls.Count);
             Assert.HasCount(0, dispatcher!.EnqueuedIds);
+            await ExecuteNonQueryAsync("""
+                UPDATE [asap].[TitleRequest] SET [Title]=N'2147483647 searchrank' WHERE [LibraryOrganizationId]=46701 AND [Barcode]='needle-page-1';
+                UPDATE [asap].[TitleRequest] SET [Title]=N'searchrank',[BibId]=2147483647 WHERE [LibraryOrganizationId]=46701 AND [Barcode]='needle-page-2';
+                """);
+            var ranked = await SearchAsync(client, "2147483647 searchrank", "all");
+            Assert.AreEqual(2, ranked.Total);
+            Assert.AreEqual("2147483647 searchrank", ranked.Items[0].Title,
+                "A bounded SQL string conversion must not truncate a longer query into an exact BIB ranking match.");
         }
         finally { await ClearSubmissionSearchAsync(); }
     }
@@ -163,6 +171,15 @@ public sealed partial class PatronJourneyTests
         var timings = new List<object>();
         try
         {
+            foreach (var query in new[] { "\0", "needle\0", "need\0le" })
+            {
+                capture.Queries.Clear();
+                using var response = await client.PostAsJsonAsync("/api/asap/staff/search", new SubmissionSearchInput(query, "all"));
+                Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+                using var error = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual("invalid_search", error.RootElement.GetProperty("code").GetString());
+                Assert.HasCount(0, capture.Queries, "NUL-only and embedded-NUL input must fail before any submission scan.");
+            }
             foreach (var (query, scope, label) in new[] { ("searchperf", "all", "first-context all text"), ("searchperf", "all", "warm all text"),
                 ("searchperf 09999", "all", "warm multiword"), ("searchperf", SearchLibrary.ToString(CultureInfo.InvariantCulture), "warm library text"),
                 ("perf-09999", "all", "warm exact barcode"), ("%_[", "all", "warm literal match"),
@@ -295,7 +312,8 @@ public sealed partial class PatronJourneyTests
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
             CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
         {
-            if (command.CommandText.Contains("UNION ALL", StringComparison.Ordinal))
+            if (command.CommandText.Contains("[asap].[TitleRequest]", StringComparison.Ordinal) ||
+                command.CommandText.Contains("[asap].[AdditionalCopyRequest]", StringComparison.Ordinal))
             {
                 Queries.Add(new(command.CommandText, command.Parameters.Cast<SqlParameter>().Select(item => (SqlParameter)((ICloneable)item).Clone()).ToArray()));
             }

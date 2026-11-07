@@ -29,7 +29,9 @@ The current-tab filters and their independent workflow totals remain separate.
   full pages preserve the global order. Each typed submission appears once.
 - Limits: 160 raw characters, 12 tokens, preview 12, full pages 25 (API 1–50),
   page 1–100000. Blank input returns idle guidance/scope without scanning requests.
-  Invalid inputs fail before search. Pages clamp to the last existing page.
+  Invalid inputs fail before search. U+0000 is rejected, since the selected SQL
+  collation ignores it in LIKE and would broaden literal queries. Pages clamp to
+  the last existing page.
 - Facets/`total` count the entire query and authorized scope; `filteredTotal`
   additionally applies the selected type/status group. Counts do not describe
   only the preview/page and do not replace Requests' workflow-tab totals.
@@ -44,6 +46,9 @@ The current-tab filters and their independent workflow totals remain separate.
   restores the launcher. An explicit Search button in title/copy details can
   reversibly suspend their host without unmounting drafts.
   The header owns its contrast independently of the current view's palette.
+  Short viewports place query and library controls beside each other so the
+  results remain readable with View all visible; arrow selection scrolls the
+  identifying title even when a result is taller than the available pane.
 - Search loads bind query/scope/filter/page/mode to a session and revision;
   replacement/close/navigation/sign-out aborts and rejects stale success/failure.
   Full results keep query/scope in session memory under `stage=search`; reloading

@@ -46,7 +46,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       images: [...document.images].filter(node => node.getClientRects().length).every(node => node.complete && node.naturalWidth > 0),
       dialogs: [...document.querySelectorAll('dialog[open]')].map(node => node.id),
       focus: document.activeElement?.id,
-      geometry: [...document.querySelectorAll('#search-dialog[open] [data-search="close"], #search-dialog[open] input, #search-dialog[open] [data-search="all"]:not([hidden])')].map(node => {
+      geometry: [...document.querySelectorAll('#search-dialog[open] [data-search="close"], #search-dialog[open] input, #search-dialog[open] select, #search-dialog[open] [data-search="all"]:not([hidden])')].filter(node => node.getClientRects().length).map(node => {
         const bounds = node.getBoundingClientRect(); return { id: node.id || node.dataset.search, left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom, width: innerWidth, height: innerHeight };
       })
     }));
@@ -70,6 +70,19 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     report.timings.push({ query, elapsedMs: Date.now() - start });
   };
   const close = async page => { await page.keyboard.press('Escape'); await dialog(page).waitFor({ state: 'hidden' }); };
+  const selectedTitleVisible = async page => {
+    const geometry = await page.evaluate(() => {
+      const list = document.querySelector('#search-suggestions'), bounds = list.getBoundingClientRect();
+      const id = document.querySelector('#search-quick-input').getAttribute('aria-activedescendant');
+      const title = document.getElementById(id).querySelector('strong').getBoundingClientRect();
+      return { id, listHeight: list.clientHeight, titleHeight: title.height,
+        visibleTitle: Math.max(0, Math.min(title.bottom, bounds.bottom) - Math.max(title.top, bounds.top)) };
+    });
+    report.states.at(-1).activeResult = geometry;
+    assert.ok(geometry.listHeight >= 64, `Meaningful short-screen preview: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.visibleTitle >= geometry.titleHeight - 1, `Selected title is readable: ${JSON.stringify(geometry)}`);
+    return geometry.id;
+  };
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers(fixture.super) });
     await guard(context);
@@ -225,6 +238,15 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await search(page, 'needle'); await page.emulateMedia({ colorScheme: 'dark' }); await scan(page, 'search-desktop-dark');
     await page.setViewportSize({ width: 390, height: 844 }); await scan(page, 'search-mobile-dark');
     await page.emulateMedia({ colorScheme: 'light' }); await scan(page, 'search-mobile-light');
+    await page.setViewportSize({ width: 390, height: 360 });
+    assert.equal(await page.locator('#search-suggestions [role="option"]').count(), 12);
+    assert.equal(await page.locator('#search-dialog [data-search="all"]').isVisible(), true);
+    await page.keyboard.press('ArrowUp'); await scan(page, 'search-mobile-short-last');
+    assert.equal(await selectedTitleVisible(page), 'search-option-11');
+    await page.keyboard.press('ArrowDown'); await scan(page, 'search-mobile-short-first');
+    assert.equal(await selectedTitleVisible(page), 'search-option-0');
+    await page.keyboard.press('Tab'); assert.equal(await page.locator('#search-quick-scope').evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('Shift+Tab'); assert.equal(await page.locator('#search-quick-input').evaluate(node => node === document.activeElement), true);
     await page.setViewportSize({ width: 760, height: 360 }); await scan(page, 'search-short'); await close(page);
     const ordinaryContext = await browser.newContext({ viewport: { width: 390, height: 844 }, extraHTTPHeaders: headers(fixture.ordinary) });
     await guard(ordinaryContext); const ordinary = await ordinaryContext.newPage();

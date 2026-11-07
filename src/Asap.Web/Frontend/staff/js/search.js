@@ -86,14 +86,15 @@ export function createSubmissionSearch({ dialog, view, launcher, detailLauncher,
       }
     } finally { reads.finish('search', load.token); }
   }
-  function setSelection(index) {
+  function setSelection(index, scroll = true) {
     selected = index;
     for (const [offset, node] of options.entries()) {
       node.setAttribute('aria-selected', String(offset === selected)); node.classList.toggle('search-active', offset === selected);
     }
     if (options[selected]) {
       controls[0].input.setAttribute('aria-activedescendant', options[selected].id);
-      options[selected].scrollIntoView?.({ block: 'nearest' });
+      // A result can be taller than a short viewport; keep its identifying title visible.
+      if (scroll) options[selected].firstElementChild?.scrollIntoView?.({ block: 'nearest' });
     } else controls[0].input.removeAttribute('aria-activedescendant');
   }
   async function select(item, snapshot, button) {
@@ -119,7 +120,7 @@ export function createSubmissionSearch({ dialog, view, launcher, detailLauncher,
       item.identifier || item.bibId ? element('span', { className: 'search-result-meta', text: [item.identifier, item.bibId ? `BIB ${item.bibId}` : null].filter(Boolean).join(' · ') }) : null
     ]);
     node.addEventListener('click', () => select(item, snapshot, node));
-    if (quick) node.addEventListener('mousemove', () => setSelection(index));
+    if (quick) node.addEventListener('mousemove', () => setSelection(index, false));
     return node;
   }
   function render() {

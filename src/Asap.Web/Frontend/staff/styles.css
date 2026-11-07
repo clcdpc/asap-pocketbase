@@ -71,6 +71,8 @@ button, a, input, select, textarea { outline-offset: 3px; }
   .search-guidance { display: none; }
   .search-summary { margin-block: 6px; }
   #search-dialog .dialog-header { padding-block: 8px; }
+  #search-dialog .search-controls:has(.compact-field:not([hidden])) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #search-dialog .search-scope { grid-column: 1 / -1; }
 }
 
 .skip-link {
