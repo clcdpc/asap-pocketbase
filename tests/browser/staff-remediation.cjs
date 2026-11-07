@@ -5,14 +5,16 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const { decideConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
 const verifySortKeyboard = require('./request-sort-keyboard.cjs');
+const { assertStaffAppearance, verifyStaffAppearance } = require('./staff-appearance.cjs');
 const [baseURL, artifacts, staffId, tenantId, email, library] = process.argv.slice(2);
 
 (async () => {
-  const report = { sorts: [], labels: [], states: [], mutations: [], settingsWrites: [], external: [], errors: [] };
+  const report = { sorts: [], labels: [], states: [], appearance: [], writes: [], mutations: [], settingsWrites: [], external: [], errors: [] };
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: {
+  const headers = {
     'X-ASAP-Test-Staff-Id': staffId, 'X-ASAP-Test-Tenant-Id': tenantId, 'X-ASAP-Test-Staff-Email': email
-  } });
+  };
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers });
   const page = await context.newPage();
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   page.on('pageerror', error => report.errors.push(error.message)); rejectNativeDialogs(page, report.errors);
@@ -21,6 +23,10 @@ const [baseURL, artifacts, staffId, tenantId, email, library] = process.argv.sli
     report.external.push(route.request().url()); return route.abort();
   });
   page.on('request', request => {
+    const pathname = new URL(request.url()).pathname;
+    if (!['GET', 'HEAD'].includes(request.method()) && !(pathname === '/api/asap/staff/search' && request.method() === 'POST')) {
+      report.writes.push({ method: request.method(), path: pathname });
+    }
     if (new URL(request.url()).pathname === '/api/asap/staff/settings' && request.method() !== 'GET') {
       report.settingsWrites.push(request.method());
     }
@@ -33,12 +39,21 @@ const [baseURL, artifacts, staffId, tenantId, email, library] = process.argv.sli
     const state = await page.evaluate(async () => ({
       violations: (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)),
       overflow: document.documentElement.scrollWidth > innerWidth,
-      missingImages: [...document.images].filter(node => node.getClientRects().length && (!node.complete || node.naturalWidth === 0)).map(node => node.id)
+      missingImages: [...document.images].filter(node => node.getClientRects().length && (!node.complete || node.naturalWidth === 0)).map(node => node.id),
+      viewport: { width: innerWidth, height: innerHeight },
+      dialogs: [...document.querySelectorAll('dialog[open]')].map(node => node.id),
+      overlays: [...document.querySelectorAll('dialog[open] .dialog-header, dialog[open] .request-save-footer, [popover]:popover-open')]
+        .filter(node => node.checkVisibility()).map(node => ({ id: node.id || node.className, ...node.getBoundingClientRect().toJSON() }))
     }));
     report.states.push({ name, ...state });
     assert.deepEqual(state.violations, [], `${name}: axe`); assert.equal(state.overflow, false, `${name}: overflow`);
     assert.deepEqual(state.missingImages, [], `${name}: missing images`);
-    await page.screenshot({ path: path.join(artifacts, `${name}.png`), fullPage: true });
+    for (const rect of state.overlays) {
+      assert.ok(rect.left >= -1 && rect.top >= -1 && rect.right <= state.viewport.width + 1 && rect.bottom <= state.viewport.height + 1,
+        `${name}: overlay fits viewport ${JSON.stringify(rect)}`);
+    }
+    await page.screenshot({ path: path.join(artifacts, `${name}.png`),
+      fullPage: !state.dialogs.length && state.viewport.width >= 760 && state.viewport.height >= 600 });
   };
   const settled = () => page.waitForFunction(() => !document.getElementById('settings-form').inert && !document.getElementById('staff-refresh').disabled);
   const users = async () => {
@@ -56,6 +71,16 @@ const [baseURL, artifacts, staffId, tenantId, email, library] = process.argv.sli
     await page.goto(`${baseURL}/staff/?stage=suggestion&scope=${library}`, { waitUntil: 'networkidle' });
     const grid = page.locator('#request-grid');
     await page.waitForFunction(() => document.querySelectorAll('#request-grid .request-title-link').length === 3);
+    // This runs before mutations and fails against the pre-#456 rendered app:
+    // shell/roster equality alone previously accepted an entirely light page.
+    for (const scheme of ['dark', 'light']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await assertStaffAppearance(page, scheme, `direct-requests-${scheme}`, {
+        surfaces: ['#request-grid td.gridjs-td', '#request-grid th.gridjs-th', '#request-grid .gridjs-footer'],
+        text: ['#request-grid .request-title-link', '#request-grid .gridjs-pagination'], controls: ['#request-search']
+      }, report.appearance);
+    }
+    await page.emulateMedia({ colorScheme: 'light' });
     report.sorts = await verifySortKeyboard(page, grid);
     await scan('requests-keyboard');
     await page.goto(`${baseURL}/staff/?stage=settings&settingsScope=${library}#settings-patron`, { waitUntil: 'networkidle' });
@@ -123,6 +148,10 @@ const [baseURL, artifacts, staffId, tenantId, email, library] = process.argv.sli
         });
         assert.equal(colors.roster.trim(), colors.shell.trim(), `${scheme}/${width}: roster inherits the shell surface`);
         assert.equal(colors.rosterInk, colors.shellInk); assert.equal(colors.inputScheme, colors.shellScheme);
+        await assertStaffAppearance(page, scheme, `roster-${scheme}-${width}`, {
+          surfaces: ['.settings-staff-list', '.settings-staff-editor', '.settings-save-bar'],
+          text: ['.settings-staff-email', '.settings-staff-row .status-badge'], controls: ['.settings-staff-editor input']
+        }, report.appearance);
         const display = row.getByRole('textbox', { name: /^Display name/ });
         await display.focus(); await page.keyboard.press('Tab');
         assert.equal(await page.locator(':focus-visible').count(), 1);
@@ -195,6 +224,7 @@ const [baseURL, artifacts, staffId, tenantId, email, library] = process.argv.sli
     assert.match(await target.locator('.status-badge').textContent(), /Inactive/);
     assert.match(await page.locator('#staff-roster-counts').textContent(), /1 active account.*1 inactive account shown/);
     await scan('staff-deactivate-reconciled');
+    await verifyStaffAppearance({ page, baseURL, library, staffIds: [first.id, second.id], scan, report, headers, artifacts });
     await decideConfirmation(page, () => row.getByRole('button', { name: 'Deactivate', exact: true }).click(), dialog => dialog.accept());
     await page.waitForFunction(id => document.querySelector(`[data-staff-id="${id}"] .status-badge`)?.textContent === 'Inactive', first.id);
     await settled(); assert.match(await page.locator('#staff-access-status').textContent(), /Staff user deactivated/);
