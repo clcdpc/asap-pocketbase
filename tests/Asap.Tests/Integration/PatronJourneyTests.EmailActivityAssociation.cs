@@ -1,3 +1,4 @@
+using System.Data;
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
@@ -15,6 +16,9 @@ public sealed partial class PatronJourneyTests
     [TestMethod]
     public async Task RequestEmailActivityAssociatesOnlyWholeKnownKeysVerifiedScopeAndExplicitCopySource()
     {
+        // A datetime parameter would round this forward beyond the business
+        // clock and make the later assignment violate UpdatedUtc >= CreatedUtc.
+        timeProvider!.SetUtcNow(new DateTimeOffset(2030, 3, 17, 6, 30, 0, TimeSpan.Zero).AddMilliseconds(2));
         var source = await SeedActivityCollisionSourceAsync();
         var other = await SeedBibOwnershipRequestAsync($"activity-unrelated-{Guid.NewGuid():N}", 9001, true);
         var now = timeProvider!.GetUtcNow().UtcDateTime;
@@ -26,14 +30,14 @@ public sealed partial class PatronJourneyTests
         {
             // A direct copy deliberately has the SAME numeric ID as the title
             // request. Its absent explicit source must defeat that coincidence.
-            await ExecuteNonQueryAsync("""
+            await context.Database.ExecuteSqlRawAsync("""
                 IF EXISTS (SELECT 1 FROM [asap].[AdditionalCopyRequest] WHERE [Id] = @id)
                     THROW 51247, 'Activity copy-collision fixture ID is in use.', 1;
                 SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] ON;
                 INSERT INTO [asap].[AdditionalCopyRequest] ([Id], [LibraryOrganizationId], [BibId], [Title], [Status], [CreatedUtc], [UpdatedUtc])
                 VALUES (@id, 2, 9001, N'Coincidental copy', N'open', @now, @now);
                 SET IDENTITY_INSERT [asap].[AdditionalCopyRequest] OFF;
-                """, ("@id", source.Id), ("@now", now));
+                """, new SqlParameter("@id", source.Id), new SqlParameter("@now", SqlDbType.DateTime2) { Value = now });
             copyIds.Add(source.Id);
             var relatedCopy = new AdditionalCopyRequest { SourceTitleRequestId = source.Id, LibraryOrganizationId = 2,
                 BibId = 9001, Title = "Explicitly related copy", Status = "open", CreatedUtc = now, UpdatedUtc = now };
