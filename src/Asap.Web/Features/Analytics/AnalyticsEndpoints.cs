@@ -17,6 +17,8 @@ public static class AnalyticsEndpoints
         string? scope,
         string? orgId,
         string? range,
+        string? startDate,
+        string? endDate,
         AnalyticsService service,
         CancellationToken cancellationToken)
     {
@@ -28,9 +30,19 @@ public static class AnalyticsEndpoints
             StaffAuthenticationEndpoints.RequireCurrentStaff(context),
             parsedScope,
             range,
+            startDate,
+            endDate,
             cancellationToken);
-        return result.Code == "invalid_scope"
-            ? Results.BadRequest(new { code = "invalid_scope", message = "The analytics scope is invalid." })
-            : Results.Json(result.Data);
+        return result.Code switch
+        {
+            "invalid_scope" => Results.BadRequest(new { code = "invalid_scope", message = "The analytics scope is invalid." }),
+            "invalid_date_range" => Results.BadRequest(new
+            {
+                code = "invalid_date_range",
+                message = "Choose a valid custom date range.",
+                errors = result.Errors
+            }),
+            _ => Results.Json(result.Data)
+        };
     }
 }
