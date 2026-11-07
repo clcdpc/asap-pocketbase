@@ -77,7 +77,12 @@ async function main() {
     context.setDefaultTimeout(15000);
     context.setDefaultNavigationTimeout(20000);
     await context.route('**/*', route => {
-      if (new URL(route.request().url()).origin === origin) return route.continue();
+      if (new URL(route.request().url()).origin === origin) {
+        return route.continue().catch(error => {
+          // A page-level delayed read can retire before the context guard continues it.
+          if (!/Route is already handled/i.test(error.message)) throw error;
+        });
+      }
       report.externalRequests++;
       return route.abort('blockedbyclient');
     });
