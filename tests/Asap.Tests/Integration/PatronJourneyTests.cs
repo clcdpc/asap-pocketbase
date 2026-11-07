@@ -566,7 +566,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
-            Assert.HasCount(74, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
+            Assert.HasCount(81, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
             foreach (var flag in new[] { "disclosures", "independentDrafts", "singleEmail", "atomicSave", "conflictRecovery", "lifecycle", "create", "nativeValidationOwner", "keyboardFocus", "responsiveContainment", "activeFilter", "scopedCounts", "hiddenDrafts", "ownedFeedbackRecovery", "independentSaves", "preservedReviewRecovery" })
             {
                 Assert.IsTrue(report.RootElement.GetProperty("staffRoster").GetProperty(flag).GetBoolean(), flag);
@@ -587,6 +587,34 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             Assert.IsTrue(analytics.GetProperty("invalidScopeRecovery").GetBoolean());
             Assert.AreEqual(1, analytics.GetProperty("allScopeRecoveryRequests").GetInt32());
             Assert.IsTrue(analytics.GetProperty("mobileLibraryOnly").GetBoolean());
+            Assert.AreEqual("America/Los_Angeles", analytics.GetProperty("browserTimezone").GetString());
+            Assert.AreEqual("America/New_York", analytics.GetProperty("businessTimezone").GetString());
+            Assert.IsTrue(analytics.GetProperty("appliedMetricsMatchEndpoint").GetBoolean());
+            Assert.IsTrue(analytics.GetProperty("currentMetricsUnchangedAcrossRanges").GetBoolean());
+            Assert.AreEqual(71, analytics.GetProperty("customMultiDayDstHours").GetInt32());
+            Assert.AreEqual(25, analytics.GetProperty("customSameDayDstHours").GetInt32());
+            foreach (var flag in new[]
+                     {
+                         "incompleteDraftNoDispatch", "scopeKeepsAppliedDatesAndDraft", "presetOmitsCustomDates",
+                         "keyboardApplyAndValidationFocus", "keyboardOnlyCustomApply", "preDispatchFailureRetry", "customInvalidScopeRecovery",
+                         "mobileCustomSameDay"
+                     })
+            {
+                Assert.IsTrue(analytics.GetProperty(flag).GetBoolean(), flag);
+            }
+            var analyticsZoom = analytics.GetProperty("nativeZoom").EnumerateArray().ToArray();
+            Assert.HasCount(4, analyticsZoom);
+            foreach (var state in analyticsZoom)
+            {
+                Assert.AreEqual(2, state.GetProperty("actualBrowserZoom").GetInt32());
+                Assert.AreEqual(2, state.GetProperty("cdpZoom").GetInt32());
+                Assert.IsFalse(state.GetProperty("overflow").GetBoolean());
+                Assert.AreEqual(0, state.GetProperty("violations").GetArrayLength());
+                Assert.IsGreaterThan(0, state.GetProperty("controls").GetArrayLength());
+            }
+            CollectionAssert.AreEquivalent(new[]
+                { "analytics-custom-applied", "analytics-custom-invalid", "analytics-custom-applied", "analytics-custom-invalid" },
+                analyticsZoom.Select(state => state.GetProperty("name").GetString()).ToArray());
             Assert.AreEqual("legacy", report.RootElement.GetProperty("additionalCopy").GetProperty("inheritedClaimType").GetString());
             Assert.AreEqual(
                 seeded.LegacyRuleId.ToString(),

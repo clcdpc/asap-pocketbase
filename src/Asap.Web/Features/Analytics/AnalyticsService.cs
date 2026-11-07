@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Configuration;
 using Asap.Web.Infrastructure.Data;
@@ -18,7 +19,11 @@ public sealed record AnalyticsScope(
 public sealed record AnalyticsDateRange(
     string Key,
     DateTimeOffset Start,
-    DateTimeOffset End);
+    DateTimeOffset End,
+    DateOnly StartDate,
+    DateOnly EndDate,
+    string TimeZoneId,
+    DateTimeOffset EndExclusiveUtc);
 
 public sealed record AnalyticsSummary(
     long NewSuggestions,
@@ -48,17 +53,29 @@ public sealed record AnalyticsResponse(
     AnalyticsAging Aging,
     AnalyticsExceptions Exceptions);
 
-public sealed record AnalyticsResult(string Code, AnalyticsResponse? Data = null)
+public sealed record AnalyticsResult(
+    string Code,
+    AnalyticsResponse? Data = null,
+    IReadOnlyDictionary<string, string[]>? Errors = null)
 {
     public static AnalyticsResult InvalidScope() => new("invalid_scope");
+    public static AnalyticsResult InvalidDateRange(IReadOnlyDictionary<string, string[]> errors) =>
+        new("invalid_date_range", Errors: errors);
 }
+
+public sealed record AnalyticsDateRangeResolution(
+    AnalyticsResolvedDateRange? Range,
+    IReadOnlyDictionary<string, string[]> Errors);
 
 public sealed record AnalyticsResolvedDateRange(
     string Key,
     DateTimeOffset Start,
     DateTimeOffset End,
     DateTime StartUtc,
-    DateTime EndExclusiveUtc);
+    DateTime EndExclusiveUtc,
+    DateOnly StartDate,
+    DateOnly EndDate,
+    string TimeZoneId);
 
 public sealed record AnalyticsResolvedScope(
     bool IsValid,
@@ -312,6 +329,8 @@ public sealed class AnalyticsService(
         CurrentStaff staff,
         LibraryScope scope,
         string? range,
+        string? startDate,
+        string? endDate,
         CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
@@ -329,7 +348,14 @@ public sealed class AnalyticsService(
             return AnalyticsResult.InvalidScope();
         }
 
-        var resolvedRange = ResolveDateRange(range, timeProvider.GetUtcNow(), configuration.Application.BusinessTimeZone!);
+        var nowUtc = timeProvider.GetUtcNow();
+        var dateRangeResult = ResolveDateRange(
+            range, nowUtc, configuration.Application.BusinessTimeZone!, startDate, endDate);
+        if (dateRangeResult.Range is not { } resolvedRange)
+        {
+            return AnalyticsResult.InvalidDateRange(dateRangeResult.Errors);
+        }
+
         await context.Database.OpenConnectionAsync(cancellationToken);
         var connection = (SqlConnection)context.Database.GetDbConnection();
         await using var command = connection.CreateCommand();
@@ -337,72 +363,82 @@ public sealed class AnalyticsService(
         AddParameter(command, "@scopeOrganizationId", SqlDbType.Int, (object?)resolvedScope.OrganizationId ?? DBNull.Value);
         AddParameter(command, "@rangeStartUtc", SqlDbType.DateTime2, resolvedRange.StartUtc);
         AddParameter(command, "@rangeEndExclusiveUtc", SqlDbType.DateTime2, resolvedRange.EndExclusiveUtc);
-        AddParameter(command, "@nowUtc", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
+        AddParameter(command, "@nowUtc", SqlDbType.DateTime2, nowUtc.UtcDateTime);
 
-        await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
+        try
         {
-            throw new InvalidOperationException("Analytics aggregate query returned no summary row.");
+            await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                throw new InvalidOperationException("Analytics aggregate query returned no summary row.");
+            }
+
+            var summary = new AnalyticsSummary(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetInt64(2),
+                reader.GetInt64(3),
+                reader.IsDBNull(4) ? 0 : reader.GetDouble(4));
+
+            var stageCounts = StageOrder.ToDictionary(stage => stage, _ => 0L, StringComparer.Ordinal);
+            await reader.NextResultAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                stageCounts[reader.GetString(0)] = reader.GetInt64(1);
+            }
+
+            var closedReasons = new List<AnalyticsClosedReason>();
+            await reader.NextResultAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                closedReasons.Add(new AnalyticsClosedReason(reader.GetString(0), reader.GetInt64(1)));
+            }
+
+            var agingStages = new List<AnalyticsAgingStage>();
+            await reader.NextResultAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                agingStages.Add(new AnalyticsAgingStage(reader.GetString(0), reader.GetInt64(1), reader.GetDouble(2)));
+            }
+            agingStages = OpenStageOrder
+                .Select(stage => agingStages.FirstOrDefault(item => item.Status == stage) ?? new AnalyticsAgingStage(stage, 0, 0))
+                .ToList();
+
+            await reader.NextResultAsync(cancellationToken);
+            var openOlderThanThreshold = await reader.ReadAsync(cancellationToken) ? reader.GetInt64(0) : 0L;
+
+            await reader.NextResultAsync(cancellationToken);
+            var holdFailures = 0L;
+            var identifierFailures = 0L;
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                holdFailures = reader.GetInt64(0);
+                identifierFailures = reader.GetInt64(1);
+            }
+
+            var availableLibraries = staff.Role == StaffRole.SuperAdmin ? organizations : [];
+            var response = new AnalyticsResponse(
+                new AnalyticsScope(
+                    resolvedScope.Mode,
+                    resolvedScope.LibraryOrgId,
+                    resolvedScope.Label,
+                    staff.Role == StaffRole.SuperAdmin),
+                new AnalyticsDateRange(
+                    resolvedRange.Key, resolvedRange.Start, resolvedRange.End,
+                    resolvedRange.StartDate, resolvedRange.EndDate, resolvedRange.TimeZoneId,
+                    new DateTimeOffset(resolvedRange.EndExclusiveUtc, TimeSpan.Zero)),
+                availableLibraries,
+                summary,
+                stageCounts,
+                closedReasons,
+                new AnalyticsAging(30, openOlderThanThreshold, agingStages),
+                new AnalyticsExceptions(holdFailures, identifierFailures));
+            return new AnalyticsResult("ok", response);
         }
-
-        var summary = new AnalyticsSummary(
-            reader.GetInt64(0),
-            reader.GetInt64(1),
-            reader.GetInt64(2),
-            reader.GetInt64(3),
-            reader.IsDBNull(4) ? 0 : reader.GetDouble(4));
-
-        var stageCounts = StageOrder.ToDictionary(stage => stage, _ => 0L, StringComparer.Ordinal);
-        await reader.NextResultAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        catch (SqlException exception) when (cancellationToken.IsCancellationRequested)
         {
-            stageCounts[reader.GetString(0)] = reader.GetInt64(1);
+            throw new OperationCanceledException("The Analytics read was canceled.", exception, cancellationToken);
         }
-
-        var closedReasons = new List<AnalyticsClosedReason>();
-        await reader.NextResultAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            closedReasons.Add(new AnalyticsClosedReason(reader.GetString(0), reader.GetInt64(1)));
-        }
-
-        var agingStages = new List<AnalyticsAgingStage>();
-        await reader.NextResultAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            agingStages.Add(new AnalyticsAgingStage(reader.GetString(0), reader.GetInt64(1), reader.GetDouble(2)));
-        }
-        agingStages = OpenStageOrder
-            .Select(stage => agingStages.FirstOrDefault(item => item.Status == stage) ?? new AnalyticsAgingStage(stage, 0, 0))
-            .ToList();
-
-        await reader.NextResultAsync(cancellationToken);
-        var openOlderThanThreshold = await reader.ReadAsync(cancellationToken) ? reader.GetInt64(0) : 0L;
-
-        await reader.NextResultAsync(cancellationToken);
-        var holdFailures = 0L;
-        var identifierFailures = 0L;
-        if (await reader.ReadAsync(cancellationToken))
-        {
-            holdFailures = reader.GetInt64(0);
-            identifierFailures = reader.GetInt64(1);
-        }
-
-        var availableLibraries = staff.Role == StaffRole.SuperAdmin ? organizations : [];
-        var response = new AnalyticsResponse(
-            new AnalyticsScope(
-                resolvedScope.Mode,
-                resolvedScope.LibraryOrgId,
-                resolvedScope.Label,
-                staff.Role == StaffRole.SuperAdmin),
-            new AnalyticsDateRange(resolvedRange.Key, resolvedRange.Start, resolvedRange.End),
-            availableLibraries,
-            summary,
-            stageCounts,
-            closedReasons,
-            new AnalyticsAging(30, openOlderThanThreshold, agingStages),
-            new AnalyticsExceptions(holdFailures, identifierFailures));
-        return new AnalyticsResult("ok", response);
     }
 
     public static AnalyticsResolvedScope ResolveScope(
@@ -433,43 +469,135 @@ public sealed class AnalyticsService(
             : new AnalyticsResolvedScope(true, staff.OrganizationId, "library", ownOrganization.OrgId, ownOrganization.Name);
     }
 
-    public static AnalyticsResolvedDateRange ResolveDateRange(
+    public static AnalyticsDateRangeResolution ResolveDateRange(
         string? requestedKey,
         DateTimeOffset nowUtc,
-        string timeZoneId)
+        string timeZoneId,
+        string? startDate = null,
+        string? endDate = null)
     {
         var key = requestedKey?.Trim() switch
         {
             "thisMonth" => "thisMonth",
             "lastMonth" => "lastMonth",
             "last90" => "last90",
+            "custom" => "custom",
             _ => "last30"
         };
         var timeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
         var localDate = TimeZoneInfo.ConvertTime(nowUtc, timeZone).Date;
-        var startLocalDate = key switch
+        var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        DateTime startLocalDate;
+        DateTime endExclusiveLocalDate;
+        if (key == "custom")
         {
-            "thisMonth" => new DateTime(localDate.Year, localDate.Month, 1),
-            "lastMonth" => new DateTime(localDate.Year, localDate.Month, 1).AddMonths(-1),
-            "last90" => localDate.AddDays(-90),
-            _ => localDate.AddDays(-30)
-        };
-        var endExclusiveLocalDate = key switch
+            var parsedStart = ParseCustomDate(startDate, "startDate", "start date", errors);
+            var parsedEnd = ParseCustomDate(endDate, "endDate", "end date", errors);
+            if (parsedStart is null || parsedEnd is null)
+            {
+                return new AnalyticsDateRangeResolution(null, errors);
+            }
+
+            if (parsedEnd < parsedStart)
+            {
+                errors["endDate"] = ["End date must be on or after start date."];
+                return new AnalyticsDateRangeResolution(null, errors);
+            }
+
+            if (parsedEnd == DateOnly.MaxValue)
+            {
+                errors["endDate"] = ["Choose an end date before 9999-12-31 so its following day can be represented."];
+                return new AnalyticsDateRangeResolution(null, errors);
+            }
+
+            startLocalDate = parsedStart.Value.ToDateTime(TimeOnly.MinValue);
+            // Add a local calendar day before converting: DST days are not always 24 hours.
+            endExclusiveLocalDate = parsedEnd.Value.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        }
+        else
         {
-            "thisMonth" => localDate.AddDays(1),
-            "lastMonth" => new DateTime(localDate.Year, localDate.Month, 1),
-            _ => localDate.AddDays(1)
-        };
-        var startUtc = TimeZoneInfo.ConvertTimeToUtc(
-            DateTime.SpecifyKind(startLocalDate, DateTimeKind.Unspecified), timeZone);
-        var endExclusiveUtc = TimeZoneInfo.ConvertTimeToUtc(
-            DateTime.SpecifyKind(endExclusiveLocalDate, DateTimeKind.Unspecified), timeZone);
-        return new AnalyticsResolvedDateRange(
-            key,
-            new DateTimeOffset(startUtc, TimeSpan.Zero),
-            new DateTimeOffset(endExclusiveUtc.AddTicks(-1), TimeSpan.Zero),
-            startUtc,
-            endExclusiveUtc);
+            // Presets intentionally ignore any lingering custom-date query parameters.
+            startLocalDate = key switch
+            {
+                "thisMonth" => new DateTime(localDate.Year, localDate.Month, 1),
+                "lastMonth" => new DateTime(localDate.Year, localDate.Month, 1).AddMonths(-1),
+                "last90" => localDate.AddDays(-90),
+                _ => localDate.AddDays(-30)
+            };
+            endExclusiveLocalDate = key switch
+            {
+                "thisMonth" => localDate.AddDays(1),
+                "lastMonth" => new DateTime(localDate.Year, localDate.Month, 1),
+                _ => localDate.AddDays(1)
+            };
+        }
+
+        var startUtc = ResolveBusinessMidnight(startLocalDate, timeZone, "startDate", "Start date", errors);
+        var endExclusiveUtc = ResolveBusinessMidnight(
+            endExclusiveLocalDate, timeZone, "endDate", "The day after the end date", errors);
+        if (startUtc is null || endExclusiveUtc is null)
+        {
+            return new AnalyticsDateRangeResolution(null, errors);
+        }
+
+        return new AnalyticsDateRangeResolution(
+            new AnalyticsResolvedDateRange(
+                key,
+                new DateTimeOffset(startUtc.Value, TimeSpan.Zero),
+                new DateTimeOffset(endExclusiveUtc.Value.AddTicks(-1), TimeSpan.Zero),
+                startUtc.Value,
+                endExclusiveUtc.Value,
+                DateOnly.FromDateTime(startLocalDate),
+                DateOnly.FromDateTime(endExclusiveLocalDate.AddDays(-1)),
+                timeZoneId),
+            errors);
+    }
+
+    private static DateOnly? ParseCustomDate(
+        string? value,
+        string field,
+        string label,
+        Dictionary<string, string[]> errors)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            errors[field] = [$"Enter a {label}."];
+            return null;
+        }
+
+        if (value.Length != 10 || !DateOnly.TryParseExact(
+                value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+        {
+            errors[field] = [$"Enter a valid {label} in yyyy-MM-dd format."];
+            return null;
+        }
+
+        return date;
+    }
+
+    private static DateTime? ResolveBusinessMidnight(
+        DateTime localDate,
+        TimeZoneInfo timeZone,
+        string field,
+        string label,
+        Dictionary<string, string[]> errors)
+    {
+        var midnight = DateTime.SpecifyKind(localDate, DateTimeKind.Unspecified);
+        // Do not choose one side of a midnight gap/overlap or accept UTC conversion clamping.
+        if (timeZone.IsInvalidTime(midnight) || timeZone.IsAmbiguousTime(midnight))
+        {
+            errors[field] = [$"{label} does not have an unambiguous midnight in the business timezone. Choose another date."];
+            return null;
+        }
+
+        var utcTicks = midnight.Ticks - timeZone.GetUtcOffset(midnight).Ticks;
+        if (utcTicks < DateTime.MinValue.Ticks || utcTicks > DateTime.MaxValue.Ticks)
+        {
+            errors[field] = [$"{label} cannot be represented in UTC in the business timezone. Choose another date."];
+            return null;
+        }
+
+        return new DateTime(utcTicks, DateTimeKind.Utc);
     }
 
     private static void AddParameter(SqlCommand command, string name, SqlDbType type, object value)

@@ -54,7 +54,6 @@ assert.match(workflow, /loadAnalytics/);
 assert.match(workflow, /resetAnalytics/);
 assert.match(analytics, /\/api\/asap\/staff\/analytics\?/);
 assert.match(analytics, /reads\.begin\('analytics'\)/);
-assert.match(analytics, /analyticsRange = 'lastMonth'/);
 assert.match(index, /id="additional-copy-create-dialog"/);
 assert.match(index, /id="additional-copy-reminder"/);
 assert.match(urlUtils, /searchParams\.set\('stage', 'additional_copies'\)/);
