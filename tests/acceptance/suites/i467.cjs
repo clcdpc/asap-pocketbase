@@ -13,9 +13,16 @@ const key = row => row.type + ':' + row.id;
 const write = (t, value) => fs.writeFile(path.join(t.directory, t.id + '-evidence.json'), JSON.stringify(value, null, 2));
 
 async function start(t, stage = 'suggestion', scope = '2') {
-  await t.page.goto(`${t.origin}/staff/?stage=${stage}&scope=${scope}${stage === 'settings' ? '&settingsScope=2' : ''}`);
+  await t.page.goto(`${t.origin}/staff/?stage=${stage}&scope=${scope}${stage === 'settings' ? '&settingsScope=2' : ''}`, { waitUntil: 'networkidle' });
   await t.page.locator('#workspace').waitFor({ state: 'visible' });
   await t.page.locator('#search-asap').waitFor({ state: 'visible' });
+  // The launcher is static markup; it can be visible before the session-owned
+  // Search controller and the requested destination have finished mounting.
+  await input(t.page).waitFor({ state: 'attached' });
+  const view = { suggestion: '#queue-view', additional_copies: '#additional-copy-view',
+    analytics: '#analytics-view', operations: '#operations-view', settings: '#settings-view' }[stage];
+  await t.page.locator(view).waitFor({ state: 'visible' });
+  if (stage === 'suggestion') await t.page.locator('#request-grid tbody tr').first().waitFor();
   if (stage === 'settings') await t.page.waitForFunction(() => document.querySelector('#settings-version').value &&
     !document.querySelector('#settings-form').inert && !document.querySelector('#settings-refresh').disabled);
 }
@@ -127,7 +134,9 @@ const scenarios = [
       await t.page.waitForFunction(() => document.querySelector('#search-view [data-search="summary"]').textContent === '1 matching submission.');
       assert.match(await t.page.locator('#search-view .search-result').innerText(), /Q1 copy 25/);
       await checkpoint(t.page, t.directory, t.id);
-      await t.page.reload(); await t.page.getByText('Enter a title, author, patron, barcode, or identifier to search submissions.', { exact: true }).waitFor();
+      await t.page.reload();
+      await t.page.waitForFunction(() => document.querySelector('#search-view [data-search="summary"]').textContent ===
+        'Enter a title, author, patron, barcode, or identifier to search submissions.');
       await write(t, { pageSizes: [first.length, last.length], allCount: 26, closedCount: 1, reloadStartsIdle: true });
     } },
   { id: 'i467-cross-status-details', writes: false,
@@ -147,7 +156,8 @@ const scenarios = [
     requirements: ['#467: truthful loading/empty/error/retry, superseded query cancellation and closed-panel retirement'], run: async t => {
       await start(t); await open(t);
       await t.page.route('**/api/asap/staff/search', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"message":"Synthetic failure"}' }), { times: 1 });
-      await input(t.page).fill('Q1 copy'); await t.page.getByText(/Search unavailable\./).waitFor();
+      await input(t.page).fill('Q1 copy');
+      await t.page.waitForFunction(() => document.querySelector('#search-dialog [data-search="summary"]').textContent.startsWith('Search unavailable.'));
       assert.doesNotMatch(await summary(t.page).innerText(), /No matching/);
       await checkpoint(t.page, t.directory, t.id + '-failed');
       await t.page.locator('#search-dialog [data-search="retry"]').click();
