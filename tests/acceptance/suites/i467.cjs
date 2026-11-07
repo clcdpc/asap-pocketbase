@@ -132,8 +132,8 @@ const scenarios = [
       await t.page.locator('#analytics-start-date').fill('2026-10-03');
       await t.page.locator('#analytics-end-date').fill('2026-10-04');
       await open(t, true);
-      assert.equal(await t.page.locator('#search-quick-scope').inputValue(), '2');
       await search(t, 'ACCEPTANCE41013');
+      assert.equal(await t.page.locator('#search-quick-scope').inputValue(), '2');
       await input(t.page).press('ArrowDown'); await input(t.page).press('Enter');
       await t.page.locator('#request-dialog[open]').getByRole('heading', { name: 'Acceptance d1-closed', exact: true }).waitFor();
       await t.page.locator('#request-dialog').getByRole('tab', { name: 'Activity', exact: true }).click();
