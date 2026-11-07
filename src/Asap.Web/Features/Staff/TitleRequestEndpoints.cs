@@ -514,6 +514,7 @@ public static partial class TitleRequestEndpoints
         HttpContext context,
         string id,
         string? scope,
+        bool? searchResult,
         TitleRequestViewService views,
         CancellationToken cancellationToken)
     {
@@ -521,7 +522,7 @@ public static partial class TitleRequestEndpoints
         {
             return Results.BadRequest(new { code = "invalid_scope" });
         }
-        var result = await views.GetAsync(Current(context), id, cancellationToken, parsedScope);
+        var result = await views.GetAsync(Current(context), id, cancellationToken, parsedScope, searchResult == true);
         return result is null ? Results.NotFound() : Results.Json(result);
     }
 

@@ -11,6 +11,7 @@ export function createDetailHost({ root }) {
   let cancelFocus = null;
   let disposed = false;
   let escapeHeld = false;
+  let suspended = null;
 
   function cancelFocusReturn() { cancelFocus?.(); cancelFocus = null; }
 
@@ -48,6 +49,7 @@ export function createDetailHost({ root }) {
   function release(owner, options = {}) {
     if (mounted !== owner) return false;
     mounted = null;
+    suspended = null;
     escapeHeld = false;
     cancelFocusReturn();
     owner.dispose?.(options);
@@ -76,7 +78,19 @@ export function createDetailHost({ root }) {
     if (!escapeHeld) (mounted?.onEscape || mounted?.onClose)?.();
   }, { signal: events.signal });
   return {
-    isOpen: () => root.open,
+    isOpen: () => root.open || Boolean(suspended),
+    suspendForSearch() {
+      if (disposed || !mounted || !root.open) return null;
+      const owner = mounted, focus = document.activeElement;
+      suspended = owner;
+      root.close();
+      return () => {
+        if (disposed || mounted !== owner || suspended !== owner) return;
+        suspended = null;
+        root.showModal();
+        (focus?.isConnected ? focus : close).focus();
+      };
+    },
     requestClose: options => mounted?.onClose?.(options) ?? true,
     contains: node => root.contains(node),
     focusClose: () => { if (!disposed && mounted && root.open && close.isConnected) close.focus(); },
@@ -100,7 +114,7 @@ export function createDetailHost({ root }) {
           if (state?.label) root.setAttribute('aria-describedby', status.id);
           else root.removeAttribute('aria-describedby');
         },
-        show() { if (isCurrent()) { if (!root.open) root.showModal(); close.focus(); } },
+        show() { if (isCurrent() && suspended !== owner) { if (!root.open) root.showModal(); close.focus(); } },
         release: options => release(owner, options)
       });
     },

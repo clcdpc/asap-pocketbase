@@ -164,7 +164,8 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         CurrentStaff staff,
         string id,
         CancellationToken cancellationToken,
-        LibraryScope? scope = null)
+        LibraryScope? scope = null,
+        bool searchResult = false)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var requestId = await RequestLinkResolver.ResolveAsync(
@@ -178,10 +179,14 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
 
         var request = await context.TitleRequests.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == requestId.Value, cancellationToken);
-        if (request is null || !CanAccess(staff, request.LibraryOrganizationId) ||
-            !await context.Organizations.AsNoTracking().AnyAsync(item =>
+        if (request is null || !CanAccess(staff, request.LibraryOrganizationId))
+        {
+            return null;
+        }
+        // Search selects active libraries; ordinary All-scope details also serve durable recovery.
+        if (searchResult && !await context.Organizations.AsNoTracking().AnyAsync(item =>
                 item.Id == request.LibraryOrganizationId && item.Id > LibraryScope.SystemOrganizationId &&
-                item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId,
+                item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive,
                 cancellationToken))
         {
             return null;

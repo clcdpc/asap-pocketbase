@@ -61,9 +61,12 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     }
     return admission.allowed;
   }
-  function detailPath(id, scope = getScope(), owner = actor) {
+  function detailPath(id, scope = getScope(), owner = actor, searchResult = false) {
     const path = `/api/asap/staff/title-requests/${encodeURIComponent(id)}`;
-    return owner?.role === 'super_admin' ? `${path}?scope=${encodeURIComponent(scope)}` : path;
+    const query = new URLSearchParams();
+    if (owner?.role === 'super_admin') query.set('scope', scope);
+    if (searchResult) query.set('searchResult', 'true');
+    return query.size ? `${path}?${query}` : path;
   }
   async function configurationFor(library, signal, owner) {
     const key = String(library);
@@ -116,12 +119,13 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     const owner = sessionIdentity.preferences();
     if (disposed || !owner) return null;
     const load = reads.begin('detail-target'), ticket = ++targetGeneration;
-    const live = () => !disposed && !load.signal.aborted && ticket === targetGeneration && sessionIdentity.isCurrent(owner);
+    const signal = options.signal ? window.AbortSignal.any([load.signal, options.signal]) : load.signal;
+    const live = () => !disposed && !signal.aborted && ticket === targetGeneration && sessionIdentity.isCurrent(owner);
     try {
       const scope = options.scope ?? (owner.role === 'super_admin' && (options.align || options.fromRecent) ? 'all' : getScope());
-      const request = await send(detailPath(id, scope, owner), { signal: load.signal });
+      const request = await send(detailPath(id, scope, owner, Boolean(options.searchScope)), { signal });
       if (!live()) return null;
-      const configuration = await configurationFor(request.libraryOrgId, load.signal, owner);
+      const configuration = await configurationFor(request.libraryOrgId, signal, owner);
       const ready = () => live() && configurations.get(String(request.libraryOrgId))?.value === configuration;
       return ready() ? { request, configuration, scope, owner, isCurrent: ready } : null;
     } finally { reads.finish('detail-target', load.token); }

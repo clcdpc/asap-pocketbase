@@ -19,6 +19,12 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.equal(first.isCurrent(), false);
     first.heading('Stale', 'Stale'); first.show();
     second.content.append(secondRoot); second.heading('Current', 'Current'); second.show();
+    const resume = host.suspendForSearch();
+    assert.equal(get('#request-dialog').open, false);
+    assert.equal(host.isOpen(), true, 'suspension preserves the mounted departure owner');
+    assert.equal(second.isCurrent(), true);
+    second.show(); assert.equal(get('#request-dialog').open, false, 'a retained read cannot stack a suspended detail above Search');
+    resume(); assert.equal(get('#request-dialog').open, true);
     get('#request-dialog').dispatchEvent(new dom.window.Event('cancel', { cancelable: true }));
     assert.equal(closed, 1);
     assert.equal(get('#request-dialog-title').textContent, 'Current');

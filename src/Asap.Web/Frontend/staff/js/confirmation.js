@@ -55,7 +55,7 @@ export function createConfirmationController() {
 
   return {
     ask({ title: heading, message: description, confirmLabel, cancelLabel = 'Cancel', tone = 'normal',
-      opener = document.activeElement, fallback = opener?.closest('dialog')?.querySelector('button'), isCurrent, signal }) {
+      opener = document.activeElement, fallback = opener?.closest('dialog')?.querySelector('[data-dialog-close]') || opener?.closest('dialog')?.querySelector('button'), isCurrent, signal }) {
       if (pending && !pending.isCurrent()) finish();
       if (disposed || pending || signal?.aborted || !isCurrent()) return Promise.resolve(false);
       title.textContent = heading;
