@@ -8,8 +8,8 @@ const { nativeZoom } = require('../acceptance/helpers/accessibility.cjs');
 
 // Use the same ancestor/opacity compositing as settings-accessibility.cjs.
 // Transparent text nodes and mobile table cells must be checked as displayed.
-async function assertStaffAppearance(page, scheme, name, { surfaces = [], text = [], controls = [], actions = [] } = {}, evidence = []) {
-  const state = await page.evaluate(({ surfaces, text, controls, actions }) => {
+async function assertStaffAppearance(page, scheme, name, { surfaces = [], text = [], controls = [], actions = [], disabledControls = [], disabledActions = [] } = {}, evidence = []) {
+  const state = await page.evaluate(({ surfaces, text, controls, actions, disabledControls, disabledActions }) => {
     const rgba = value => {
       const values = value.match(/[\d.]+/g).map(Number);
       return [...values.slice(0, 3), values[3] ?? 1];
@@ -41,15 +41,18 @@ async function assertStaffAppearance(page, scheme, name, { surfaces = [], text =
       const outside = rendered(node.parentElement, [0, 0, 0, 0]);
       return { selector, background, foreground, luminance: luminance(background), contrast: ratio(foreground, background),
         boundaryContrast: Math.min(ratio(boundary, background), ratio(boundary, outside)),
-        colorScheme: style.colorScheme, disabled: node.matches(':disabled') };
+        colorScheme: style.colorScheme, disabled: node.matches(':disabled'), opacity: Number(style.opacity),
+        textSource: node.matches('input, textarea') ? node.value ? 'value' : 'empty' : 'content',
+        displayedCharacters: (node.matches('input, textarea') ? node.value : node.textContent).trim().length };
     };
-    return { body: sample('body'), surfaces: surfaces.map(sample), text: text.map(sample), controls: controls.map(sample), actions: actions.map(sample) };
-  }, { surfaces, text, controls, actions });
+    return { body: sample('body'), surfaces: surfaces.map(sample), text: text.map(sample), controls: controls.map(sample), actions: actions.map(sample),
+      disabledControls: disabledControls.map(sample), disabledActions: disabledActions.map(sample) };
+  }, { surfaces, text, controls, actions, disabledControls, disabledActions });
   evidence.push({ name, scheme, ...state });
-  for (const item of [state.body, ...state.surfaces, ...state.text, ...state.controls, ...state.actions]) {
+  for (const item of [state.body, ...state.surfaces, ...state.text, ...state.controls, ...state.actions, ...state.disabledControls, ...state.disabledActions]) {
     assert.equal(item.missing, undefined, `${name}: visible ${item.selector}`);
   }
-  for (const item of [state.body, ...state.surfaces, ...state.controls]) {
+  for (const item of [state.body, ...state.surfaces, ...state.controls, ...state.disabledControls]) {
     assert.ok(scheme === 'dark' ? item.luminance < .18 : item.luminance > .65,
       `${name}: ${item.selector} visibly resolves ${scheme}, luminance=${item.luminance}`);
   }
@@ -61,6 +64,23 @@ async function assertStaffAppearance(page, scheme, name, { surfaces = [], text =
   for (const item of state.controls) {
     assert.equal(item.colorScheme, scheme, `${name}: ${item.selector} native scheme`);
     if (!item.disabled) assert.ok(item.boundaryContrast >= 3, `${name}: ${item.selector} boundary contrast ${item.boundaryContrast}`);
+  }
+  for (const item of state.disabledControls) {
+    assert.equal(item.disabled, true, `${name}: ${item.selector} remains disabled in library scope`);
+    assert.equal(item.textSource, 'value');
+    assert.ok(item.displayedCharacters > 0, `${name}: ${item.selector} samples a displayed value, not an unused input foreground`);
+    assert.equal(item.colorScheme, scheme, `${name}: ${item.selector} disabled native scheme`);
+    // These normal-size System values remain information staff must read even
+    // though library scope cannot edit them; preserve readable value text.
+    assert.ok(item.contrast >= 4.5, `${name}: ${item.selector} disabled value contrast ${item.contrast}`);
+  }
+  for (const item of state.disabledActions) {
+    assert.equal(item.disabled, true, `${name}: ${item.selector} remains unavailable in library scope`);
+    assert.ok(item.displayedCharacters > 0);
+    assert.equal(item.colorScheme, scheme, `${name}: ${item.selector} disabled action native scheme`);
+    // Unavailable actions are intentionally dimmed. Retain a 3:1 label floor
+    // separately from readable settings values and enabled-action contrast.
+    assert.ok(item.contrast >= 3, `${name}: ${item.selector} disabled action contrast ${item.contrast}`);
   }
   assert.equal(state.body.colorScheme, scheme, `${name}: document native scheme`);
   return state;
@@ -281,8 +301,16 @@ async function verifyStaffAppearance({ page, baseURL, library, staffIds, scan, r
       // fields in library context and the final compact/picker/template controls.
       for (const section of width === 1280 ? ['start', 'polaris', 'smtp', 'workflow', 'patron', 'templates'] : ['workflow', 'templates']) {
         await page.locator(`#settings-nav-${section}`).click();
+        const disabledSamples = section === 'start' ? {
+          disabledControls: ['#ui-system-not-enabled-msg', '#ui-misconfigured-msg'],
+          help: ['#ui-system-not-enabled-help', '#ui-misconfigured-help'], disabledActions: ['#manage-library-participation']
+        } : section === 'polaris' ? {
+          disabledControls: [], help: ['#settings-polaris .settings-scope-explanation', '#polaris-api-key-status'],
+          disabledActions: ['#btn-test-polaris', '#btn-sync-organizations']
+        } : { disabledControls: [], help: [], disabledActions: [] };
         await check(`settings-${section}`, { surfaces: [`#settings-${section} .settings-fieldset, #settings-${section} .settings-template-card`],
-          text: [`#settings-${section} .settings-panel-heading p`], controls: ['#settings-scope'] }, false);
+          text: [`#settings-${section} .settings-panel-heading p`, ...disabledSamples.help], controls: ['#settings-scope'],
+          disabledControls: disabledSamples.disabledControls, disabledActions: disabledSamples.disabledActions }, disabledSamples.help.length > 0);
       }
       await page.locator('.settings-template-toggle').first().click();
       await page.locator('.template-placeholder-trigger').first().click();
