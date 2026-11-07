@@ -161,9 +161,10 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(report.RootElement.GetProperty("duplicateTemplateHttpRollback").GetBoolean());
                 Assert.AreEqual(1, await ReadCountWithParameterAsync("""
                     SELECT COUNT(*) FROM [asap].[EmailTemplate]
-                    WHERE [Id] = 9007199254740996 AND [OrganizationId] = 1 AND [TemplateKey] = N'rejection:template_2'
+                    WHERE [Id] = 9007199254740996 AND [OrganizationId] = 1 AND [TemplateKey] = @key
                       AND [SubjectTemplate] = N'Updated System subject {{title}}' AND [BodyTemplate] = @body;
-                    """, ("@body", "First\n{{title}} & last")));
+                    """, ("@body", "First\n{{title}} & last"),
+                    ("@key", report.RootElement.GetProperty("generatedSystemTemplateKey").GetString()!)));
                 var savedFormat = await ReadSystemFormatEvidenceAsync("book");
                 Assert.AreEqual("none", savedFormat.MessageBehavior);
                 Assert.AreEqual("Draft conditional text & é", savedFormat.Message);
@@ -174,7 +175,7 @@ public sealed partial class PatronJourneyTests
             await ExecuteNonQueryAsync("""
                 DELETE FROM [asap].[EmailTemplate] WHERE [OrganizationId] = @org;
                 DELETE FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1
-                  AND [TemplateKey] IN (N'rejection:template_1', N'rejection:template_2', N'rejection:template_3');
+                  AND ([TemplateKey] IN (N'rejection:template_1', N'rejection:template_3') OR [Id] = 9007199254740996);
                 DELETE FROM [asap].[AdministrativeAudit] WHERE [Id] > @auditBefore;
                 DELETE FROM [asap].[StaffUser] WHERE [OrganizationId] = @org;
                 DELETE FROM [asap].[EmailSettings] WHERE [OrganizationId] = @org;

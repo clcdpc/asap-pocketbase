@@ -116,15 +116,12 @@ async function verifyEmailTemplateCards({ page, scan, report }) {
     assert.equal(await secondToggle.getAttribute('aria-expanded'), 'true');
     assert.equal(await page.locator('#settings-save').isDisabled(), true, 'Opening multiple cards is presentation only.');
     assert.deepEqual(mutations, []);
-    const override = card.locator('.settings-template-override');
+    const library = await page.locator('#settings-scope').inputValue() !== 'system';
     const subject = page.locator('#email-submit-subject');
     const body = page.locator('#email-submit-body');
     const trigger = card.getByRole('button', { name: 'Insert placeholder into Submission confirmation Subject', exact: true });
-    if (await override.count()) {
-      assert.equal(await trigger.isDisabled(), true);
-      assert.equal(await body.isDisabled(), true);
-      await override.check();
-    }
+    assert.equal(await trigger.isDisabled(), false);
+    assert.equal(await body.isDisabled(), false);
     const source = 'Prefix selected suffix';
     const inserted = 'Prefix {{title}} suffix';
     await subject.fill(source);
@@ -218,11 +215,11 @@ async function verifyEmailTemplateCards({ page, scan, report }) {
       assert.equal(await trigger.evaluate(node => node === document.activeElement), true);
     }
     await page.emulateMedia({ forcedColors: 'none' });
-    if (await override.count()) {
-      await override.uncheck();
-      assert.equal(await subject.isDisabled(), true); assert.equal(await trigger.isDisabled(), true);
+    if (library) {
+      await card.locator('[data-template-status="subject"] .settings-use-system').click();
+      assert.equal(await subject.isDisabled(), false); assert.equal(await trigger.isDisabled(), false);
       assert.doesNotMatch(await card.locator('.settings-template-preview-subject').textContent(), / extra/);
-      await override.check();
+      await subject.fill(`${prefix}${adjacent}${suffix}`);
       assert.equal(await subject.inputValue(), `${prefix}${adjacent}${suffix}`);
     }
     await page.locator('#add-email-template').click();
@@ -265,7 +262,7 @@ async function verifyEmailTemplateCards({ page, scan, report }) {
     }
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    const addedKey = await added.locator('.template-key').inputValue();
+    const addedKey = await added.getAttribute('data-template-key');
     const rowHandle = await added.elementHandle();
     await added.locator('.template-body').evaluate(node => node.setSelectionRange(0, 0));
     const addedTrigger = added.locator('.template-body').locator('xpath=..').locator('.template-placeholder-trigger');
@@ -280,7 +277,7 @@ async function verifyEmailTemplateCards({ page, scan, report }) {
       await moved.locator('[aria-label="Move up"]').click();
     }
     assert.equal(await moved.evaluate((node, original) => node === original, rowHandle), true);
-    assert.equal(await moved.locator('.template-key').inputValue(), addedKey);
+    assert.equal(await moved.getAttribute('data-template-key'), addedKey);
     assert.equal(await moved.locator('.template-body').inputValue(), 'Body with {{title}}');
     assert.equal(await moved.locator('[data-template-toggle]').evaluate(node => node === document.activeElement), true);
     await retired.evaluate(node => node.click());

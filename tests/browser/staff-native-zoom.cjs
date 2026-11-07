@@ -180,8 +180,7 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       await page.waitForFunction(() => document.querySelector('#settings-version').value && !document.querySelector('#settings-form').inert);
       await page.locator('#settings-nav-workflow').click();
       await providerGeometry(page);
-      const inherited = page.locator('#patron-codes-use-system');
-      if (await inherited.isVisible() && await inherited.isChecked()) await inherited.uncheck();
+
       const picker = page.locator('#patron-code-picker');
       await picker.fill('Adult');
       await picker.press('ArrowDown');

@@ -2624,7 +2624,8 @@ public sealed partial class PatronJourneyTests
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         const string retiredKey = "authority_retired";
-        const string dynamicKey = "browser_select";
+        var dynamicKey = string.Empty;
+        string?[] dynamicOptionIds = [];
         var timeoutTemplateKey = $"rejection:settings_timeout_browser_{Guid.NewGuid():N}";
         const long autoClaimStaffId = 9_007_199_254_740_993L;
         long originalStaffUserIdentity = 0;
@@ -2857,6 +2858,12 @@ public sealed partial class PatronJourneyTests
             {
                 Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
                 Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
+                var dynamicIdentity = report.RootElement.GetProperty("dynamicFieldIdentity");
+                dynamicKey = dynamicIdentity.GetProperty("key").GetString()!;
+                dynamicOptionIds = dynamicIdentity.GetProperty("optionIds").EnumerateArray()
+                    .Select(item => item.GetString()).ToArray();
+                StringAssert.StartsWith(dynamicKey, "field_");
+                Assert.HasCount(2, dynamicOptionIds);
                 Assert.IsTrue(report.RootElement.GetProperty("postedEditorPayload").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("systemParticipationRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("participationNavigationPreservedDraft").GetBoolean());
@@ -2883,11 +2890,13 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(report.RootElement.GetProperty("suggestionLimitPlaceholderRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("wildcardOriginNormalized").GetBoolean());
                 var states = report.RootElement.GetProperty("states").EnumerateArray().ToArray();
-                Assert.HasCount(14, states);
+                Assert.HasCount(17, states);
                 CollectionAssert.AreEquivalent(new[]
                 {
                     "system-desktop", "system-mobile", "library-desktop", "library-mobile",
+                    "common-creators-system-desktop",
                     "common-creators-system-mobile-off", "common-creators-system-mobile-on",
+                    "common-creators-library-inherited-desktop", "common-creators-library-owned-desktop",
                     "common-creators-library-mobile-off", "common-creators-library-mobile-on",
                     "suggestion-placeholder-mobile", "organizations-system-desktop",
                     "organizations-system-mobile", "organizations-library-mobile",
@@ -2980,7 +2989,7 @@ public sealed partial class PatronJourneyTests
             var dynamicField = fields.Single(item => item.GetProperty("key").GetString() == dynamicKey);
             Assert.IsTrue(retiredField.GetProperty("sortOrder").GetInt32() < dynamicField.GetProperty("sortOrder").GetInt32());
             var savedOptions = dynamicField.GetProperty("options").EnumerateArray().ToArray();
-            CollectionAssert.AreEqual(new[] { "zeta", "alpha" }, savedOptions
+            CollectionAssert.AreEqual(dynamicOptionIds, savedOptions
                 .Select(item => item.GetProperty("id").GetString()).ToArray());
             var rule = saved.RootElement.GetProperty("stored").GetProperty("formatRules").EnumerateArray()
                 .Single(item => item.GetProperty("code").GetString() == "book");
@@ -2996,10 +3005,10 @@ public sealed partial class PatronJourneyTests
             CollectionAssert.AreEqual(Array.Empty<int>(), saved.RootElement.GetProperty("stored").GetProperty("libraryOverride")
                 .GetProperty("allowedPatronCodeIds").GetProperty("values").EnumerateArray()
                 .Select(item => item.GetInt32()).ToArray());
-            Assert.AreEqual(1, await ReadCountAsync("""
+            Assert.AreEqual(1, await ReadCountWithParameterAsync("""
                 SELECT COUNT(*) FROM [asap].[PatronCustomField]
-                WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = N'browser_select' AND [FieldType] = N'select' AND [SortOrder] > 5;
-                """));
+                WHERE [LibraryOrganizationId] = 2 AND [FieldKey] = @key AND [FieldType] = N'select' AND [SortOrder] > 5;
+                """, ("@key", dynamicKey)));
         }
         finally
         {
@@ -3034,20 +3043,20 @@ public sealed partial class PatronJourneyTests
                 DELETE ruleRow
                 FROM [asap].[MaterialFormatCustomFieldRule] ruleRow
                 JOIN [asap].[PatronCustomField] field ON field.[Id] = ruleRow.[PatronCustomFieldId]
-                WHERE field.[LibraryOrganizationId] = 2 AND field.[FieldKey] IN (N'authority_retired', N'browser_select');
+                WHERE field.[LibraryOrganizationId] = 2 AND (field.[FieldKey] IN (N'authority_retired', @dynamicKey) OR field.[Label] = N'Browser choice');
                 DELETE optionRow
                 FROM [asap].[PatronCustomFieldOption] optionRow
                 JOIN [asap].[PatronCustomField] field ON field.[Id] = optionRow.[PatronCustomFieldId]
-                WHERE field.[LibraryOrganizationId] = 2 AND field.[FieldKey] IN (N'authority_retired', N'browser_select');
+                WHERE field.[LibraryOrganizationId] = 2 AND (field.[FieldKey] IN (N'authority_retired', @dynamicKey) OR field.[Label] = N'Browser choice');
                 DELETE FROM [asap].[PatronCustomField]
-                WHERE [LibraryOrganizationId] = 2 AND [FieldKey] IN (N'authority_retired', N'browser_select');
+                WHERE [LibraryOrganizationId] = 2 AND ([FieldKey] IN (N'authority_retired', @dynamicKey) OR [Label] = N'Browser choice');
                 UPDATE [asap].[Organization] SET [IsActive] = @organizationActive WHERE [Id] = 2;
                 DELETE FROM [asap].[AdministrativeAudit] WHERE [Id] > @auditBefore;
                 DELETE FROM [asap].[Organization] WHERE [Id] IN (3, 4, 5, 6, 7) OR [Id] BETWEEN 81001 AND 81011;
                 DELETE FROM [asap].[EmailTemplate] WHERE [Id] = @timeoutTemplateId;
                 {restoreStaffIdentitySql}
                 """, ("@organizationActive", originalOrganizationActive), ("@auditBefore", auditBefore),
-                ("@staffId", autoClaimStaffId), ("@timeoutTemplateId", timeoutTemplateId));
+                ("@staffId", autoClaimStaffId), ("@timeoutTemplateId", timeoutTemplateId), ("@dynamicKey", dynamicKey));
             await RestoreSystemOriginRowsAsync(originalOrigins);
             await RestorePatronCodeRowsAsync(1, originalSystemCodes);
             await RestorePatronCodeRowsAsync(2, originalCodes);

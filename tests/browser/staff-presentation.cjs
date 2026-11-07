@@ -340,8 +340,7 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
         };
         const ensureCommonCreatorsVisible = async () => {
           const enabled = page.locator('#common-authors-enabled');
-          const override = page.locator('[data-setting-section="workflow"][data-setting-key="commonAuthorsEnabled"] .settings-override-toggle');
-          if (await override.count() && !await override.isChecked()) await override.check();
+
           if (!await enabled.isChecked()) await enabled.check();
           await page.locator('#common-authors-options:not([hidden])').waitFor();
         };
@@ -387,10 +386,8 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
             !document.getElementById('settings-refresh').disabled && document.getElementById('settings-save-title').textContent === 'No changes');
         };
         const auditPickerVariants = async state => {
-          const inherit = page.locator('#patron-codes-use-system');
-          if (await inherit.isVisible() && await inherit.isChecked()) await inherit.uncheck();
-          const override = page.locator('[data-setting-key="patronCodeEligibilityEnabled"] .settings-override-toggle');
-          if (await override.count() && !await override.isChecked()) await override.check();
+
+
           while (await page.locator('#patron-codes-editor button').count()) await page.locator('#patron-codes-editor button').first().click();
           await page.locator('#patron-code-eligibility-enabled').check();
           assert.equal(await page.locator('#patron-code-warning').isVisible(), true);
@@ -609,14 +606,22 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
                   const rule = page.locator('#format-rules-editor [data-rule-toggle]').first();
                   if (await rule.count()) { await rule.click(); await auditSpacing(`${state}-format-expanded`); await rule.click(); }
                   if (scope !== 'system' && ['desktop', '390', 'css-200'].includes(config.name)) {
-                    const inherit = page.locator('#publication-options-use-system');
-                    if (await inherit.isChecked()) await inherit.uncheck();
+                    assert.equal(await page.locator('#add-publication-option').isEnabled(), true);
                     for (const button of ['#add-publication-option', '#add-material-format', '#add-custom-field', '#add-auto-claim-rule']) {
                       await page.locator(button).click();
                     }
                     await auditSpacing(`${state}-rows-added`);
-                    const move = page.locator('#publication-options-editor [data-domain-row]').last().getByRole('button', { name: 'Move up', exact: true });
-                    if (await move.isEnabled()) { await move.click(); await auditSpacing(`${state}-rows-reordered`); }
+                    const publications = page.locator('#publication-options-editor [data-domain-row]');
+                    const order = await publications.evaluateAll(rows => rows.map(row => row.dataset.optionId));
+                    const move = publications.last().locator('[data-row-action="up"]');
+                    assert.match(await move.getAttribute('aria-label'), /^Move .+ up$/, 'Publication moves retain row-specific names.');
+                    if (await move.isEnabled()) {
+                      await move.click();
+                      [order[order.length - 2], order[order.length - 1]] = [order.at(-1), order.at(-2)];
+                      assert.deepEqual(await publications.evaluateAll(rows => rows.map(row => row.dataset.optionId)), order,
+                        'Moving a publication option preserves its generated identity and moves the intended row.');
+                      await auditSpacing(`${state}-rows-reordered`);
+                    }
                     await discardSpacingDraft();
                   }
                 }
@@ -762,8 +767,7 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
           if (await page.locator('#add-provider').isVisible()) await measureHeading('#add-provider');
           await ensureCommonCreatorsVisible();
           await measureHeading('#add-common-creator');
-          const inherit = page.locator('#common-creators-use-system');
-          if (await inherit.isVisible() && await inherit.isChecked()) await inherit.uncheck();
+
           await page.locator('#add-common-creator').click();
           await page.locator('#common-creators-editor [data-domain-row]').last().locator('input').fill('Spacing regression creator');
           const rowGaps = await measureActions('#common-creators-editor [data-domain-row]:last-child .settings-row-actions');

@@ -186,8 +186,8 @@ async function flush() {
       'the initial library scope is accepted only after its settings response settles');
 
     const alt = document.getElementById('branding-alt');
-    const altOverride = alt.closest('[data-setting-section]').querySelector('.settings-override-toggle');
-    assert.strictEqual(altOverride.checked, false);
+    assert.match(alt.closest('[data-setting-section]').textContent, /Using system value/);
+    assert.equal(alt.disabled, false);
     assert.strictEqual(alt.value, 'System inherited alt');
 
     const image = new dom.window.File([new Uint8Array([137, 80, 78, 71])], 'logo.png', { type: 'image/png' });

@@ -278,7 +278,7 @@ test('library context disables participation/navigation and never switches scope
     assert.equal(writes.length, 0);
     controller.activatePanel('patron');
     const note = get('#patron-login-note');
-    note.closest('[data-setting-section]').querySelector('.settings-override-toggle').click();
+    assert.equal(note.disabled, false);
     note.value = 'Library-only draft'; note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
     get('#settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     await until(() => writes.length === 1 && !controller.hasPendingMutation());

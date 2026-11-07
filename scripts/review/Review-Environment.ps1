@@ -148,7 +148,9 @@ function Get-ReviewToolingPaths {
     # Explicit inputs exclude local configuration, secrets, generated output and the repository itself.
     return @('package.json', 'package-lock.json', 'scripts/review', 'dev/review/src', 'dev/review/Containerfile',
         'dev/review/acceptance-entrypoint.sh', 'dev/review/runtime.cjs', 'dev/review/appsettings.Testing.json',
-        'dev/review/VERSION', 'tests/acceptance', 'tests/browser/confirmation.cjs', 'tests/browser/native-zoom-extension')
+        'dev/review/VERSION', 'tests/acceptance', 'tests/browser/confirmation.cjs', 'tests/browser/native-zoom-extension',
+        'tests/browser/settings-format-rule-drafts.cjs', 'tests/browser/settings-inheritance-interactions.cjs',
+        'tests/browser/settings-draft-blockers.cjs')
 }
 
 function Copy-ReviewTooling {

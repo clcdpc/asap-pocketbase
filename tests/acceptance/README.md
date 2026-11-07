@@ -1,5 +1,19 @@
 # ASAP automated acceptance
 
+The focused `i471` suite checks Settings identities and history, Add rule,
+inheritance, compact rows, draft blockers and save recovery using disposable SQL.
+Run from this tooling checkout against an immutable application commit:
+
+```powershell
+.\scripts\review\Invoke-AsapReview.ps1 -Commit <full-application-sha> -Suite i471
+```
+
+Its eleven independent scenarios, lower-level evidence, injected empty-catalog boundary,
+human checks and integration instructions are mapped in [i471-evidence.md](i471-evidence.md).
+`-ReadOnly` runs only the empty-catalog scenario and reports ten required write
+scenarios NOT RUN (exit 2). Normal runs need no endpoint/record/scope permissions.
+
+
 ```powershell
 .\scripts\review\Invoke-AsapReview.ps1 -Pr 415 -Suite s1,d1,q1
 ```
@@ -70,19 +84,19 @@ node --test tests/acceptance/direct-actions.test.cjs
 ```
 
 The `i390` Format rules suite reviews real synthetic SQL settings in System and
-Review Library scopes. It checks complete collapsed cards, configured names/codes,
-Required/Optional/Hidden summaries (including enabled and retained disabled custom
-rules), independent keyboard disclosures, Tab behavior and dirty-state restoration.
+Review Library scopes. It checks complete collapsed cards, effective configured
+names and retained identities, Required/Optional/Hidden summaries (including enabled
+and retained disabled custom rules), independent keyboard disclosures, Tab behavior
+and dirty-state restoration.
 Live Material formats draft names update expanded/collapsed headers and accessible
-names, including code-qualified move/delete actions for duplicate labels, without
+names, including positional move/delete context for duplicate labels, without
 replacing controls or independently dirtying Format rules. In either scope, a
 malformed collapsed requirement blocks redraw and global Save before any POST.
 The library draft also removes a hidden control deliberately, checks that Add field
 cannot repair it with a default, and verifies global Save fails before any POST.
 Geometry, axe and screenshots cover desktop, a 540px editor inside a wide window,
 390px mobile, forced colors/reduced motion, and verified native 200% zoom, expanded
-and collapsed. It uses the existing read-only runner guards; no Settings POST is
-authorized. Persisted Save/inheritance and hidden-DOM failure cases remain in the
+and collapsed. It uses the existing read-only runner guards; this suite submits no Settings POST. Persisted Save/inheritance and hidden-DOM failure cases remain in the
 retained Settings SQL/browser journeys; `pr410` covers global Discard and Reset.
 
 Run the issue suite and selected regressions exactly once in order from PowerShell 7:
@@ -111,7 +125,7 @@ help, and System/library geometry at 1440px, 1000px, 390px and native 200% zoom.
 Screenshots and geometry JSON accompany axe/image/overflow checks. Catalog failure
 is an injected pre-dispatch GET failure; successful choices come from the real
 deterministic backend. Each scenario verifies stored Settings and their version
-are unchanged. No Settings write permission or runner guard is broadened.
+are unchanged. No persistence is claimed for these browser drafts.
 Persisted Save, Discard, explicit `[]`, inherited `null`, scope/version races and
 patron policy remain the retained SQL integration/browser tests' responsibility.
 
@@ -212,14 +226,17 @@ Microsoft request; production authentication is unchanged. The runtime creates
 protected synthetic Polaris settings for the normal readiness checks. No live
 Polaris or Postmark calls are authorized.
 
-Only the scenario's allowed request kind and fixture ID may mutate in the
-verified disposable runtime. Missing or consumed fixtures block the scenario.
-The approved Settings reset scenario may separately authorize one
-`POST /api/asap/staff/settings/reset?organizationId=2`, bound to the exact
-Settings version it read. Other Settings writes and library scopes are blocked;
-read-only scenarios cannot authorize a reset. Runtime and staff checks still
-run at the mutation boundary.
-Unexpected external requests, writes, native dialogs, page errors, serious or
+Normal runs may mutate any application operation on the verified local disposable
+app/database, including Settings POST/reset and Staff POST/PUT/DELETE. No fixture,
+endpoint, scope, version or request permission grants are installed by the runner.
+Application authorization, antiforgery, validation, transactions and rowversions
+remain authoritative. Scenario `writes` metadata selects required skips in
+`-ReadOnly` mode and describes coverage; it does not grant write permission.
+Read-only mode blocks browser mutations even in a scenario mistakenly marked
+read-only. Fixture-pristine checks and no-write assertions on navigation, Cancel
+and Discard remain application-behavior assertions.
+
+Unexpected external requests, read-only writes, native dialogs, page errors, serious or
 critical axe findings, missing images and page overflow fail the run. Native
 200% zoom uses the existing extension and verifies DPR/CDP zoom with CSS zoom 1.
 Dialog checks use the visual viewport, text geometry, ancestor clipping,
@@ -388,11 +405,15 @@ names fail with available names and a local-checkout update hint. Discover with
 tooling automatically. Default omission still selects only `smoke`; select
 `-Suite smoke,s1,d1,q1` explicitly when infrastructure diagnosis is useful.
 
-Default writes preserve the same runtime, staff, fixture, endpoint, library and
-rowversion guards. Never use real/shared data, live providers or external services.
-Containers expose no ports and mount only their evidence directory, never the
-host repository or persistent SQL volumes. Application PR source runs only in
-the image/container. Cleanup retains evidence after failures and interruption.
+Default writes require the verified local runtime and normal staff session. Never
+use real/shared data or live providers. Containers publish no ports and mount only
+their evidence directory, never a host checkout or persistent SQL volume. This
+limits inbound access and shared-state exposure; **it is not outbound-network
+isolation**. The browser route blocks external requests, Polaris uses deterministic
+providers with synthetic `.invalid` credentials, and email uses local capture.
+Container processes still have outbound network capability; this is a trusted
+application-code test runner, not a sandbox for hostile source. Cleanup retains
+sanitized evidence after failures and interruption.
 
 Repository developers may use their existing .NET/Node/Chromium installation:
 
@@ -431,7 +452,7 @@ interrupts initialization, and kills SQL unexpectedly. Each case must export
 the correct nonzero result and diagnostics and leave no container behind.
 
 Add a future suite as `suites/<id>.cjs` and add its name to `registry.json`.
-Reuse the existing scenarios/helpers, fixture allowlist and report contract.
+Reuse the existing scenarios/helpers, fixture assertions and report contract.
 The runner test derives its expected registry from sorted suite modules, checks
 exact JSON/export coverage, and keeps the individual suites' scenario and write
 invariants. Adding a suite does not require editing an expected suite count/list.
@@ -444,7 +465,7 @@ combined content during qualification and any later updates:
 
 | Shared file | Required combined result |
 | --- | --- |
-| `suites/registry.json` | `["d1", "i390", "i403", "pr410", "q1", "s1", "smoke"]`, each once, sorted |
+| `suites/registry.json` | `["d1", "i390", "i403", "i471", "pr410", "q1", "s1", "smoke"]`, each once, sorted |
 | `runner.test.cjs` | Dynamic module discovery and exact registry coverage; all i390 assertions (four read-only scenarios), all i403 assertions (six scenarios, only keyboard/guarded dispatch writes), and every existing suite invariant; current discovery-based CI/browser guards |
 | `README.md` | Both issue-suite descriptions, commands, evidence and authorization limits |
 | `../browser/staff-native-zoom.cjs` | Both Format-rule and action helper imports; collapsed/expanded Format rules scans plus direct/overflow action geometry, sole Reopen and full offscreen-focus restoration at native 200%, scoped axe, Escape/focus and full table scans; verify all nine named states at each of 1280/1440 physical pixels (18 checkpoints) in both JS and SQL browser assertions |

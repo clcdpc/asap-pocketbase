@@ -94,6 +94,13 @@ internal static class ReviewInitializer
                     using var reviewerReader = new StreamReader(reviewerSource);
                     fixtureCommand.CommandText = await reviewerReader.ReadToEndAsync(fixtureTimeout.Token);
                     await fixtureCommand.ExecuteNonQueryAsync(fixtureTimeout.Token);
+                    if (Environment.GetEnvironmentVariable("REVIEW_SUITE") == "i471")
+                    {
+                        using var settingsSource = typeof(ReviewInitializer).Assembly.GetManifestResourceStream("Asap.ReviewInit.I471Fixtures.sql")!;
+                        using var settingsReader = new StreamReader(settingsSource);
+                        fixtureCommand.CommandText = await settingsReader.ReadToEndAsync(fixtureTimeout.Token);
+                        await fixtureCommand.ExecuteNonQueryAsync(fixtureTimeout.Token);
+                    }
                 }
             }
             else if (!string.Equals(input.Seed, "None", StringComparison.OrdinalIgnoreCase))

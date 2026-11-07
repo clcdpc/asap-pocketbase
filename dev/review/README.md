@@ -161,11 +161,18 @@ groups and exports diagnostics. SQL data, certificates, cookies and configuratio
 disappear with the container. Only the artifact directory is mounted from Windows;
 no ports are published.
 
-Default writes do not grant access to production/shared data. The same local
-runtime/SQL/reviewer verification and per-scenario fixture/endpoint/version
-allowlists apply before mutations. External requests, live providers and
-unapproved mutations remain blocked; no host repository or persistent data
-volume is mounted. Never point acceptance at a non-disposable environment.
+Normal runs allow unrestricted application mutations inside the verified disposable
+app/database; scenario write metadata is for selection/reporting. The runner has
+no per-endpoint, record, scope or request grants. Normal SQL authorization,
+antiforgery, validation and rowversion checks still apply. Explicit read-only mode
+skips required write scenarios and blocks accidental browser mutations.
+
+No host repository or persistent data volume is mounted. No published ports
+limits inbound exposure; it does **not** establish outbound-network isolation.
+Browser routes block external requests, Polaris providers are deterministic with
+synthetic `.invalid` credentials, and email is captured locally. Other container
+processes retain outbound capability. This trusted-code acceptance runner is not
+a firewall or hostile-code sandbox. Never point it at shared data.
 
 Local authentication seeds `reviewer@example.org`, an active System super-admin
 with access to Review Library (2), and uses the existing normal secure staff

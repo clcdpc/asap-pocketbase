@@ -11,6 +11,22 @@ const { parse, run, runScenarios } = require('./run.cjs');
 const { screenshot, registerScreenshotPage } = require('./helpers/accessibility.cjs');
 const appSha = 'a'.repeat(40), toolSha = 'b'.repeat(40);
 const repository = path.resolve(__dirname, '../..');
+test('confirmation failure is observed while its trigger is still pending', async () => {
+  const { decideConfirmation } = require('../browser/confirmation.cjs');
+  const page = { locator: () => ({ waitFor: async () => { throw new Error('Synthetic confirmation unavailable'); } }) };
+  const action = new Promise(resolve => setTimeout(resolve, 25));
+  await assert.rejects(decideConfirmation(page, () => action, () => {}), /Synthetic confirmation unavailable/);
+  await action;
+});
+test('non-assertion failures retain a code location without exporting error values', async t => {
+  const root = await temporary(t), directory = path.join(root, 'timeout-source'); await fs.mkdir(directory);
+  const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios: [] };
+  await runScenarios({ suite: { scenarios: [{ id: 'timeout', requirements: ['Sanitized diagnostics'], run: async () => {
+    const error = new Error('Cookie=private-error-canary'); error.name = 'TimeoutError'; throw error;
+  } }] }, options: {}, environment: environment(root), browser: fakeBrowser(), report, directory, verify: async () => environment(root) });
+  assert.match(report.scenarios[0].source, /^tests\/acceptance\/runner.test.cjs:\d+:\d+$/);
+  assert.doesNotMatch(await fs.readFile(path.join(directory, 'timeout-failure-trace.json'), 'utf8'), /private-error-canary|Cookie=/);
+});
 const clone = value => JSON.parse(JSON.stringify(value));
 function state() {
   return { Sha: appSha, Auth: 'Local', ToolingVersion: '0.4.0', ToolingSha: toolSha };
@@ -218,138 +234,57 @@ test('actual scenario executor produces failure trace/results without network se
   assert.match(trace.events.at(-1).assertion.label, /Action count/);
   assert.ok(await fs.stat(path.join(directory, 'results.json')));
 });
-test('mutation guard blocks cross-kind IDs, other scenario fixtures, external requests and read-only writes', async t => {
-  const root = await temporary(t), directory = path.join(root, 'guards'); await fs.mkdir(directory);
-  for (const pathname of ['/api/asap/staff/additional-copies/27/close', '/api/asap/staff/title-requests/999/action',
-    'https://example.org/api/asap/staff/title-requests/27/action']) {
-    const browser = fakeBrowser();
-    const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios: [] };
-    let aborted = false;
-    const suite = { scenarios: [{ id: 'guarded', writes: true, requirements: ['isolation'], run: async t => {
-      t.allowFixture(evidence().titles[0]);
-      await browser.context.handler({ request: () => ({ url: () => new URL(pathname, t.origin).href, method: () => 'POST' }),
-        abort: async () => { aborted = true; }, continue: async () => {} });
-    } }] };
-    await runScenarios({ suite, options: { allowWrites: true }, environment: environment(root),
-      browser, report, directory, verify: async () => environment(root) });
-    assert.equal(aborted, true); assert.equal(report.scenarios[0].status, 'FAIL');
-  }
-});
-
-const settingsVersion = Buffer.alloc(32, 7).toString('base64');
-const resetPath = '/api/asap/staff/settings/reset?organizationId=2';
-async function settingsGuard(t, { options = { allowWrites: true }, writes = true, authorize = true,
-  pathname = resetPath, method = 'POST', body = { version: settingsVersion }, submissions = 1, revoke = false } = {}) {
-  const root = await temporary(t), directory = path.join(root, 'settings-guard'); await fs.mkdir(directory);
+async function dispatchProbe(t, { readOnly = false, writes = false, path: pathname = '/api/asap/staff/settings', method = 'POST', revoke = false } = {}) {
+  const root = await temporary(t), directory = path.join(root, 'dispatch'); await fs.mkdir(directory);
   const browser = fakeBrowser(), report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios: [] };
-  let checks = 0, admitted = 0, aborted = 0, mutations;
-  await runScenarios({ suite: { scenarios: [{ id: 'settings-guard', writes, requirements: ['Settings reset isolation'], run: async scenario => {
-    mutations = scenario.mutations;
-    if (authorize) scenario.allowSettingsReset({ organizationId: 2, version: settingsVersion });
-    const submit = () => browser.context.handler({ request: () => ({ url: () => new URL(pathname, scenario.origin).href,
-      method: () => method, postDataJSON: () => { if (body === 'malformed') throw new Error('Invalid JSON'); return body; } }),
-      abort: async () => { aborted++; }, continue: async () => { admitted++; } });
-    // Concurrent attempts exercise reservation before async runtime verification.
-    await Promise.all(Array.from({ length: submissions }, submit));
-    if (authorize) assert.throws(() => scenario.allowSettingsReset({ organizationId: 2, version: settingsVersion }), /only once/);
-  } }] }, options, environment: environment(root), browser, report, directory,
-  verify: async () => { if (checks++ && revoke) throw new Blocked('Review runtime unavailable.'); return environment(root); } });
-  return { admitted, aborted, checks, mutations, status: report.scenarios[0].status };
+  let dispatched = 0, aborted = 0, checks = 0, metadata;
+  await runScenarios({ suite: { scenarios: [{ id: 'dispatch', writes, requirements: ['Disposable mutations'], run: async scenario => {
+    metadata = scenario.mutations;
+    assert.equal(scenario.allowFixture, undefined);
+    assert.equal(scenario.allowSettingsReset, undefined);
+    await browser.context.handler({ request: () => ({ url: () => new URL(pathname, scenario.origin).href, method: () => method,
+      postDataJSON: () => ({ secret: 'settings-document-canary' }) }),
+      abort: async () => { aborted++; }, continue: async () => { dispatched++; } });
+  } }] }, options: { readOnly }, environment: environment(root), browser, report, directory,
+  verify: async () => { if (checks++ && revoke) throw new Blocked('Runtime unavailable.'); return environment(root); } });
+  return { dispatched, aborted, checks, metadata, report, directory };
 }
 
-test('Settings reset guard denies unauthorized modes, endpoints, scopes and versions', async t => {
-  const cases = [
-    ['read-only mode', { options: { readOnly: true, allowWrites: false }, writes: false, authorize: false }],
-    ['internal writes disabled', { options: { allowWrites: false }, authorize: false }],
-    ['no scenario authorization', { authorize: false }],
-    ['wrong organization', { pathname: '/api/asap/staff/settings/reset?organizationId=3' }],
-    ['wrong method', { method: 'DELETE' }],
-    ['GET reset', { method: 'GET' }],
-    ['other Settings write', { pathname: '/api/asap/staff/settings?orgId=2' }],
-    ['library alias write', { pathname: '/api/asap/staff/settings/library?orgId=2' }],
-    ['trailing path', { pathname: '/api/asap/staff/settings/reset/' }],
-    ['missing query', { pathname: '/api/asap/staff/settings/reset' }],
-    ['wrong query key', { pathname: '/api/asap/staff/settings/reset?orgId=2' }],
-    ['extra query', { pathname: resetPath + '&other=true' }],
-    ['duplicate organization', { pathname: resetPath + '&organizationId=3' }],
-    ['missing version', { body: {} }],
-    ['empty version', { body: { version: '' } }],
-    ['mismatched version', { body: { version: Buffer.alloc(32, 8).toString('base64') } }],
-    ['malformed JSON', { body: 'malformed' }],
-    ['extra payload fields', { body: { version: settingsVersion, patron: {} } }],
-    ['external origin', { pathname: 'https://example.org' + resetPath }]
-  ];
-  for (const [label, input] of cases) {
-    await t.test(label, async t => {
-      const outcome = await settingsGuard(t, input);
-      assert.equal(outcome.admitted, 0);
-      assert.equal(outcome.aborted, 1);
-      assert.equal(outcome.checks, 1, 'Unauthorized writes never reach runtime revalidation');
-      assert.deepEqual(outcome.mutations, []);
-      assert.equal(outcome.status, 'FAIL');
-    });
+test('normal disposable runs permit Settings, Staff, other records and every mutation method without grants', async t => {
+  for (const [method, pathname] of [['POST', '/api/asap/staff/settings'], ['PUT', '/api/asap/staff/users/999'],
+    ['PATCH', '/api/asap/staff/users/27'], ['DELETE', '/api/asap/staff/users/27'],
+    ['POST', '/api/asap/staff/settings/reset?organizationId=47102'], ['POST', '/api/asap/staff/additional-copies/999/close']]) {
+    const outcome = await dispatchProbe(t, { method, path: pathname });
+    assert.equal(outcome.dispatched, 1); assert.equal(outcome.aborted, 0);
+    assert.equal(outcome.checks, 2); assert.equal(outcome.report.scenarios[0].status, 'PASS');
+    assert.equal(outcome.metadata.length, 1);
+    assert.doesNotMatch(JSON.stringify(outcome.metadata), /settings-document-canary|secret/);
   }
 });
 
-test('only a mutating scenario with explicit write permission may authorize Review Library reset', async t => {
-  for (const input of [{ writes: false }, { options: { allowWrites: false } },
-    { writes: false, options: { readOnly: true, allowWrites: false } }]) {
-    const outcome = await settingsGuard(t, input);
-    assert.equal(outcome.admitted, 0);
-    assert.equal(outcome.status, 'BLOCKED');
+test('external requests remain blocked and runtime loss blocks all local writes', async t => {
+  for (const input of [{ path: 'https://example.org/api/asap/staff/settings' }, { method: 'PUT', revoke: true }]) {
+    const outcome = await dispatchProbe(t, input);
+    assert.equal(outcome.dispatched, 0); assert.equal(outcome.aborted, 1);
+    assert.equal(outcome.report.scenarios[0].status, input.revoke ? 'BLOCKED' : 'FAIL');
   }
-  const root = await temporary(t), directory = path.join(root, 'authorization'); await fs.mkdir(directory);
-  const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios: [] };
-  await runScenarios({ suite: { scenarios: [{ id: 'authorization', writes: true, requirements: ['version and scope'], run: async scenario => {
-    for (const authorization of [{ organizationId: 3, version: settingsVersion }, { organizationId: 2 },
-      { organizationId: 2, version: '' }, { organizationId: 2, version: 'not-a-settings-version' }]) {
-      assert.throws(() => scenario.allowSettingsReset(authorization), Blocked);
-    }
-  } }] }, options: { allowWrites: true }, environment: environment(root), browser: fakeBrowser(), report, directory,
-  verify: async () => environment(root) });
-  assert.equal(report.scenarios[0].status, 'PASS');
 });
 
-test('one authorized Settings reset is admitted, revalidated and recorded; concurrent second POST is denied', async t => {
-  const once = await settingsGuard(t);
-  assert.equal(once.status, 'PASS');
-  assert.equal(once.admitted, 1);
-  assert.equal(once.checks, 2);
-  assert.deepEqual(once.mutations, [{ path: '/api/asap/staff/settings/reset', method: 'POST', organizationId: 2, version: settingsVersion }]);
-  const twice = await settingsGuard(t, { submissions: 2 });
-  assert.equal(twice.status, 'FAIL');
-  assert.equal(twice.admitted, 1);
-  assert.equal(twice.aborted, 1);
-  assert.equal(twice.mutations.length, 1);
-  assert.equal(twice.checks, 2);
-  const revoked = await settingsGuard(t, { revoke: true });
-  assert.equal(revoked.status, 'BLOCKED');
-  assert.equal(revoked.admitted, 0);
-  assert.deepEqual(revoked.mutations, []);
+test('read-only mode rejects accidental writes of every method and skips required write scenarios before execution', async t => {
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    const outcome = await dispatchProbe(t, { readOnly: true, method });
+    assert.equal(outcome.dispatched, 0); assert.equal(outcome.aborted, 1);
+    assert.equal(outcome.checks, 1); assert.equal(outcome.report.scenarios[0].status, 'FAIL');
+  }
+  const skipped = await dispatchProbe(t, { readOnly: true, writes: true });
+  assert.equal(skipped.dispatched, 0); assert.equal(skipped.aborted, 0); assert.equal(skipped.checks, 0);
+  assert.equal(skipped.report.scenarios[0].status, 'NOT RUN'); assert.equal(exitCode(skipped.report), 2);
 });
 
-test('authorized title-request and additional-copy mutations retain fixture and runtime guards', async t => {
-  const root = await temporary(t), directory = path.join(root, 'existing-guards'); await fs.mkdir(directory);
-  const browser = fakeBrowser(), report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios: [] };
-  let admitted = 0, checks = 0;
-  await runScenarios({ suite: { scenarios: [{ id: 'existing-guards', writes: true, requirements: ['existing mutation authorization'], run: async scenario => {
-    scenario.allowFixture(evidence().titles[0]);
-    scenario.allowFixture({ key: 'acceptance-pr410-copy', id: '12' });
-    for (const pathname of ['/api/asap/staff/title-requests/27/action', '/api/asap/staff/additional-copies/12/close',
-      '/api/asap/staff/additional-copies/12/reopen']) {
-      await browser.context.handler({ request: () => ({ url: () => scenario.origin + pathname, method: () => 'POST' }),
-        abort: async () => assert.fail('Authorized existing fixture write was blocked'), continue: async () => { admitted++; } });
-    }
-  } }] }, options: { allowWrites: true }, environment: environment(root), browser, report, directory,
-  verify: async () => { checks++; return environment(root); } });
-  assert.equal(report.scenarios[0].status, 'PASS');
-  assert.equal(admitted, 3);
-  assert.equal(checks, 4);
-});
 test('existing frontend/browser entry points and full CI guard remain; artifacts are Git ignored', async () => {
-  // Main's current discovery-based guards supersede the retired fixed totals.
+  // Preserve the current main baseline, including its discovery/reuse guards.
   for (const file of ['package.json', 'tests/browser/run.cjs', 'scripts/ci/selection.py']) {
-    const baseline = execFileSync('git', ['show', '8c4493578440a77c5f6f40bd6ccb6d0aef64b9fc:' + file], { cwd: repository, encoding: 'utf8' });
+    const baseline = execFileSync('git', ['show', 'e20c06986ab4f1f8515e7f0be8b76d9a42aa77a9:' + file], { cwd: repository, encoding: 'utf8' });
     assert.equal((await fs.readFile(path.join(repository, file), 'utf8')).replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n'));
   }
   const workflow = await fs.readFile(path.join(repository, '.github/workflows/dotnet.yml'), 'utf8');
@@ -371,7 +306,6 @@ test('read-only executor never dispatches a server write', async t => {
   const browser = fakeBrowser(), report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios: [] };
   let dispatched = false, aborted = false;
   await runScenarios({ suite: { scenarios: [{ id: 'read-only', writes: false, requirements: ['mutation safety'], run: async t => {
-    t.allowFixture(evidence().titles[0]);
     await browser.context.handler({ request: () => ({ url: () => t.origin + '/api/asap/staff/title-requests/27/action', method: () => 'POST' }),
       abort: async () => { aborted = true; }, continue: async () => { dispatched = true; } });
   } }] }, options: { readOnly: true, allowWrites: false }, environment: environment(root), browser, report, directory,
@@ -397,7 +331,6 @@ test('loss of runtime evidence at the mutation boundary blocks dispatch and repo
   const browser = fakeBrowser(), report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' }, scenarios: [] };
   let checks = 0, dispatched = false;
   await runScenarios({ suite: { scenarios: [{ id: 'revoked', writes: true, requirements: ['revocation'], run: async t => {
-    t.allowFixture(evidence().titles[0]);
     await browser.context.handler({ request: () => ({ url: () => t.origin + '/api/asap/staff/title-requests/27/action', method: () => 'POST' }),
       abort: async () => {}, continue: async () => { dispatched = true; } });
   } }] }, options: { allowWrites: true }, environment: environment(root), browser, report, directory,
@@ -485,6 +418,22 @@ test('D1 registers read-only coverage independently of its explicitly authorized
     ['d1-toolbar-layout', false], ['d1-action-focus', false], ['d1-research-patron', false],
     ['d1-closed-locks', false], ['d1-activity', false], ['d1-close-reopen-refresh', true]
   ]);
+});
+
+test('i471 read-only selection reports every required write scenario NOT RUN without executing setup', async t => {
+  const root = await temporary(t), directory = path.join(root, 'i471-read-only'); await fs.mkdir(directory);
+  const suite = require('./suites/i471.cjs'), executed = [];
+  assert.equal(suite.scenarios.length, 11);
+  assert.equal(suite.scenarios.filter(row => row.writes).length, 10);
+  const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' },
+    requiredScenarioIds: suite.scenarios.map(row => row.id), scenarios: [] };
+  await runScenarios({ suite: { ...suite, scenarios: suite.scenarios.map(row => ({ ...row,
+    run: async () => { assert.equal(row.writes, false); executed.push(row.id); } })) }, options: { readOnly: true },
+    environment: environment(root), browser: fakeBrowser(), report, directory, verify: async () => environment(root) });
+  assert.deepEqual(executed, ['i471-empty-format-prerequisite']);
+  assert.equal(report.scenarios.filter(row => row.status === 'NOT RUN').length, 10);
+  assert.equal(exitCode(report), 2);
+  assert.equal(JSON.parse(await fs.readFile(path.join(directory, 'results.json'), 'utf8')).automatedFunctionalAcceptance, 'INCOMPLETE');
 });
 
 test('D1 admits only pristine synthetic closed/protected/history fixture states', () => {

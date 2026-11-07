@@ -211,9 +211,6 @@ async function flush() {
     assert.strictEqual(discard.hidden, true);
     assert.strictEqual(reset.hidden, false);
     assert.strictEqual(reset.disabled, false);
-    const override = document.querySelector('[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle');
-    override.checked = true;
-    override.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     const note = document.getElementById('patron-login-note');
     note.value = 'Saved library note';
     note.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
@@ -407,10 +404,6 @@ async function flush() {
         assert.strictEqual(version.value, 'settings-v1');
 
         if (kind === 'save') {
-          const overrideToggle = document.querySelector(
-            '[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle');
-          overrideToggle.checked = true;
-          overrideToggle.dispatchEvent(new witnessDom.window.Event('change', { bubbles: true }));
           const loginNote = document.getElementById('patron-login-note');
           loginNote.value = 'Unconfirmed saved note';
           loginNote.dispatchEvent(new witnessDom.window.Event('input', { bubbles: true }));
@@ -513,10 +506,6 @@ async function flush() {
     retiredController.bind();
     retiredController.setStaff(retiredActor);
     await retiredController.activate();
-    const retiredOverride = document.querySelector(
-      '[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle');
-    retiredOverride.checked = true;
-    retiredOverride.dispatchEvent(new retiredDom.window.Event('change', { bubbles: true }));
     const retiredNote = document.getElementById('patron-login-note');
     retiredNote.value = 'Actor A uncertain save';
     retiredNote.dispatchEvent(new retiredDom.window.Event('input', { bubbles: true }));

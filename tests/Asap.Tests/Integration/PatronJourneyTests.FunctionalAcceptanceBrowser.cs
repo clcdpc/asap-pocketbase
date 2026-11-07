@@ -85,8 +85,8 @@ public sealed partial class PatronJourneyTests
                     admin.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(admin));
                     using var snapshot = await ReadSettingsDocumentAsync(admin, library.ToString(CultureInfo.InvariantCulture));
                     var fields = JsonNode.Parse(snapshot.RootElement.GetProperty("stored").GetProperty("customFields").GetRawText())!.AsArray();
-                    var required = fields.Single(item => item!["key"]!.GetValue<string>() == "required_choice")!;
-                    required["options"]!.AsArray().Single(item => item!["id"]!.GetValue<string>() == "alpha")!["enabled"] = false;
+                    var required = fields.Single(item => item!["label"]!.GetValue<string>() == "Required choice")!;
+                    required["options"]!.AsArray().Single(item => item!["label"]!.GetValue<string>() == "Alpha display")!["enabled"] = false;
                     using var saved = await SaveSettingsDocumentAsync(admin, snapshot.RootElement,
                         library.ToString(CultureInfo.InvariantCulture), new Dictionary<string, object?> { ["customFields"] = fields });
                     Assert.AreEqual("saved", saved.RootElement.GetProperty("code").GetString());
@@ -129,6 +129,12 @@ public sealed partial class PatronJourneyTests
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "browser-results.json")));
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
+            var identities = report.RootElement.GetProperty("identities");
+            var fieldKeys = identities.GetProperty("fields");
+            var recommendationKey = fieldKeys.GetProperty("recommendation_note").GetString()!;
+            var requiredKey = fieldKeys.GetProperty("required_choice").GetString()!;
+            var optionalKey = fieldKeys.GetProperty("optional_choice").GetString()!;
+            var requiredOptions = identities.GetProperty("options").GetProperty("required_choice");
             foreach (var invariant in new[] { "settingsRejectionUnchanged", "settingsStaleWinnerPreserved",
                          "pendingSubmitSinglePost", "optionalChoicesCleared", "lostCommitLocked",
                          "committedOldIdentityIgnored", "currentConfigurationRejected", "weeklyLimitRejected",
@@ -156,19 +162,19 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("automatic_format_rule", committed.ClaimType);
             using (var snapshot = JsonDocument.Parse(committed.CustomFieldsJson!))
             {
-                Assert.IsFalse(snapshot.RootElement.TryGetProperty("optional_choice", out _));
-                Assert.AreEqual("Book recommendation detail", snapshot.RootElement.GetProperty("recommendation_note")
+                Assert.IsFalse(snapshot.RootElement.TryGetProperty(optionalKey, out _));
+                Assert.AreEqual("Book recommendation detail", snapshot.RootElement.GetProperty(recommendationKey)
                     .GetProperty("label").GetString());
-                Assert.AreEqual("Acceptance detail", snapshot.RootElement.GetProperty("recommendation_note")
+                Assert.AreEqual("Acceptance detail", snapshot.RootElement.GetProperty(recommendationKey)
                     .GetProperty("value").GetString());
-                var choice = snapshot.RootElement.GetProperty("required_choice");
-                Assert.AreEqual("alpha", choice.GetProperty("value").GetString());
+                var choice = snapshot.RootElement.GetProperty(requiredKey);
+                Assert.AreEqual(requiredOptions.GetProperty("alpha").GetString(), choice.GetProperty("value").GetString());
                 Assert.AreEqual("Alpha display", choice.GetProperty("displayValue").GetString());
             }
             var current = requests.Single(item => item.Title == "Acceptance Current Config");
             using (var snapshot = JsonDocument.Parse(current.CustomFieldsJson!))
             {
-                Assert.AreEqual("beta", snapshot.RootElement.GetProperty("required_choice").GetProperty("value").GetString());
+                Assert.AreEqual(requiredOptions.GetProperty("beta").GetString(), snapshot.RootElement.GetProperty(requiredKey).GetProperty("value").GetString());
             }
             Assert.AreEqual(1, provider.Calls.Count(item => item.Operation == TestingPolarisOperation.PickupUpdate),
                 "Exactly one positive-control pickup write; ambiguous response/retries must not dispatch additional writes.");

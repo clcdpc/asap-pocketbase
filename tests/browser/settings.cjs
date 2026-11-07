@@ -5,7 +5,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
+const { runLibraryFormatRuleDrafts } = require('./settings-format-rule-drafts.cjs');
 const { verifyEmailTemplateCards } = require('./email-template-cards.cjs');
+const { verifyInheritanceInteractions } = require('./settings-inheritance-interactions.cjs');
+const { verifySettingsDraftBlockers } = require('./settings-draft-blockers.cjs');
 const { contrast } = require('./settings-accessibility.cjs');
 const settingsSpacingRecorder = require('./settings-spacing.cjs');
 
@@ -109,6 +112,22 @@ async function scan(page, axeSource, artifactRoot, report, viewport, checkTimeou
   }
 }
 
+async function librarySetting(field) {
+  const status = field.locator(':scope > .settings-inheritance .settings-inheritance-status');
+  return await status.count() ? (await status.first().textContent()).startsWith('Library setting') : null;
+}
+async function useSystemValue(page, field, group = false) {
+  const reset = field.locator(':scope > .settings-inheritance .settings-use-system');
+  if (!await reset.count()) return;
+  if (group) await decideConfirmation(page, () => reset.click(), dialog => dialog.accept());
+  else await reset.click();
+}
+async function discardSettingsDraft(page) {
+  if (!await page.locator('#settings-save').isEnabled()) return;
+  await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
+  await page.waitForFunction(() => document.getElementById('settings-save-title').textContent === 'No changes' && !document.getElementById('settings-form').inert);
+}
+
 async function verifyFormatRuleDraftNames(page) {
   const cards = page.locator('#format-rules-editor [data-rule-code]');
   const materials = page.locator('#material-formats-editor [data-domain-row]');
@@ -117,15 +136,12 @@ async function verifyFormatRuleDraftNames(page) {
     const card = cards.nth(index), material = materials.nth(index);
     const toggle = card.locator('[data-rule-toggle]');
     const code = await card.getAttribute('data-rule-code');
-    const label = material.locator('input[type="text"]').nth(1);
-    const override = material.locator('.settings-domain-override-toggle');
-    originals.push({ index, label: await label.inputValue(), expanded: await toggle.getAttribute('aria-expanded'),
-      override: await override.count() ? await override.isChecked() : null });
-    if (await override.count()) await override.check();
+    const label = material.locator('[data-material-field="label"]');
+    originals.push({ index, label: await label.inputValue(), expanded: await toggle.getAttribute('aria-expanded') });
     const control = await card.locator('[data-format-label="title"]').elementHandle();
     await label.fill('Shared label <draft>');
-    for (const name of [`Move Shared label <draft> (${code}) up`, `Move Shared label <draft> (${code}) down`,
-      `Delete Shared label <draft> (${code}) format rule`]) {
+    const context = index ? 'Shared label <draft>, format 2' : 'Shared label <draft>';
+    for (const name of [`Move ${context} up`, `Move ${context} down`, `Delete ${context} format rule`]) {
       const action = card.getByRole('button', { name, exact: true });
       assert.equal(await action.count(), 1);
       assert.equal(await action.getAttribute('title'), name);
@@ -138,9 +154,9 @@ async function verifyFormatRuleDraftNames(page) {
   assert.equal(new Set(names).size, names.length, 'Shared labels retain distinct header action names.');
   for (const original of originals) {
     const material = materials.nth(original.index);
-    await material.locator('input[type="text"]').nth(1).fill(original.label);
-    if (original.override !== null) await material.locator('.settings-domain-override-toggle').setChecked(original.override);
+    await material.locator('[data-material-field="label"]').fill(original.label);
   }
+  if (await page.locator('#settings-scope').inputValue() !== 'system') await discardSettingsDraft(page);
 }
 
 async function runSystemFormatRuleEditor(page, report, waitForSettingsReady) {
@@ -231,7 +247,116 @@ async function runLibraryRuleCompletenessEditor(page, axeSource, args, report) {
   await scan(page, axeSource, args.artifactRoot, report, 'mobile');
 }
 
+async function verifyTemplateResetOnlyDrafts(page, args, report, saveSettings, ready) {
+  const read = scope => page.evaluate(async scope => {
+    const response = await fetch(`/api/asap/staff/settings?orgId=${encodeURIComponent(scope)}`);
+    assertResponse(response);
+    return response.json();
+    function assertResponse(response) { if (!response.ok) throw new Error(`Template witness GET ${response.status}`); }
+  }, scope);
+  const post = async (scope, templates) => {
+    const current = await read(scope);
+    const result = await page.evaluate(async ({ scope, templates, version }) => {
+      const session = await (await fetch('/api/asap/staff/session')).json();
+      const response = await fetch('/api/asap/staff/settings', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken },
+        body: JSON.stringify({ orgId: scope, version, templates }) });
+      return { status: response.status, body: await response.text() };
+    }, { scope, templates, version: current.version });
+    assert.equal(result.status, 200, result.body);
+  };
+  const reload = async () => {
+    await page.reload({ waitUntil: 'networkidle' }); await ready(args.scopeId);
+    await page.locator('#settings-nav-templates').click();
+  };
+  const card = key => page.locator(`[data-template-key="${key}"]`);
+  const open = async key => {
+    const row = card(key), toggle = row.locator('[data-template-toggle]');
+    if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+    return row;
+  };
+  const initial = await read(args.scopeId);
+  const keys = ['suggestion_submitted', `rejection:audit_reset_${args.formatCode}`];
+  const sources = keys.map(key => initial.stored.templates.find(row => row.organizationId === '1' && row.templateKey === key));
+  assert.ok(sources.every(Boolean), 'Both built-in and additional System sources must be seeded.');
+  const sourceIds = new Set(sources.map(row => row.id));
+  const lineage = data => data.stored.templates.filter(row => row.organizationId === args.scopeId && sourceIds.has(row.sourceTemplateId));
+  const custom = data => data.stored.templates.find(row => row.organizationId === args.scopeId &&
+    row.templateKey === `rejection:audit_reset_custom_${args.formatCode}`);
+  const owned = custom(initial);
+  assert.ok(owned?.isCustom); assert.deepEqual(lineage(initial), []);
+  await page.locator('#settings-nav-templates').click();
+  try {
+    for (const key of keys) {
+      const row = await open(key);
+      assert.equal(await row.locator('[data-template-field="subject"]').isEditable(), true);
+      await row.locator('[data-template-field="subject"]').fill(`Temporary subject ${key}`);
+      const reset = row.locator('[data-template-status="subject"] .settings-use-system');
+      await reset.focus(); await reset.press('Enter');
+      assert.match(await row.locator('[data-template-status="subject"]').textContent(), /Using system value.*Unsaved/);
+    }
+    assert.equal(await page.locator('#settings-save').isEnabled(), true, 'Reset intent stays a guarded unsaved draft until Global Save.');
+    const resetPayload = await saveSettings();
+    const afterReset = await read(args.scopeId);
+    report.templateResetOnlyWitness = { before: lineage(initial), after: lineage(afterReset) };
+    assert.deepEqual(lineage(afterReset), [], 'Edit → field reset → Save must not create either empty Library lineage.');
+    assert.equal((resetPayload.templates || []).some(row => keys.includes(row.templateKey)), false,
+      'No accepted lineage plus no remaining pin has no template write.');
+    assert.deepEqual(custom(afterReset), owned);
+    await post('system', sources.map(row => ({ templateKey: row.templateKey,
+      subject: `Later system ${row.templateKey}`, body: `Later system body ${row.templateKey}` })));
+    await reload();
+    for (const key of keys) {
+      const row = await open(key);
+      assert.equal(await row.locator('[data-template-field="subject"]').inputValue(), `Later system ${key}`);
+      assert.equal(await row.locator('[data-template-field="body"]').inputValue(), `Later system body ${key}`);
+      for (const role of ['subject', 'body']) assert.match(await row.locator(`[data-template-status="${role}"]`).textContent(), /^Using system value/);
+      if (key !== 'suggestion_submitted') assert.match(await row.locator('[data-template-item-status]').textContent(), /^Using system value/);
+      await row.locator('[data-template-field="subject"]').fill(`Temporary reset beside pin ${key}`);
+      await row.locator('[data-template-status="subject"] .settings-use-system').click();
+      await row.locator('[data-template-field="body"]').fill(`Pinned Library body ${key}`);
+    }
+    report.templateResetOnlyNoLineage = true;
+    const pinnedPayload = await saveSettings();
+    const pinned = await read(args.scopeId);
+    for (const source of sources) {
+      const row = lineage(pinned).find(row => row.sourceTemplateId === source.id);
+      assert.ok(row?.id && row.version); assert.equal(row.templateKey, source.templateKey);
+      assert.equal(row.subject, null); assert.equal(row.body, `Pinned Library body ${source.templateKey}`);
+      const posted = pinnedPayload.templates.find(row => row.templateKey === source.templateKey);
+      assert.equal(Object.hasOwn(posted, 'subject'), false, 'Resetting an absent column does not suppress its sibling pin or materialize a null field.');
+      assert.equal(posted.body, row.body);
+    }
+    await post(args.scopeId, sources.map(row => ({ templateKey: row.templateKey, sourceTemplateId: row.id,
+      body: `  Accepted raw\r\nbody ${row.templateKey}  ` })));
+    await reload();
+    const acceptedRaw = await read(args.scopeId);
+    for (const key of keys) {
+      const row = await open(key);
+      await row.locator('[data-template-field="subject"]').fill(`Reset existing lineage ${key}`);
+      await row.locator('[data-template-status="subject"] .settings-use-system').click();
+    }
+    const acceptedResetPayload = await saveSettings();
+    const acceptedAfter = await read(args.scopeId);
+    assert.deepEqual(lineage(acceptedAfter), lineage(acceptedRaw),
+      'Accepted lineage IDs/versions, sparse raw CRLF body and other-column pins remain exact.');
+    assert.deepEqual(custom(acceptedAfter), owned);
+    for (const key of keys) {
+      const row = acceptedResetPayload.templates.find(row => row.templateKey === key);
+      assert.equal(row.subject, null); assert.equal(Object.hasOwn(row, 'body'), false);
+    }
+    report.templateResetKeepsSiblingPinsAndRawRows = true;
+    await post(args.scopeId, sources.map(row => ({ templateKey: row.templateKey, sourceTemplateId: row.id, reset: true })));
+    const cleared = await read(args.scopeId);
+    assert.deepEqual(lineage(cleared), []); assert.deepEqual(custom(cleared), owned);
+  } finally {
+    await post('system', sources.map(row => ({ templateKey: row.templateKey, subject: row.subject, body: row.body })));
+    await reload();
+  }
+}
+
 async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings, waitForSettingsReady) {
+  await verifyTemplateResetOnlyDrafts(page, args, report, saveSettings, waitForSettingsReady);
   const read = (scope = args.scopeId) => page.evaluate(async scope => {
     const response = await fetch(`/api/asap/staff/settings?orgId=${encodeURIComponent(scope)}`);
     if (!response.ok) throw new Error(`Settings GET ${response.status}`);
@@ -289,20 +414,22 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   await page.locator(`#external-search-provider-editor [data-provider-id="${providerA}"] input`).nth(0)
     .fill('Changed provider A');
   let payload = await saveSettings();
-  assert.equal(payload.providers.find(item => item.id === providerB).reset, false);
+  assert.equal(payload.providers.some(item => item.id === providerB), false);
   let current = await read();
   assert.deepEqual(rawProvider(current, providerB), untouchedProvider, 'Untouched provider SQL row/version must survive sibling save.');
 
   await page.locator('#settings-nav-patron').click();
-  await page.locator(`#material-formats-editor [data-format-id="${formatA}"] input`).nth(1)
+  await page.locator(`#material-formats-editor [data-format-id="${formatA}"] [data-material-field="label"]`)
     .fill('Changed format A');
   payload = await saveSettings();
-  assert.equal(payload.formats.find(item => item.id === formatB).reset, false);
+  assert.equal(payload.formats.some(item => item.id === formatB), false);
   current = await read();
   assert.deepEqual(rawFormat(current, formatB), untouchedFormat, 'Untouched format SQL row/version must survive sibling save.');
   assert.deepEqual(rawOwned(current, sparseId), initialSparse, 'Untouched active owned SQL row/version must survive sibling save.');
+  assert.equal(await page.locator('#format-rules-editor [data-rule-code="' + codeA + '"] .settings-rule-identity strong').textContent(),
+    'Changed format A', 'Rule headings use the effective saved Library label.');
 
-  await page.locator(`#material-formats-editor [data-format-id="${customId}"] input`).nth(1)
+  await page.locator(`#material-formats-editor [data-format-id="${customId}"] [data-material-field="label"]`)
     .fill('Changed owned format');
   payload = await saveSettings();
   const savedCustom = payload.formats.find(item => item.id === customId);
@@ -342,15 +469,13 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   assert.equal(rejected.body.code, 'settings_invalid');
   assert.deepEqual(await read(), beforeStaleOwned);
 
-  await page.locator(`#material-formats-editor [data-format-id="${formatA}"] .settings-domain-override-toggle`).uncheck();
+  await useSystemValue(page, page.locator(`#material-formats-editor [data-format-id="${formatA}"]`));
   payload = await saveSettings();
   assert.equal(payload.formats.find(item => item.id === formatA).reset, true);
   current = await read();
   assert.equal(rawFormat(current, formatA), undefined);
   assert.deepEqual(rawFormat(current, formatB), untouchedFormat);
   assert.deepEqual(rawProvider(current, providerB), untouchedProvider);
-
-  await page.locator('[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle').check();
   await page.locator('#patron-login-note').fill('Unrelated scalar metadata witness');
   payload = await saveSettings();
   assert.equal(Object.hasOwn(payload, 'providers'), false);
@@ -393,7 +518,7 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
 
   const beforeFormatEdit = untouchedFormat;
   await page.locator('#settings-nav-patron').click();
-  await page.locator(`#material-formats-editor [data-format-id="${formatB}"] input`).nth(1)
+  await page.locator(`#material-formats-editor [data-format-id="${formatB}"] [data-material-field="label"]`)
     .fill('Changed pinned format B');
   await saveSettings();
   current = await read();
@@ -430,8 +555,8 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   const beforeProviderClear = untouchedProvider;
   await page.locator('#settings-nav-workflow').click();
   const providerRow = page.locator(`#external-search-provider-editor [data-provider-id="${providerB}"]`);
-  await providerRow.locator('input').nth(0).fill('');
-  await providerRow.locator('input').nth(1).fill('');
+  await providerRow.locator('[data-provider-status="label"] .settings-use-system').click();
+  await providerRow.locator('[data-provider-status="urlTemplate"] .settings-use-system').click();
   payload = await saveSettings();
   assert.equal(payload.providers.find(item => item.id === providerB).label, null);
   assert.equal(payload.providers.find(item => item.id === providerB).urlTemplate, null);
@@ -448,7 +573,7 @@ async function runLibraryOverrideMetadataEditor(page, args, report, saveSettings
   const beforeAuthorLabelClear = untouchedFormat;
   await page.locator('#settings-nav-patron').click();
   await page.locator(`#format-rules-editor [data-rule-code="${codeB}"] [data-rule-toggle]`).click();
-  await page.locator(`#format-rules-editor [data-rule-code="${codeB}"] [data-format-label="author"]`).fill('');
+  await page.locator(`#format-rules-editor [data-rule-code="${codeB}"] [data-rule-inheritance="author.label"] .settings-use-system`).click();
   await saveSettings();
   current = await read();
   untouchedFormat = rawFormat(current, formatB);
@@ -566,9 +691,8 @@ async function runPatronTextRefinements(page, axeSource, args, report, saveSetti
   const systemBefore = (await read(library)).stored.configuredSystem.patron.successMessage;
   const successField = page.locator('[data-setting-key="successMessage"]');
   const duplicateField = page.locator('[data-setting-key="alreadySubmittedMessage"]');
-  assert.equal(await successField.locator('textarea').isDisabled(), true);
-  assert.equal(await successField.locator('.patron-placeholder-trigger').isDisabled(), true);
-  await successField.locator('.settings-override-toggle').check();
+  assert.equal(await successField.locator('textarea').isDisabled(), false);
+  assert.equal(await successField.locator('.patron-placeholder-trigger').isDisabled(), false);
   const message = 'Library <img src=x onerror="alert(1)"> & é\nCard: selected\n\nLibby help:\nhttps://help.libbyapp.com/en-us/6260.htm\n';
   await successField.locator('textarea').fill(message);
   const start = message.indexOf('selected');
@@ -580,7 +704,6 @@ async function runPatronTextRefinements(page, axeSource, args, report, saveSetti
   assert.equal(await successField.locator('textarea').inputValue(), expected);
   assert.equal(await successField.locator('textarea').evaluate(element => document.activeElement === element), true);
   assert.equal(await successField.locator('textarea').evaluate(element => element.selectionStart), start + '{{barcode_label}}'.length);
-  await duplicateField.locator('.settings-override-toggle').check();
   await duplicateField.locator('textarea').fill('Previous: ');
   await duplicateField.locator('textarea').evaluate(element => element.setSelectionRange(10, 10));
   await duplicateField.locator('.patron-placeholder-trigger').click();
@@ -642,10 +765,9 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await page.waitForLoadState('networkidle');
     await ready(scope);
   };
-  // Value is a DOM property, so persisted and newly edited keys are found by
-  // their actual current values rather than an original value attribute.
+  // Retained identities locate cards independently of their current labels.
   const rowIndex = key => page.locator('#email-templates-editor [data-domain-row]').evaluateAll((rows, key) =>
-    rows.findIndex(row => row.querySelector('.template-key').value === key), key);
+    rows.findIndex(row => row.dataset.templateKey === key), key);
   const openCard = async control => {
     const card = control.locator('xpath=ancestor-or-self::*[contains(concat(" ",normalize-space(@class)," ")," settings-template-card ")][1]');
     const toggle = card.locator('[data-template-toggle]');
@@ -674,7 +796,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
         const popup = document.getElementById(node.getAttribute('aria-controls'));
         const control = node.closest('.settings-template-field').querySelector('input, textarea');
         return { scope: document.getElementById('settings-scope').value, version: document.getElementById('settings-version').value,
-          formInert: document.getElementById('settings-form').inert, key: card.querySelector('.template-key')?.value || card.dataset.templateKey,
+          formInert: document.getElementById('settings-form').inert, key: card.dataset.templateKey,
           kind: card.dataset.templateKind, expanded: card.querySelector('[data-template-toggle]').getAttribute('aria-expanded'),
           override: card.querySelector('.settings-template-override')?.checked, triggerDisabled: node.disabled,
           triggerExpanded: node.getAttribute('aria-expanded'), fieldDisabled: control.disabled, fieldReadOnly: control.readOnly,
@@ -713,8 +835,8 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     assert.equal(await page.locator('#settings-scope-field').isVisible(), false);
     await page.locator('#settings-nav-templates').click();
     const inherited = await row('rejection:template_1');
-    assert.equal(await inherited.locator('.template-subject').isDisabled(), true);
-    await inherited.locator('.settings-template-override').check();
+    assert.equal(await inherited.locator('.template-subject').isDisabled(), false);
+
     await inherited.locator('.template-body').fill('Library admin {{title}}');
     const payload = await saveSettings();
     assert.equal(Object.hasOwn(payload.email, 'postmarkToken'), false);
@@ -734,13 +856,14 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await openPicker(page.locator('#email-submit-subject'));
     assert.deepEqual(await tokenKeys(), patronKeys);
     for (const key of ['rejection:template_1', 'rejection:template_3']) {
-      assert.equal(await (await row(key)).locator('.template-key').evaluate(input => input.readOnly), true);
+      assert.equal(await (await row(key)).locator('.template-key').count(), 0);
     }
     await page.locator('#add-email-template').click();
     let added = page.locator('#email-templates-editor [data-template-id=""]');
-    assert.equal(await added.locator('.template-key').inputValue(), 'rejection:template_2');
-    assert.equal(await added.locator('.template-key').isEditable(), true);
-    await added.locator('.template-key').fill('rejection:template_2');
+    const createdKey = await added.getAttribute('data-template-key');
+    assert.match(createdKey, /^rejection:template_[a-f0-9]{32}$/);
+    assert.equal(await added.locator('.template-key').count(), 0);
+    report.generatedSystemTemplateKey = createdKey;
     await added.locator('.template-display-name').fill('Campaign 2 added template');
     await added.locator('.template-subject').fill('É & title: ');
     await added.locator('.template-body').fill('First\nselected & last');
@@ -757,24 +880,24 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     assert.equal(await added.locator('.template-body').evaluate(element => document.activeElement === element), true);
     assert.equal(await added.locator('.template-body').evaluate(element => element.selectionStart), 15);
     const createdPayload = await saveSettings();
-    assert.equal(createdPayload.templates.find(item => item.templateKey === 'rejection:template_2').body, 'First\n{{title}} & last');
+    assert.equal(createdPayload.templates.find(item => item.templateKey === createdKey).body, 'First\n{{title}} & last');
     await reload('system');
     await page.locator('#settings-nav-templates').click();
-    added = await row('rejection:template_2');
-    assert.equal(await added.locator('.template-key').evaluate(input => input.readOnly), true);
+    added = await row(createdKey);
+    assert.equal(await added.getAttribute('data-template-key'), createdKey);
     assert.equal(await added.locator('.template-subject').inputValue(), 'É & title: ');
     const saved = await read('system');
-    const created = saved.stored.templates.find(item => item.templateKey === 'rejection:template_2' && item.organizationId === '1');
+    const created = saved.stored.templates.find(item => item.templateKey === createdKey && item.organizationId === '1');
     assert.equal(typeof created.id, 'string');
     assert.equal(created.body, 'First\n{{title}} & last');
     for (const original of initial.stored.templates) {
       assert.deepEqual(saved.stored.templates.find(item => item.id === original.id), original,
         'Creating an additional template must preserve every existing raw row/version.');
     }
-    const systemKeysBefore = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
-    const movingSystem = await row('rejection:template_2');
+    const systemKeysBefore = await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey));
+    const movingSystem = await row(createdKey);
     await movingSystem.locator('[aria-label="Move up"]').click();
-    const systemKeysAfter = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+    const systemKeysAfter = await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey));
     assert.notDeepEqual(systemKeysAfter, systemKeysBefore);
     const systemOrderPayload = await saveSettings();
     assert.equal(systemOrderPayload.templates.length, 1, 'A representable System move patches only its moved row.');
@@ -790,15 +913,15 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
         'System ordering preserves every sibling row, raw CRLF/whitespace value and rowversion.');
     }
     await reload('system'); await page.locator('#settings-nav-templates').click();
-    assert.deepEqual(await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value)), systemKeysAfter,
+    assert.deepEqual(await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey)), systemKeysAfter,
       'The System Move order survives the SQL-backed GET and full reload.');
     report.systemTemplateOrderingRoundTrip = true;
 
-    // A new UI row cannot use an existing key to upsert that source record.
+    // Corrupted retained identity cannot upsert an existing source record.
     const beforeRejected = await read('system');
     await page.locator('#add-email-template').click();
     const invalid = page.locator('#email-templates-editor [data-template-id=""]');
-    await invalid.locator('.template-key').fill('rejection:template_1');
+    await invalid.evaluate(node => { node.dataset.templateKey = 'rejection:template_1'; });
     await invalid.locator('.template-subject').fill('Duplicate');
     await invalid.locator('.template-body').fill('Duplicate body');
     await page.locator('#email-template-from-name').fill('Must roll back');
@@ -813,7 +936,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
       await page.locator('#settings-save').click();
       await invalid.locator('[role="alert"]').filter({ hasText: /already used/ }).waitFor();
       assert.equal(await page.locator('#settings-templates').isVisible(), true);
-      assert.equal(await invalid.locator('.template-key').evaluate(node => node === document.activeElement), true);
+      assert.equal(await invalid.locator('.template-display-name').evaluate(node => node === document.activeElement), true);
       assert.equal(await page.locator('#email-template-from-name').inputValue(), 'Must roll back', 'Validation preserves the sender draft.');
       assert.deepEqual(duplicatePosts, [], 'Duplicate UI validation runs before any mutation request.');
     } finally { page.off('request', trackDuplicatePost); }
@@ -907,9 +1030,9 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await switchScope(library);
     await assertLibraryContext();
     await page.locator('#settings-nav-templates').click();
-    const inherited = await row('rejection:template_2');
-    assert.equal(await inherited.locator('.template-subject').isDisabled(), true);
-    await inherited.locator('.settings-template-override').check();
+    const inherited = await row(createdKey);
+    assert.equal(await inherited.locator('.template-subject').isDisabled(), false);
+
     await inherited.locator('.template-body').fill('Library body: ');
     await selectRange(inherited.locator('.template-body'), 14);
     await titleButton().click();
@@ -938,34 +1061,46 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     await openCard(page.locator('#email-submit-subject'));
     assert.equal(await page.locator('#email-submit-subject').isEditable(), true,
       'Returning from library inheritance must restore System built-in template editability.');
-    await (await row('rejection:template_2')).locator('.template-subject').fill('Updated System subject {{title}}');
+    await (await row(createdKey)).locator('.template-subject').fill('Updated System subject {{title}}');
     await saveSettings();
     const afterSystemEdit = await read(library);
     assert.deepEqual(afterSystemEdit.stored.templates.find(item => item.id === sparse.id), sparse,
       'System edits must preserve the exact sparse library row/version.');
     await switchScope(library);
     await page.locator('#settings-nav-templates').click();
-    assert.equal(await (await row('rejection:template_2')).locator('.template-subject').inputValue(), 'Updated System subject {{title}}');
-    assert.equal(await (await row('rejection:template_2')).locator('.template-body').inputValue(), 'Library body: {{title}}');
+    assert.equal(await (await row(createdKey)).locator('.template-subject').inputValue(), 'Updated System subject {{title}}');
+    assert.equal(await (await row(createdKey)).locator('.template-body').inputValue(), 'Library body: {{title}}');
     const badgeCounts = await page.locator('.settings-scope-badge').count();
     await switchScope('system'); await switchScope(library);
     assert.equal(await page.locator('.settings-scope-badge').count(), badgeCounts, 'Repeated scope changes must not duplicate indicators.');
     report.campaign2SystemAndInheritance = true;
   }
   await page.locator('#settings-nav-templates').click();
+  // Existing API identities can resemble built-in keys. Create those fixtures
+  // through the owning API; routine editors allocate their own immutable keys.
+  const compatibilityBaseline = await read(library);
+  const compatibilityTemplates = ['purchase_approved', 'suggestion_submitted', 'rejected'].map((key, index) => ({
+    sortOrder: Math.max(0, ...compatibilityBaseline.stored.templates.map(template => template.sortOrder || 0)) + (index + 1) * 10,
+    templateKey: key, isCustom: true, displayName: `Custom ${key}`, subject: `Manual ${key}`,
+    body: `Unchanged manual {{name}} content for ${key} & é`
+  }));
+  const compatibilityResponse = await page.evaluate(async ({ library, version, templates }) => {
+    const session = await (await fetch('/api/asap/staff/session')).json();
+    const response = await fetch('/api/asap/staff/settings', { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-ASAP-Antiforgery': session.antiforgeryToken
+    }, body: JSON.stringify({ orgId: library, version, templates }) });
+    return { status: response.status, body: await response.text() };
+  }, { library, version: compatibilityBaseline.version, templates: compatibilityTemplates });
+  assert.equal(compatibilityResponse.status, 200, compatibilityResponse.body);
+  await reload(library); await page.locator('#settings-nav-templates').click();
   const beforeCustomSave = await read(library);
   const builtinBeforeCustomSave = await page.locator('#settings-template-editor').evaluate(container =>
     [...container.querySelectorAll('[data-template-field]')].map(input => ({ id: input.id, value: input.value, disabled: input.disabled })));
   const customBodies = new Map();
   for (const key of ['purchase_approved', 'suggestion_submitted', 'rejected']) {
-    await page.locator('#add-email-template').click();
-    const custom = page.locator('#email-templates-editor [data-template-id=""]').last();
-    await custom.locator('.template-key').fill(key);
-    await custom.locator('.template-display-name').fill(`Custom ${key}`);
-    await custom.locator('.template-subject').fill(`Manual ${key}`);
+    const custom = await row(key);
     const body = `Unchanged manual {{name}} content for ${key} & é`;
     customBodies.set(key, body);
-    await custom.locator('.template-body').fill(body);
     await custom.locator('.template-body').focus();
     assert.equal(await custom.getAttribute('data-template-kind'), 'custom');
     assert.equal(await custom.locator('.template-placeholder-trigger').first().isDisabled(), true,
@@ -973,11 +1108,11 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     assert.match(await custom.locator('.settings-template-preview-note').textContent(), /not verified/);
     assert.equal(await custom.locator('.template-body').inputValue(), body);
   }
-  const rejectionKey = 'REJECTION:campaign2_custom';
   await page.locator('#add-email-template').click();
   const upper = page.locator('#email-templates-editor [data-template-id=""]').last();
-  await upper.locator('.template-key').fill(rejectionKey);
-  await upper.locator('.template-display-name').fill('Case-insensitive named rejection');
+  const rejectionKey = await upper.getAttribute('data-template-key');
+  assert.match(rejectionKey, /^rejection:custom_template_[a-f0-9]{32}$/);
+  await upper.locator('.template-display-name').fill('Named rejection');
   await upper.locator('.template-subject').fill('Uppercase rejection {{title}}');
   await upper.locator('.template-body').fill('Upper & ');
   await selectRange(upper.locator('.template-body'), 8);
@@ -989,6 +1124,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   assert.equal(await upper.locator('.template-body').inputValue(), customBodies.get(rejectionKey));
   const customPayload = await saveSettings();
   for (const [key, body] of customBodies) {
+    if (key !== rejectionKey) continue;
     const submitted = customPayload.templates.find(item => item.templateKey === key && item.isCustom);
     assert.ok(submitted, `The custom ${key} row is submitted independently of built-in lineage.`);
     assert.equal(submitted.sourceTemplateId ?? null, null);
@@ -1022,7 +1158,8 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     assert.equal(stored.body, body);
     const custom = await row(key);
     assert.equal(await custom.getAttribute('data-template-kind'), 'custom');
-    assert.equal(await custom.locator('.template-key').evaluate(input => input.readOnly), true);
+    assert.equal(await custom.locator('.template-key').count(), 0);
+    assert.equal(await custom.getAttribute('data-template-key'), key);
     if (key === rejectionKey) {
       await openPicker(custom.locator('.template-body'));
       assert.deepEqual(await tokenKeys(), ['title']);
@@ -1050,9 +1187,9 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   assert.equal(customSaved.stored.templates.find(item => item.organizationId === library && item.templateKey === rawCustomKey).body, rawCustomBody);
   await reload(library); await page.locator('#settings-nav-templates').click();
   assert.equal(await (await row(rawCustomKey)).locator('.template-body').inputValue(), rawCustomBody.replace(/\r\n/g, '\n'));
-  const libraryOrderBefore = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+  const libraryOrderBefore = await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey));
   await (await row('rejected')).locator('[aria-label="Move up"]').click();
-  const libraryOrderAfter = await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value));
+  const libraryOrderAfter = await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey));
   assert.notDeepEqual(libraryOrderAfter, libraryOrderBefore);
   const libraryOrderPayload = await saveSettings();
   assert.equal(libraryOrderPayload.templates.length, 1, 'A Library move writes only its custom row, without creating lineage overrides.');
@@ -1068,7 +1205,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     } else assert.deepEqual(current, original, 'Library ordering preserves all inherited/custom siblings, raw content and rowversions.');
   }
   await reload(library); await page.locator('#settings-nav-templates').click();
-  assert.deepEqual(await page.locator('#email-templates-editor .template-key').evaluateAll(nodes => nodes.map(node => node.value)), libraryOrderAfter,
+  assert.deepEqual(await page.locator('#email-templates-editor [data-domain-row]').evaluateAll(nodes => nodes.map(node => node.dataset.templateKey)), libraryOrderAfter,
     'Library custom ordering survives the SQL-backed GET and full reload.');
   customSaved = orderedLibrary;
   report.customTemplateOrderingRoundTrip = true;
@@ -1094,7 +1231,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   const source = customSaved.stored.templates.find(item =>
     item.organizationId === '1' && item.templateKey === 'rejection:template_3');
   let returning = await row(source.templateKey);
-  await returning.locator('.settings-template-override').check();
+
   await returning.locator('.template-display-name').fill('Library-owned display override');
   await returning.locator('.template-subject').fill('Library subject override');
   await returning.locator('.template-body').fill('Library body override');
@@ -1137,77 +1274,6 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   await scan(page, axeSource, args.artifactRoot, report, 'campaign2-forced-colors');
 }
 
-async function runLibraryFormatRuleDrafts(page, args, report, saveSettings, ready) {
-  const read = () => page.evaluate(async scope => {
-    const response = await fetch(`/api/asap/staff/settings?orgId=${scope}`);
-    if (!response.ok) throw new Error(`Settings GET ${response.status}`);
-    return response.json();
-  }, args.scopeId);
-  await page.locator('#settings-nav-patron').click();
-  const initial = await read();
-  const originalRule = initial.stored.formatRules.find(rule => rule.code === args.formatCode);
-  const savedKey = Object.keys(originalRule.customFields)[0];
-  assert.equal(args.formatCode, `custom_${initial.effective.formats.length + 1}`, 'Seed the generated-code collision.');
-  assert.equal(savedKey, `field_${initial.stored.customFields.length + 1}`, 'Seed the generated-key collision.');
-  const existing = page.locator(`#format-rules-editor [data-rule-code="${args.formatCode}"]`);
-  await existing.locator('[data-rule-toggle]').click();
-  await existing.locator('[data-format-label="title"]').fill('Existing title draft preserved');
-  const existingControl = await existing.locator('[data-custom-rule-property="mode"]').elementHandle();
-
-  await page.locator('#add-material-format').click();
-  const material = page.locator('#material-formats-editor [data-domain-row]').last();
-  const generatedCode = await material.locator('input').first().inputValue();
-  assert.notEqual(generatedCode.toLowerCase(), args.formatCode.toLowerCase());
-  const newCode = generatedCode + '_renamed';
-  await material.locator('input').first().fill(newCode);
-  await material.locator('input').nth(1).fill('New draft format');
-  assert.equal(await existingControl.evaluate(node => node.isConnected && node.closest('[data-rule-code]').dataset.ruleCode), args.formatCode);
-  await page.locator('#add-format-rule').click();
-  const addedRule = page.locator(`#format-rules-editor [data-rule-code="${newCode}"]`);
-  assert.equal(await addedRule.locator('[data-rule-toggle]').getAttribute('aria-expanded'), 'true');
-
-  await page.locator('#add-custom-field').click();
-  const definition = page.locator('#additional-fields-editor [data-domain-row]').last();
-  const generatedKey = await definition.locator('input').first().inputValue();
-  assert.notEqual(generatedKey.toLowerCase(), savedKey.toLowerCase());
-  await definition.locator('input[type="checkbox"]').uncheck();
-  assert.equal(await addedRule.locator(`[data-custom-rule-key="${generatedKey}"] .settings-custom-rule-status`).innerText(),
-    'Disabled field — not shown to patrons');
-  await definition.locator('input[type="checkbox"]').check();
-  const newKey = generatedKey + '_renamed';
-  await definition.locator('input').first().fill(newKey);
-  await definition.locator('input').nth(1).fill('New draft field');
-  const custom = addedRule.locator(`[data-custom-rule-key="${newKey}"]`);
-  await custom.locator('select').selectOption('required');
-  await custom.locator('input').fill('New rule witness');
-  await existingControl.dispose();
-
-  // Creating the field and format in one POST exercises the real transaction's
-  // intermediate SaveChanges, which can persist a stolen rule if collection is wrong.
-  const payload = await saveSettings();
-  assert.ok(payload.formats.some(format => format.code === newCode && format.id === null));
-  assert.ok(payload.customFields.some(field => field.key === newKey && field.id === null));
-  assert.deepEqual(payload.formatRules.find(rule => rule.code === args.formatCode).customFields[savedKey],
-    originalRule.customFields[savedKey]);
-  assert.deepEqual(payload.formatRules.find(rule => rule.code === newCode).customFields[newKey],
-    { mode: 'required', labelOverride: 'New rule witness' });
-  await page.reload({ waitUntil: 'networkidle' });
-  await ready(args.scopeId);
-  await page.locator('#settings-nav-patron').click();
-  const saved = await read();
-  const savedRule = saved.stored.formatRules.find(rule => rule.code === args.formatCode);
-  assert.deepEqual(savedRule.customFields, originalRule.customFields, 'Existing saved rules survive the combined SQL save.');
-  assert.equal(saved.effective.formats.find(format => format.code === args.formatCode).title.label, 'Existing title draft preserved');
-  assert.ok(saved.effective.formats.find(format => format.code === newCode)?.id);
-  assert.ok(saved.stored.customFields.find(field => field.key === newKey)?.id);
-  assert.deepEqual(saved.stored.formatRules.find(rule => rule.code === newCode).customFields,
-    { [newKey]: { mode: 'required', labelOverride: 'New rule witness' } });
-  await addedRule.locator('[data-rule-toggle]').click();
-  assert.equal(await custom.locator('select').inputValue(), 'required');
-  assert.equal(await custom.locator('input').inputValue(), 'New rule witness');
-  report.formatRuleDrafts = { newCode, newKey, savedKey, roundTrip: true };
-}
-
 async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettings, ready) {
   const libraryScope = '2';
   const readSettings = scope => page.evaluate(async scope => {
@@ -1217,23 +1283,61 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
   }, scope);
   const readEditor = () => page.evaluate(() => {
     const enabled = document.getElementById('common-authors-enabled');
-    const override = enabled.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
+    const override = enabled.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-inheritance-status');
     return {
       enabled: enabled.checked,
-      enabledOverridden: override ? override.checked : null,
+      enabledOverridden: override ? override.textContent.startsWith('Library setting') : null,
       label: document.getElementById('common-authors-label').value,
       help: document.getElementById('common-authors-help').value,
       message: document.getElementById('common-authors-message').value,
-      creatorsUseSystem: document.getElementById('common-creators-use-system').checked,
+      creatorsUseSystem: document.getElementById('settings-scope').value === 'system' || document.getElementById('common-creators-inherit-field').textContent.includes('Using system value'),
       creators: [...document.querySelectorAll('#common-creators-editor [data-domain-row] input')].map(input => input.value)
     };
   });
   const enabled = page.locator('#common-authors-enabled');
   const options = page.locator('#common-authors-options');
   const enabledOverride = page.locator(
-    '[data-setting-section="workflow"][data-setting-key="commonAuthorsEnabled"] .settings-override-toggle');
-  const useSystem = page.locator('#common-creators-use-system');
+    '[data-setting-section="workflow"][data-setting-key="commonAuthorsEnabled"]');
+  const creatorStatus = page.locator('#common-creators-inherit-field');
+  const creatorsInherited = async () => !await librarySetting(creatorStatus);
+  const resetCreators = () => useSystemValue(page, creatorStatus, true);
+  const pinCreators = async () => {
+    const input = rows.first().locator('input');
+    if (await rows.count()) { const value = await input.inputValue(); await input.fill(value + ' draft'); await input.fill(value); }
+    else { await page.locator('#add-common-creator').click(); await rows.last().locator('[data-row-action="delete"]').click(); }
+  };
   const rows = page.locator('#common-creators-editor [data-domain-row]');
+  const creatorValues = () => rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value));
+  const creatorGeometry = () => page.evaluate(() => {
+    const rect = node => {
+      const bounds = node.getBoundingClientRect();
+      return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
+        width: bounds.width, height: bounds.height };
+    };
+    const editor = document.getElementById('common-creators-editor');
+    return { viewport: { width: innerWidth, height: innerHeight }, scrollWidth: document.documentElement.scrollWidth,
+      editor: rect(editor), rows: [...editor.querySelectorAll('.settings-creator-row')].map(row => ({
+        row: rect(row), field: rect(row.querySelector('.settings-domain-field')),
+        label: rect(row.querySelector('.settings-domain-field span')), input: rect(row.querySelector('input')),
+        actions: rect(row.querySelector('.settings-row-actions')),
+        buttons: [...row.querySelectorAll('.settings-row-actions button')].map(button => ({
+          label: button.getAttribute('aria-label'), disabled: button.disabled, ...rect(button)
+        }))
+      })) };
+  });
+  const assertCreatorContainment = (geometry, name) => {
+    assert.ok(geometry.scrollWidth <= geometry.viewport.width, `${name}: no page-level horizontal overflow: ${JSON.stringify(geometry)}`);
+    for (const row of geometry.rows) {
+      assert.ok(row.label.bottom <= row.input.top + 1 && Math.abs(row.label.left - row.input.left) < 1 &&
+        Math.abs(row.label.right - row.input.right) < 1,
+      `${name}: Creator label sits above and aligns with its input: ${JSON.stringify({ row })}`);
+      for (const part of [row.field, row.input, row.actions, ...row.buttons]) {
+        assert.ok(part.left >= row.row.left - 1 && part.right <= row.row.right + 1,
+          `${name}: creator content stays inside its row: ${JSON.stringify({ row, part })}`);
+      }
+      assert.ok(row.input.width > 0 && row.actions.width > 0, `${name}: creator input and actions remain visible.`);
+    }
+  };
   const setEnabledByKeyboard = async value => {
     if (await enabled.isChecked() !== value) {
       await enabled.focus();
@@ -1247,21 +1351,37 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     while (await rows.count() < values.length) await page.locator('#add-common-creator').click();
     for (const [index, value] of values.entries()) await rows.nth(index).locator('input').fill(value);
   };
+  const waitForScopeLoad = async (scope, responsePromise) => {
+    await ready(scope);
+    const response = await responsePromise;
+    assert.equal(response.status(), 200, `Settings load for ${scope} succeeds before creator interactions.`);
+    await page.waitForFunction(expectedScope => {
+      const refresh = document.getElementById('settings-refresh');
+      const message = document.getElementById('settings-message');
+      return document.getElementById('settings-scope')?.value === expectedScope && refresh && !refresh.disabled &&
+        !message?.classList.contains('error');
+    }, scope);
+  };
   const switchScope = async scope => {
     const selectedScope = page.locator('#settings-scope');
     if (await selectedScope.inputValue() !== scope) {
+      const settingsReload = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/settings' &&
+          url.searchParams.get('orgId') === scope;
+      });
       if (await page.locator('#settings-save').isEnabled()) {
         await decideConfirmation(page, () => selectedScope.selectOption(scope), dialog => dialog.accept());
       } else {
         await selectedScope.selectOption(scope);
       }
-      await ready(scope);
+      await waitForScopeLoad(scope, settingsReload);
     }
     await page.locator('#settings-nav-workflow').click();
     await page.locator('#settings-workflow').waitFor({ state: 'visible' });
   };
   const ensureLibraryParentEditable = async () => {
-    if (await enabledOverride.count() && !await enabledOverride.isChecked()) await enabledOverride.check();
+    assert.equal(await enabled.isEnabled(), true);
   };
   const saveIfDirty = async () => {
     if (await page.locator('#settings-save').isEnabled()) return saveSettings();
@@ -1276,8 +1396,13 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
       `${label}: creator actions inherit the fieldset disabled state.`);
   };
   const reloadScope = async scope => {
+    const settingsReload = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/settings' &&
+        url.searchParams.get('orgId') === scope;
+    });
     await page.reload({ waitUntil: 'networkidle' });
-    await ready(scope);
+    await waitForScopeLoad(scope, settingsReload);
     await page.locator('#settings-nav-workflow').click();
     await page.locator('#settings-workflow').waitFor({ state: 'visible' });
   };
@@ -1299,16 +1424,16 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     await ensureLibraryParentEditable();
     await setEnabledByKeyboard(true);
     if (snapshot.creatorsUseSystem) {
-      if (!await useSystem.isChecked()) await useSystem.check();
+      if (!await creatorsInherited()) await resetCreators();
     } else {
-      if (await useSystem.isChecked()) await useSystem.uncheck();
+      if (await creatorsInherited()) await pinCreators();
       await setCreatorRows(snapshot.creators);
     }
     if (snapshot.enabledOverridden) {
-      if (!await enabledOverride.isChecked()) await enabledOverride.check();
+      if (!await librarySetting(enabledOverride)) { await setEnabledByKeyboard(!snapshot.enabled); }
       await setEnabledByKeyboard(snapshot.enabled);
-    } else if (await enabledOverride.count() && await enabledOverride.isChecked()) {
-      await enabledOverride.uncheck();
+    } else if (await librarySetting(enabledOverride)) {
+      await useSystemValue(page, enabledOverride);
     }
     await saveIfDirty();
     await reloadScope(libraryScope);
@@ -1320,6 +1445,7 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
   await switchScope('system');
   const systemSnapshot = await readEditor();
   await switchScope(libraryScope);
+  let journeyError = null;
   try {
     await switchScope('system');
     const systemInitially = await readEditor();
@@ -1334,8 +1460,69 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     await page.locator('#common-authors-label').fill(systemDraft.label);
     await page.locator('#common-authors-help').fill(systemDraft.help);
     await page.locator('#common-authors-message').fill(systemDraft.message);
-    const systemCreator = `Collapsed feature creator ${args.identity.staffId}`;
-    await setCreatorRows([...systemInitially.creators, systemCreator]);
+    const creatorBaseRows = [...systemInitially.creators];
+    while (creatorBaseRows.length < 2) creatorBaseRows.push(`Existing creator ${creatorBaseRows.length + 1} ${args.identity.staffId}`);
+    await setCreatorRows(creatorBaseRows);
+    const systemCreator = `Long common creator name ${args.identity.staffId}: ${'extended catalog label '.repeat(8).trimEnd()}`;
+    const removableCreator = `Movable creator draft ${args.identity.staffId}`;
+    await page.locator('#add-common-creator').click();
+    let addedRow = rows.last();
+    assert.equal(await addedRow.locator('input').evaluate(input => input === document.activeElement), true,
+      'Adding a creator moves focus to its new Creator input.');
+    assert.equal(await addedRow.getByLabel('Creator', { exact: true }).count(), 1);
+    await addedRow.locator('input').fill(systemCreator);
+    await page.locator('#add-common-creator').click();
+    addedRow = rows.last();
+    assert.equal(await addedRow.locator('input').evaluate(input => input === document.activeElement), true);
+    await addedRow.locator('input').fill(removableCreator);
+    const creatorOrderBeforeMoveDown = [...creatorBaseRows, systemCreator, removableCreator];
+    await rows.nth(1).getByRole('button', { name: 'Move down', exact: true }).click();
+    assert.deepEqual(await creatorValues(), [creatorBaseRows[0], systemCreator, creatorBaseRows[1], removableCreator],
+      'Move down reorders an interior creator row in the complete list draft.');
+    assert.equal(await rows.nth(2).locator('[data-row-action="down"]')
+      .evaluate(button => button === document.activeElement), true,
+    'Move down retains focus on the moved row action at its interior destination.');
+    await rows.nth(2).getByRole('button', { name: 'Move up', exact: true }).click();
+    assert.deepEqual(await creatorValues(), creatorOrderBeforeMoveDown,
+      'Moving the creator back restores the list order before the remaining action checks.');
+    const moveFrom = await rows.count() - 1;
+    await rows.nth(moveFrom).getByRole('button', { name: 'Move up', exact: true }).click();
+    const movedValues = await creatorValues();
+    assert.equal(movedValues[moveFrom - 1], removableCreator, 'Move up reorders the complete list draft.');
+    assert.equal(await rows.nth(moveFrom - 1).getByRole('button', { name: 'Move up', exact: true })
+      .evaluate(button => button === document.activeElement), true, 'Move up retains focus on its moved row action.');
+    await rows.nth(moveFrom - 1).getByRole('button', { name: 'Delete', exact: true }).click();
+    const expectedSystemRows = [...creatorBaseRows, systemCreator];
+    assert.deepEqual(await creatorValues(), expectedSystemRows, 'Delete removes only its target from the whole-list draft.');
+    assert.equal(await rows.nth(moveFrom - 1).locator('input').evaluate(input => input === document.activeElement), true,
+      'Delete moves focus to the next surviving Creator input.');
+    assert.equal(await rows.first().getByRole('button', { name: 'Move up', exact: true }).isDisabled(), true,
+      'The first creator cannot move up.');
+    assert.equal(await rows.last().getByRole('button', { name: 'Move down', exact: true }).isDisabled(), true,
+      'The last creator cannot move down.');
+    const firstCreatorInput = rows.first().getByLabel('Creator', { exact: true });
+    await firstCreatorInput.focus(); await page.keyboard.press('Tab');
+    assert.equal(await rows.first().locator('[data-row-action="down"]').evaluate(button => button === document.activeElement), true,
+      'Keyboard order skips the disabled first-row action and reaches Move down.');
+    assert.equal(await rows.first().locator('[data-row-action="down"]').evaluate(button => button.matches(':focus-visible')), true,
+      'Keyboard navigation keeps the row action visibly focused.');
+    await page.keyboard.press('Tab');
+    assert.equal(await rows.first().locator('[data-row-action="delete"]').evaluate(button => button === document.activeElement), true);
+    await page.keyboard.press('Tab');
+    assert.equal(await rows.nth(1).locator('input').evaluate(input => input === document.activeElement), true,
+      'Tab follows row actions to the next Creator input.');
+    report.commonCreatorInteractions = true;
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await rows.last().scrollIntoViewIfNeeded();
+    const systemDesktopGeometry = await creatorGeometry();
+    assertCreatorContainment(systemDesktopGeometry, 'System desktop');
+    assert.ok(systemDesktopGeometry.rows.every(row => row.actions.left > row.input.right &&
+      Math.abs(row.actions.top - row.input.top) < 1 && Math.abs(row.actions.bottom - row.input.bottom) < 1),
+    `At desktop width, creator actions share the input row: ${JSON.stringify(systemDesktopGeometry)}`);
+    report.commonCreatorLayouts.push({ name: 'system-desktop', ...systemDesktopGeometry });
+    await page.screenshot({ path: path.join(args.artifactRoot, 'common-creators-system-desktop.png'), fullPage: true });
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-system-desktop');
     await rows.last().locator('input').focus();
     await enabled.evaluate(node => {
       node.checked = false;
@@ -1347,13 +1534,13 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
       'Hiding focused editable options returns focus to Show common creators.');
     const retainedAdd = page.locator('#add-common-creator');
     const retainedDelete = rows.last().locator('.settings-row-actions button[aria-label="Delete"]');
-    const expectedSystemRows = [...systemInitially.creators, systemCreator];
     await retainedAdd.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     await retainedDelete.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     assert.deepEqual(await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value)), expectedSystemRows,
       'Retained hidden Add/Delete handlers cannot mutate the invisible System list.');
     const systemOffPayload = await saveSettings();
-    assert.equal(systemOffPayload.workflow.commonAuthorsEnabled, false);
+    assert.equal(systemOffPayload.workflow.commonAuthorsEnabled, systemSnapshot.enabled ? false : undefined,
+      'A changed System flag is submitted; an accepted false/null presentation is preserved by omission.');
     assert.equal(systemOffPayload.workflow.commonAuthorsLabel, systemDraft.label);
     assert.equal(systemOffPayload.workflow.commonAuthorsHelp, systemDraft.help);
     assert.equal(systemOffPayload.workflow.commonAuthorsMessage, systemDraft.message);
@@ -1364,45 +1551,84 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     await assertOptionsDisabled('System reloaded off state');
     assert.deepEqual(await page.locator('#common-creators-editor [data-domain-row] input').evaluateAll(inputs => inputs.map(input => input.value)), expectedSystemRows,
       'The hidden System scalar and list drafts survive accepted save and full reload.');
+    await setEnabledByKeyboard(true);
+    await rows.first().locator('input').fill(`Discarded creator draft ${args.identity.staffId}`);
+    await page.locator('#add-common-creator').click();
+    await rows.last().locator('input').fill(`Discarded added creator ${args.identity.staffId}`);
+    assert.equal(await page.locator('#settings-save').isEnabled(), true,
+      'Creator edits and additions reach the existing global Save action.');
+    const discardReload = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/settings' &&
+        url.searchParams.get('orgId') === 'system';
+    });
+    await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
+    const discardResponse = await discardReload;
+    assert.equal(discardResponse.status(), 200, 'Global Discard reloads accepted System settings successfully.');
+    await page.waitForFunction(expectedRows => {
+      const refresh = document.getElementById('settings-refresh');
+      const save = document.getElementById('settings-save');
+      const message = document.getElementById('settings-message');
+      const creators = [...document.querySelectorAll('#common-creators-editor [data-domain-row] input')]
+        .map(input => input.value);
+      return refresh && !refresh.disabled && save?.disabled && !message?.classList.contains('error') &&
+        JSON.stringify(creators) === JSON.stringify(expectedRows);
+    }, expectedSystemRows);
+    assert.deepEqual(await creatorValues(), expectedSystemRows,
+      'Global Discard restores the accepted whole creator list and removes the unsaved row.');
+    report.commonCreatorDiscard = true;
     await page.setViewportSize({ width: 390, height: 844 });
     await scan(page, axeSource, args.artifactRoot, report, 'common-creators-system-mobile-off');
     await setEnabledByKeyboard(true);
     await scan(page, axeSource, args.artifactRoot, report, 'common-creators-system-mobile-on');
-    const geometry = await page.evaluate(() => {
-      const region = document.getElementById('common-authors-options').getBoundingClientRect();
-      return {
-        viewport: innerWidth,
-        scrollWidth: document.documentElement.scrollWidth,
-        region: { left: region.left, right: region.right, width: region.width },
-        controls: [...document.querySelectorAll('#common-authors-options input, #common-authors-options textarea, #common-authors-options button')]
-          .filter(control => control.getBoundingClientRect().width > 0)
-          .map(control => {
-            const bounds = control.getBoundingClientRect();
-            return { id: control.id || control.getAttribute('aria-label') || control.textContent.trim(), left: bounds.left, right: bounds.right };
-          })
-      };
-    });
-    assert.ok(geometry.region.width > 0 && geometry.region.left >= -1 && geometry.region.right <= geometry.viewport + 1,
-      `The mobile options region fits its viewport: ${JSON.stringify(geometry)}`);
-    assert.ok(geometry.scrollWidth <= geometry.viewport);
-    assert.ok(geometry.controls.every(control => control.left >= geometry.region.left - 1 && control.right <= geometry.region.right + 1),
-      `Every mobile creator control fits its region: ${JSON.stringify(geometry)}`);
+    const mobileGeometry = await creatorGeometry();
+    assertCreatorContainment(mobileGeometry, 'System mobile');
+    assert.ok(mobileGeometry.rows.every(row => row.actions.top >= row.input.top - 1),
+      `Mobile rows may reflow below their flexible Creator input: ${JSON.stringify(mobileGeometry)}`);
+    report.commonCreatorLayouts.push({ name: 'system-mobile', ...mobileGeometry });
+    await page.screenshot({ path: path.join(args.artifactRoot, 'common-creators-system-mobile.png'), fullPage: true });
     await page.setViewportSize({ width: 1280, height: 900 });
-    await restoreSystem(systemSnapshot);
-    report.systemCommonAuthorsRoundTrip = true;
 
     await switchScope(libraryScope);
     const libraryInitially = await readEditor();
     const systemConfig = await readSettings('system');
     const systemEnabled = systemConfig.stored?.configuredSystem?.workflow?.commonAuthorsEnabled === true;
-    if (!libraryInitially.enabledOverridden) await enabledOverride.check();
+    assert.equal(await enabled.isEnabled(), true);
     await setEnabledByKeyboard(true);
     assert.equal(await options.isVisible(), true);
-    if (await useSystem.isChecked()) await useSystem.uncheck();
+    if (!await creatorsInherited()) await resetCreators();
+    const inheritedSystemCreators = (systemConfig.stored?.configuredSystem?.commonCreators?.values || [])
+      .map(creator => typeof creator === 'string' ? creator : creator.value);
+    assert.deepEqual(await creatorValues(), inheritedSystemCreators,
+      'Use system renders the whole accepted System creator list in Library context.');
+    assert.equal(await rows.first().locator('input').isDisabled(), false,
+      'Inherited creator inputs remain disabled.');
+    assert.equal(await rows.first().getByRole('button', { name: 'Move down', exact: true }).isDisabled(), false,
+      'Inherited row actions remain disabled.');
+    assert.equal(await page.locator('#add-common-creator').isDisabled(), false,
+      'The inherited Library list can be edited directly.');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const inheritedGeometry = await creatorGeometry();
+    assertCreatorContainment(inheritedGeometry, 'Library inherited desktop');
+    assert.ok(inheritedGeometry.rows.every(row => row.actions.left > row.input.right &&
+      Math.abs(row.actions.top - row.input.top) < 1),
+    `An inherited list keeps the compact row layout: ${JSON.stringify(inheritedGeometry)}`);
+    report.commonCreatorLayouts.push({ name: 'library-inherited-desktop', ...inheritedGeometry });
+    await page.screenshot({ path: path.join(args.artifactRoot, 'common-creators-library-inherited-desktop.png'), fullPage: true });
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-inherited-desktop');
+    assert.equal(await page.locator('#add-common-creator').isEnabled(), true);
     const libraryCreator = `Collapsed Library creator ${args.identity.staffId}`;
     await page.locator('#add-common-creator').click();
     await rows.last().locator('input').fill(libraryCreator);
     const libraryDraftRows = await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value));
+    const libraryOwnedGeometry = await creatorGeometry();
+    assertCreatorContainment(libraryOwnedGeometry, 'Library owned desktop');
+    assert.ok(libraryOwnedGeometry.rows.every(row => row.actions.left > row.input.right &&
+      Math.abs(row.actions.top - row.input.top) < 1),
+    `A library-owned list keeps the compact row layout: ${JSON.stringify(libraryOwnedGeometry)}`);
+    report.commonCreatorLayouts.push({ name: 'library-owned-desktop', ...libraryOwnedGeometry });
+    await page.screenshot({ path: path.join(args.artifactRoot, 'common-creators-library-owned-desktop.png'), fullPage: true });
+    await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-owned-desktop');
     await rows.last().locator('input').focus();
     await enabled.evaluate(node => {
       node.checked = false;
@@ -1411,44 +1637,48 @@ async function runCommonAuthorsOptions(page, axeSource, args, report, saveSettin
     assert.equal(await options.isHidden(), true);
     await assertOptionsDisabled('Library hidden draft');
     assert.equal(await enabled.evaluate(node => document.activeElement === node), true);
-    const useSystemBefore = await useSystem.isChecked();
-    await useSystem.evaluate(node => {
-      node.checked = !node.checked;
-      node.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    assert.equal(await useSystem.isChecked(), useSystemBefore,
+    const useSystemBefore = await creatorsInherited();
+    await creatorStatus.locator('.settings-use-system').evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    assert.equal(await creatorsInherited(), useSystemBefore,
       'A hidden Use system list event cannot change Library list ownership.');
     const libraryOffPayload = await saveSettings();
     assert.equal(libraryOffPayload.workflow.commonAuthorsEnabled, false);
     assert.deepEqual(libraryOffPayload.workflow.commonAuthorsList, libraryDraftRows);
     await reloadScope(libraryScope);
     assert.equal(await enabled.isChecked(), false);
-    assert.equal(await enabledOverride.isChecked(), true);
+    assert.equal(await librarySetting(enabledOverride), true);
     assert.equal(await options.isHidden(), true);
-    assert.equal(await useSystem.isChecked(), false);
+    assert.equal(await creatorsInherited(), false);
     assert.deepEqual(await rows.locator('input').evaluateAll(inputs => inputs.map(input => input.value)), libraryDraftRows,
       'The hidden Library creator list and its override survive accepted save and reload.');
     await page.setViewportSize({ width: 390, height: 844 });
     await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-mobile-off');
 
-    await enabledOverride.uncheck();
+    await useSystemValue(page, enabledOverride);
     assert.equal(await enabled.isChecked(), systemEnabled,
       'Resetting the Library feature override displays the authoritative System flag.');
-    assert.equal(await enabled.isDisabled(), true);
+    assert.equal(await enabled.isDisabled(), false);
     assert.equal(await options.isHidden(), !systemEnabled,
       'Inherited true reveals options, while inherited false keeps them collapsed.');
-    await enabledOverride.check();
-    assert.equal(await enabled.isChecked(), false, 'Re-enabling Override restores its local false value.');
+    await setEnabledByKeyboard(false);
+    assert.equal(await enabled.isChecked(), false, 'A direct false edit prepares the local feature value.');
     assert.equal(await options.isHidden(), true);
     await setEnabledByKeyboard(true);
     await scan(page, axeSource, args.artifactRoot, report, 'common-creators-library-mobile-on');
     await page.setViewportSize({ width: 1280, height: 900 });
+    await restoreSystem(systemSnapshot);
+    report.systemCommonAuthorsRoundTrip = true;
     await restoreLibrary(librarySnapshot);
     report.libraryCommonAuthorsRoundTrip = true;
-  } finally {
-    await restoreSystem(systemSnapshot);
-    await restoreLibrary(librarySnapshot);
+  } catch (error) {
+    journeyError = error;
   }
+  const cleanupErrors = [];
+  try { await restoreSystem(systemSnapshot); } catch (error) { cleanupErrors.push(error); }
+  try { await restoreLibrary(librarySnapshot); } catch (error) { cleanupErrors.push(error); }
+  const errors = [journeyError, ...cleanupErrors].filter(Boolean);
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'Common creator journey and restoration failed.');
 }
 
 async function runSuggestionLimitPlaceholder(page, axeSource, args, report, saveSettings, ready, postedPayloads) {
@@ -1460,12 +1690,12 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
   });
   const retainedOption = picker.locator('[data-suggestion-placeholder="next_available_date"]');
   const override = page.locator(
-    '[data-setting-section="workflow"][data-setting-key="suggestionLimitMessage"] .settings-override-toggle');
+    '[data-setting-section="workflow"][data-setting-key="suggestionLimitMessage"]');
   const scope = page.locator('#settings-scope');
   let librarySnapshot = null;
   const readEditor = async () => ({
     value: await message.inputValue(),
-    overridden: await override.count() ? await override.isChecked() : null
+    overridden: await librarySetting(override)
   });
   const switchScope = async target => {
     if (await scope.inputValue() !== target) {
@@ -1674,7 +1904,7 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
       'The accepted Library message still reflects the initial System fallback before Library editing.');
     await trackInputEvents();
     assert.equal(await override.count(), 1);
-    if (!await override.isChecked()) await override.check();
+    assert.equal(await message.isEditable(), true);
     const librarySource = `Library selected suffix ${args.identity.staffId}`;
     const libraryInserted = `Library {{next_available_date}} suffix ${args.identity.staffId}`;
     assert.notEqual(libraryInserted, librarySnapshot.value, 'The Library round trip uses a distinct message draft.');
@@ -1690,7 +1920,7 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
     assert.equal(libraryPayload.workflow.suggestionLimitMessage, libraryInserted,
       'The Library token is saved through the existing Workflow override payload.');
     await reloadScope('2');
-    assert.equal(await override.isChecked(), true);
+    assert.equal(await librarySetting(override), true);
     assert.equal(await message.inputValue(), libraryInserted,
       'The explicit Library message survives an accepted save and reload.');
     if (librarySnapshot.overridden) {
@@ -1698,7 +1928,7 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
       const restoreLibraryValue = await saveSettings();
       assert.equal(restoreLibraryValue.workflow.suggestionLimitMessage, librarySnapshot.value);
     } else {
-      await override.uncheck();
+      await useSystemValue(page, override);
       const resetLibraryOverride = await saveSettings();
       assert.equal(resetLibraryOverride.workflow.suggestionLimitMessage, null,
         'Restoring an initially inherited message removes only the temporary Library override.');
@@ -1708,17 +1938,14 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
       'The Library message and Override ownership are restored after the insertion round trip.');
 
     await trackInputEvents();
-    if (!await override.isChecked()) await override.check();
+    assert.equal(await message.isEditable(), true);
     await message.fill('Library override draft for stale picker');
     await message.evaluate(node => node.setSelectionRange(8, 20));
     await trigger.focus();
     await trigger.press('Enter');
     await option.waitFor({ state: 'visible' });
-    await override.evaluate(node => {
-      node.checked = false;
-      node.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    assert.equal(await trigger.isDisabled(), true, 'The inherited Library editor disables its picker.');
+    await useSystemValue(page, override);
+    assert.equal(await trigger.isDisabled(), false, 'The inherited Library editor keeps its picker editable.');
     const overrideDraft = await message.inputValue();
     const inputEventsBeforeOverrideClick = await message.evaluate(node => window.__suggestionLimitInputTypes.length);
     await retainedOption.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
@@ -1730,7 +1957,7 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
       'The Library message and Override ownership are restored after the stale-value check.');
 
     await trackInputEvents();
-    if (!await override.isChecked()) await override.check();
+    assert.equal(await message.isEditable(), true);
     await message.fill('Library scope draft before switch');
     await message.evaluate(node => node.setSelectionRange(0, 7));
     await trigger.focus();
@@ -1774,10 +2001,10 @@ async function runSuggestionLimitPlaceholder(page, axeSource, args, report, save
     await switchScope('2');
     const currentLibrary = await readEditor();
     if (librarySnapshot.overridden) {
-      if (!currentLibrary.overridden) await override.check();
-      if (currentLibrary.value !== librarySnapshot.value) await message.fill(librarySnapshot.value);
+      if (!currentLibrary.overridden) { const value = await message.inputValue(); await message.fill(value + ' draft'); }
+      if (await message.inputValue() !== librarySnapshot.value) await message.fill(librarySnapshot.value);
     } else if (currentLibrary.overridden) {
-      await override.uncheck();
+      await useSystemValue(page, override);
     }
     if (await page.locator('#settings-save').isEnabled()) {
       const payload = await saveSettings();
@@ -2051,6 +2278,7 @@ async function main() {
     libraryEmptyPatronCodeReplacementRoundTrip: false, libraryPatronCodeResetRoundTrip: false,
     systemTimeoutDependenciesRoundTrip: false, libraryTimeoutDependenciesRoundTrip: false,
     systemCommonAuthorsRoundTrip: false, libraryCommonAuthorsRoundTrip: false,
+    commonCreatorDiscard: false, commonCreatorLayouts: [],
     suggestionLimitPlaceholderRoundTrip: false,
     wildcardOriginNormalized: false, systemFormatRuleRoundTrip: false, systemFormatRulePost: null,
     systemFormatRulePostCount: 0,
@@ -2174,6 +2402,10 @@ async function main() {
       return;
     }
     if (args.mode === 'library-metadata') {
+      await verifySettingsDraftBlockers(page, args, report, waitForSettingsReady,
+        name => scan(page, axeSource, args.artifactRoot, report, name, false, false));
+      await verifyInheritanceInteractions(page, args, report, waitForSettingsReady,
+        name => scan(page, axeSource, args.artifactRoot, report, name, false, false));
       await runLibraryOverrideMetadataEditor(page, args, report, saveSettings, waitForSettingsReady);
       await scan(page, axeSource, args.artifactRoot, report, 'desktop');
       await page.setViewportSize({ width: 390, height: 844 });
@@ -2185,11 +2417,11 @@ async function main() {
       return;
     }
     if (args.mode === 'library-format-rule-drafts') {
-      await runLibraryFormatRuleDrafts(page, args, report, saveSettings, waitForSettingsReady);
+      await runLibraryFormatRuleDrafts(page, args, report, waitForSettingsReady);
       await scan(page, axeSource, args.artifactRoot, report, 'desktop');
       await page.setViewportSize({ width: 390, height: 844 });
       await scan(page, axeSource, args.artifactRoot, report, 'mobile');
-      assert.equal(postedPayloads.length, 1, 'The combined new-format/new-field draft must persist in one POST.');
+      assert.equal(postedPayloads.length, 3, 'Two actual rejected attempts precede exactly one combined committed POST.');
       assert.deepEqual(pageErrors, []);
       assert.equal(traffic.externalRequests, 0);
       await page.close(); await context.close();
@@ -2377,9 +2609,9 @@ async function main() {
     assert.equal(await rejectionTemplateInput.isDisabled(), true);
     assert.equal(await rejectionTemplateInput.inputValue(), testTemplateId);
     const emailOffTimeoutPayload = await saveSettings();
-    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutEnabled, true);
+    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutEnabled, undefined, 'The unchanged main flag is preserved by omission.');
     assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutSendEmail, false);
-    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, testTemplateId,
+    assert.equal(emailOffTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, undefined,
       'Saving with only the email option off retains the nonblank template choice.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('system');
@@ -2416,16 +2648,16 @@ async function main() {
     const disabledTimeoutPayload = await saveSettings();
     for (const [key, expected] of Object.entries({
       outstandingTimeoutEnabled: false,
-      outstandingTimeoutDays: 43,
+      outstandingTimeoutDays: undefined,
       outstandingTimeoutSendEmail: true,
-      outstandingTimeoutRejectionTemplateId: testTemplateId || null,
+      outstandingTimeoutRejectionTemplateId: undefined,
       holdPickupTimeoutEnabled: false,
-      holdPickupTimeoutDays: 9,
+      holdPickupTimeoutDays: undefined,
       pendingHoldTimeoutEnabled: false,
-      pendingHoldTimeoutDays: 17,
+      pendingHoldTimeoutDays: undefined,
       additionalCopyTimeoutEnabled: false,
-      additionalCopyTimeoutDays: 24
-    })) assert.equal(disabledTimeoutPayload.workflow[key], expected, `${key} remains in the save payload while disabled.`);
+      additionalCopyTimeoutDays: undefined
+    })) assert.equal(disabledTimeoutPayload.workflow[key], expected, `${key} is changed explicitly or preserved by omission while disabled.`);
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('system');
     await page.locator('#settings-nav-workflow').click();
@@ -2526,8 +2758,7 @@ async function main() {
       .map(rule => ({ materialFormatId: rule.materialFormatId, staffUserId: rule.staffUserId }));
 
     await page.locator('#settings-nav-patron').click();
-    const initialLoginNoteToggle = page.locator('[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle');
-    if (!await initialLoginNoteToggle.isChecked()) await initialLoginNoteToggle.check();
+    assert.equal(await page.locator('#patron-login-note').isEditable(), true);
     await page.locator('#patron-login-note').fill('Initial unrelated library scalar edit');
     const initialScalarPayload = await saveSettings();
     assert.equal(initialScalarPayload.patron.loginNote, 'Initial unrelated library scalar edit');
@@ -2550,11 +2781,15 @@ async function main() {
       'An unrelated scalar save and authoritative reload must preserve every original active auto-claim rule.');
     report.libraryInitialScalarSavePreservedAutoClaimRules = true;
 
+    // Complete this presentation probe before creating the unrelated code and
+    // auto-claim drafts: Library edits now deliberately retain pin/reset intent.
+    await page.locator('#settings-nav-patron').click();
+    await verifyFormatRuleDraftNames(page);
+
     await page.locator('#settings-nav-workflow').click();
     await page.waitForFunction(() => document.getElementById('settings-scope')?.value === '2');
 
-    const useSystemCodes = page.locator('#patron-codes-use-system');
-    if (await useSystemCodes.isChecked()) await useSystemCodes.uncheck();
+    assert.equal(await codePicker.isEnabled(), true);
     const libraryCodeRows = page.locator('#patron-codes-editor [data-code-id]');
     assert.deepEqual(await libraryCodeRows.evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2'],
       'The library override must begin with numeric IDs 1 and 2.');
@@ -2564,7 +2799,6 @@ async function main() {
 
     await page.locator('#settings-nav-patron').click();
     const autoClaimEditor = page.locator('#format-claim-rules-editor');
-    await verifyFormatRuleDraftNames(page);
     const existingAutoClaimRules = await autoClaimEditor.locator('[data-domain-row]').evaluateAll(rows => rows.map(row => {
       const selects = row.querySelectorAll('select');
       return { materialFormatId: selects[0]?.value || '', staffUserId: selects[1]?.value || '' };
@@ -2576,7 +2810,8 @@ async function main() {
     const availableAutoClaimFormats = await autoClaimSelects.nth(0).locator('option').evaluateAll(options =>
       options.filter(option => option.value).map(option => ({
         id: option.value,
-        code: option.textContent.trim().match(/\(([^()]*)\)$/)?.[1] || ''
+        code: [...document.querySelectorAll('#material-formats-editor [data-domain-row]')]
+          .find(row => row.dataset.formatId === option.value)?.dataset.formatCode || ''
       })));
     const systemAutoClaimCodes = new Set(['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook']);
     const autoClaimFormat = availableAutoClaimFormats.find(option => systemAutoClaimCodes.has(option.code) &&
@@ -2597,25 +2832,25 @@ async function main() {
     await page.locator('#settings-nav-patron').click();
     const fields = page.locator('#additional-fields-editor [data-domain-row]');
     await fields.first().waitFor({ state: 'visible' });
-    const originalKeys = await fields.evaluateAll(rows => rows.map(row => row.querySelector('input')?.value));
+    const originalKeys = await fields.evaluateAll(rows => rows.map(row => row.dataset.fieldKey));
     assert.ok(originalKeys.includes('authority_retired'), 'The seeded retired field should be present before adding a dynamic editor row.');
     await page.locator('#add-custom-field').click();
     const added = fields.last();
-    await added.locator('input').nth(0).fill('browser_select');
-    await added.locator('input').nth(1).fill('Browser choice');
+    const dynamicKey = await added.getAttribute('data-field-key');
+    await added.locator('[data-custom-field="label"]').fill('Browser choice');
     await added.locator('select').selectOption('select');
     const options = added.locator('[data-options-editor]');
     await options.getByRole('button', { name: /Add option/i }).click();
-    await options.locator('[data-option-row]').nth(0).locator('input').nth(0).fill('zeta');
-    await options.locator('[data-option-row]').nth(0).locator('input').nth(1).fill('Zeta');
+    await options.locator('[data-option-row]').nth(0).locator('[data-option-field="label"]').fill('Zeta');
     await options.getByRole('button', { name: /Add option/i }).click();
-    await options.locator('[data-option-row]').nth(1).locator('input').nth(0).fill('alpha');
-    await options.locator('[data-option-row]').nth(1).locator('input').nth(1).fill('Alpha');
+    await options.locator('[data-option-row]').nth(1).locator('[data-option-field="label"]').fill('Alpha');
+    const dynamicOptionIds = await options.locator('[data-option-row]').evaluateAll(rows => rows.map(row => row.dataset.optionId));
+    report.dynamicFieldIdentity = { key: dynamicKey, optionIds: dynamicOptionIds };
 
     const retiredRule = page.locator('#format-rules-editor [data-rule-code="book"] [data-custom-rule-key="authority_retired"]');
     assert.equal(await retiredRule.locator('[data-custom-rule-property="mode"]').inputValue(), 'optional');
     assert.equal(await retiredRule.locator('[data-custom-rule-property="labelOverride"]').inputValue(), 'Historical label');
-    const addedRule = page.locator('#format-rules-editor [data-rule-code="book"] [data-custom-rule-key="browser_select"]');
+    const addedRule = page.locator(`#format-rules-editor [data-rule-code="book"] [data-custom-rule-key="${dynamicKey}"]`);
     await page.locator('#format-rules-editor [data-rule-code="book"] [data-rule-toggle]').click();
     await addedRule.locator('[data-custom-rule-property="mode"]').selectOption('required');
     await addedRule.locator('[data-custom-rule-property="labelOverride"]').fill('Browser choice');
@@ -2634,19 +2869,19 @@ async function main() {
     assert.ok(postedPayload.autoClaimRules.some(rule => rule.materialFormatId === autoClaimFormatId &&
       rule.staffUserId === autoClaimStaffId && rule.active === true),
     'Saving the library auto-claim rule must submit the exact SQL bigint staff ID.');
-    const submittedField = postedPayload.customFields.find(field => field.key === 'browser_select');
+    const submittedField = postedPayload.customFields.find(field => field.key === dynamicKey);
     assert.ok(submittedField, 'The dynamically added custom field was missing from the submitted payload.');
-    assert.deepEqual(submittedField.options.map(option => option.id), ['zeta', 'alpha']);
+    assert.deepEqual(submittedField.options.map(option => option.id), dynamicOptionIds);
     const submittedRule = postedPayload.formatRules.find(rule => rule.code === 'book');
     assert.equal(submittedRule.customFields.authority_retired.mode, 'optional');
     assert.equal(submittedRule.customFields.authority_retired.labelOverride, 'Historical label');
-    assert.equal(submittedRule.customFields.browser_select.mode, 'required');
-    assert.equal(submittedRule.customFields.browser_select.labelOverride, 'Browser choice');
+    assert.equal(submittedRule.customFields[dynamicKey].mode, 'required');
+    assert.equal(submittedRule.customFields[dynamicKey].labelOverride, 'Browser choice');
     await page.locator('#settings-message').filter({ hasText: 'Settings saved.' }).waitFor();
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
-    assert.equal(await page.locator('#patron-codes-use-system').isChecked(), false);
+    assert.equal(!await librarySetting(page.locator('#patron-codes-inherit-field')), false);
     assert.deepEqual(await page.locator('#patron-codes-editor [data-code-id]')
       .evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2', '3']);
     await page.locator('#settings-nav-patron').click();
@@ -2668,19 +2903,17 @@ async function main() {
     report.libraryPatronCodesRoundTrip = true;
     await page.locator('#settings-nav-patron').click();
     const reloadedFields = page.locator('#additional-fields-editor [data-domain-row]');
-    const reloadedKeys = await reloadedFields.evaluateAll(rows => rows.map(row => row.querySelector('input')?.value));
-    assert.ok(reloadedKeys.indexOf('authority_retired') < reloadedKeys.indexOf('browser_select'));
-    const reloadedDynamicField = reloadedFields.nth(reloadedKeys.indexOf('browser_select'));
+    const reloadedKeys = await reloadedFields.evaluateAll(rows => rows.map(row => row.dataset.fieldKey));
+    assert.ok(reloadedKeys.indexOf('authority_retired') < reloadedKeys.indexOf(dynamicKey));
+    const reloadedDynamicField = reloadedFields.nth(reloadedKeys.indexOf(dynamicKey));
     assert.deepEqual(await reloadedDynamicField
-      .locator('[data-option-row] input[aria-label="Option stable ID"]').evaluateAll(inputs => inputs.map(input => input.value)),
-    ['zeta', 'alpha']);
+      .locator('[data-option-row]').evaluateAll(rows => rows.map(row => row.dataset.optionId)), dynamicOptionIds);
     assert.equal(await retiredRule.locator('[data-custom-rule-property="mode"]').inputValue(), 'optional');
     assert.equal(await retiredRule.locator('[data-custom-rule-property="labelOverride"]').inputValue(), 'Historical label');
     assert.equal(await addedRule.locator('[data-custom-rule-property="mode"]').inputValue(), 'required');
     assert.equal(await addedRule.locator('[data-custom-rule-property="labelOverride"]').inputValue(), 'Browser choice');
 
     await page.locator('#settings-nav-patron').click();
-    await page.locator('[data-setting-section="patron"][data-setting-key="loginNote"] .settings-override-toggle').check();
     await page.locator('#patron-login-note').fill('Unrelated library setting edit');
     const unrelatedLibraryPayload = await saveSettings();
     assert.equal(unrelatedLibraryPayload.patron.loginNote, 'Unrelated library setting edit',
@@ -2719,43 +2952,48 @@ async function main() {
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
-    assert.equal(await page.locator('#patron-codes-use-system').isChecked(), false,
+    assert.equal(!await librarySetting(page.locator('#patron-codes-inherit-field')), false,
       'An empty replacement set must remain a library override.');
     assert.equal(await page.locator('#patron-codes-editor [data-code-id]').count(), 0,
       'An empty replacement set must round-trip as an empty editor.');
     report.libraryEmptyPatronCodeReplacementRoundTrip = true;
 
-    await page.locator('#patron-codes-use-system').check();
+    await useSystemValue(page, page.locator('#patron-codes-inherit-field'), true);
     const resetLibraryCodesPayload = await saveSettings();
     assert.equal(resetLibraryCodesPayload.workflow.allowedPatronCodeIds, null,
       'Use system must send an explicit reset, not an empty replacement.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
-    assert.equal(await page.locator('#patron-codes-use-system').isChecked(), true);
+    assert.equal(!await librarySetting(page.locator('#patron-codes-inherit-field')), true);
     assert.deepEqual(await page.locator('#patron-codes-editor [data-code-id]')
       .evaluateAll(chips => chips.map(chip => chip.dataset.codeId)), ['1', '2', '3']);
     report.libraryPatronCodeResetRoundTrip = true;
 
     const libraryTimeoutSnapshot = await page.evaluate(definitions => Object.fromEntries(definitions.map(({ key, id, kind }) => {
       const control = document.getElementById(id);
-      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
-      return [key, { overridden: override?.checked === true, value: kind === 'checkbox' ? control.checked : control.value }];
+      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-inheritance-status');
+      return [key, { overridden: override?.textContent.startsWith('Library setting') === true, value: kind === 'checkbox' ? control.checked : control.value }];
     })), timeoutFieldDefinitions);
     const libraryTimeoutOverride = key => page.locator(
-      `[data-setting-section="workflow"][data-setting-key="${key}"] .settings-override-toggle`);
+      `[data-setting-section="workflow"][data-setting-key="${key}"]`);
     const libraryTimeoutControl = key => page.locator(`#${timeoutFieldDefinitions.find(field => field.key === key).id}`);
     const setLibraryTimeoutOverride = async (key, checked) => {
-      const toggle = libraryTimeoutOverride(key);
-      if (await toggle.isChecked() !== checked) await toggle.setChecked(checked);
+      if (!checked) await useSystemValue(page, libraryTimeoutOverride(key));
     };
     const setLibraryTimeoutValue = async (key, value) => {
       const definition = timeoutFieldDefinitions.find(field => field.key === key);
       const control = libraryTimeoutControl(key);
       const normalized = value ?? '';
-      if (definition.kind === 'checkbox') await control.setChecked(Boolean(normalized));
-      else if (definition.kind === 'select') await control.selectOption(String(normalized));
-      else await control.fill(String(normalized));
+      if (definition.kind === 'checkbox') { if (await control.isChecked() === Boolean(normalized)) await control.setChecked(!Boolean(normalized)); await control.setChecked(Boolean(normalized)); }
+      else if (definition.kind === 'select') {
+        if (await control.inputValue() === String(normalized)) {
+          const alternate = await control.locator('option').evaluateAll((options, desired) => options.find(option => option.value !== desired)?.value, String(normalized));
+          if (alternate !== undefined) await control.selectOption(alternate);
+        }
+        await control.selectOption(String(normalized));
+      }
+      else { if (await control.inputValue() === String(normalized)) await control.fill(String(Number(normalized) + 1)); await control.fill(String(normalized)); }
     };
     assert.equal(await page.getByRole('group', { name: 'Auto-reject unreviewed suggestions' }).count(), 1);
     assert.equal(await page.getByRole('group', { name: 'Send auto-rejection email' }).count(), 1);
@@ -2771,12 +3009,12 @@ async function main() {
     await setLibraryTimeoutOverride('holdPickupTimeoutEnabled', false);
     await setLibraryTimeoutOverride('holdPickupTimeoutDays', false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), false);
-    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), true,
+    assert.equal(await librarySetting(libraryTimeoutOverride('outstandingTimeoutEnabled')), true,
       'The test begins from an explicit false Library override over a true System parent.');
     assert.equal(await libraryTimeoutControl('holdPickupTimeoutEnabled').isChecked(), true);
-    assert.equal(await libraryTimeoutOverride('holdPickupTimeoutDays').isChecked(), false);
-    assert.equal(await libraryTimeoutControl('holdPickupTimeoutDays').isDisabled(), true,
-      'An inherited true parent cannot unlock a dependent without its own Library override.');
+    assert.equal(await librarySetting(libraryTimeoutOverride('holdPickupTimeoutDays')), false);
+    assert.equal(await libraryTimeoutControl('holdPickupTimeoutDays').isDisabled(), false,
+      'An inherited true parent enables a directly editable dependent.');
     const explicitLibraryTimeoutPayload = await saveSettings();
     assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutEnabled, false);
     assert.equal(explicitLibraryTimeoutPayload.workflow.outstandingTimeoutDays, 47);
@@ -2789,35 +3027,35 @@ async function main() {
     assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isChecked(), true);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
 
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    await useSystemValue(page, libraryTimeoutOverride('outstandingTimeoutEnabled'));
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true,
       'Removing the explicit false override displays the inherited true System parent.');
-    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
     assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
+    await libraryTimeoutControl('outstandingTimeoutEnabled').uncheck();
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), false,
-      'Re-enabling Override restores the saved Library draft value.');
+      'A direct false edit prepares a Library draft.');
     assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    await useSystemValue(page, libraryTimeoutOverride('outstandingTimeoutEnabled'));
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
     const resetLibraryTimeoutPayload = await saveSettings();
     assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutEnabled, null,
       'The explicit false parent reset is saved as inheritance.');
-    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutDays, 47,
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutDays, undefined,
       'Resetting the parent keeps the independently owned days override.');
-    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutSendEmail, true);
-    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, testTemplateId,
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutSendEmail, undefined);
+    assert.equal(resetLibraryTimeoutPayload.workflow.outstandingTimeoutRejectionTemplateId, undefined,
       'Resetting the parent keeps the independently owned nonblank template choice.');
     await page.reload({ waitUntil: 'networkidle' });
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
-    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), false);
+    assert.equal(await librarySetting(libraryTimeoutOverride('outstandingTimeoutEnabled')), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
-    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), true);
+    assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').inputValue(), '47');
     assert.equal(await libraryTimeoutControl('outstandingTimeoutDays').isDisabled(), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutSendEmail').isChecked(), true);
@@ -2825,21 +3063,22 @@ async function main() {
     assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').inputValue(), testTemplateId);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutRejectionTemplateId').isDisabled(), false);
 
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
     await libraryTimeoutControl('outstandingTimeoutEnabled').uncheck();
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    await useSystemValue(page, libraryTimeoutOverride('outstandingTimeoutEnabled'));
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
-    await page.locator('#settings-scope').selectOption('system');
+    await decideConfirmation(page, () => page.locator('#settings-scope').selectOption('system'), dialog => dialog.dismiss());
+    assert.equal(await page.locator('#settings-scope').inputValue(), '2', 'Cancelling departure preserves the pending reset owner.');
+    assert.match(await libraryTimeoutOverride('outstandingTimeoutEnabled').textContent(), /Using system value.*Unsaved/);
+    await decideConfirmation(page, () => page.locator('#settings-scope').selectOption('system'), dialog => dialog.accept());
     await waitForSettingsReady('system');
     await page.locator('#settings-scope').selectOption('2');
     await waitForSettingsReady('2');
     await page.locator('#settings-nav-workflow').click();
-    assert.equal(await libraryTimeoutOverride('outstandingTimeoutEnabled').isChecked(), false);
+    assert.equal(await librarySetting(libraryTimeoutOverride('outstandingTimeoutEnabled')), false);
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').check();
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true,
       'Scope population retires the previous unsaved timeout override draft.');
-    await libraryTimeoutOverride('outstandingTimeoutEnabled').uncheck();
+    await useSystemValue(page, libraryTimeoutOverride('outstandingTimeoutEnabled'));
     assert.equal(await libraryTimeoutControl('outstandingTimeoutEnabled').isChecked(), true);
     await page.setViewportSize({ width: 1280, height: 900 });
     await scan(page, axeSource, args.artifactRoot, report, 'library-desktop', true);
@@ -2878,8 +3117,8 @@ async function main() {
     await page.locator('#settings-nav-workflow').click();
     const libraryTimeoutAfterRestore = await page.evaluate(definitions => Object.fromEntries(definitions.map(({ key, id, kind }) => {
       const control = document.getElementById(id);
-      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-override-toggle');
-      return [key, { overridden: override?.checked === true, value: kind === 'checkbox' ? control.checked : control.value }];
+      const override = control.closest('[data-setting-section][data-setting-key]')?.querySelector('.settings-inheritance-status');
+      return [key, { overridden: override?.textContent.startsWith('Library setting') === true, value: kind === 'checkbox' ? control.checked : control.value }];
     })), timeoutFieldDefinitions);
     for (const { key } of timeoutFieldDefinitions) {
       assert.equal(libraryTimeoutAfterRestore[key].overridden, libraryTimeoutSnapshot[key].overridden,
@@ -2930,6 +3169,12 @@ async function main() {
   assert.equal(report.libraryTimeoutDependenciesRoundTrip, true);
   assert.equal(report.systemCommonAuthorsRoundTrip, true);
   assert.equal(report.libraryCommonAuthorsRoundTrip, true);
+  assert.equal(report.commonCreatorInteractions, true);
+  assert.equal(report.commonCreatorDiscard, true);
+  assert.ok(report.commonCreatorLayouts.some(layout => layout.name === 'system-desktop'));
+  assert.ok(report.commonCreatorLayouts.some(layout => layout.name === 'system-mobile'));
+  assert.ok(report.commonCreatorLayouts.some(layout => layout.name === 'library-inherited-desktop'));
+  assert.ok(report.commonCreatorLayouts.some(layout => layout.name === 'library-owned-desktop'));
   assert.equal(report.suggestionLimitPlaceholderRoundTrip, true);
   assert.equal(report.wildcardOriginNormalized, true);
   console.log('Settings editor browser journey passed.');

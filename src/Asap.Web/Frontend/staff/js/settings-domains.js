@@ -1,4 +1,5 @@
 import { byDisplayLabel } from './display-order.js';
+import { inheritanceStatus } from './settings-inheritance.js';
 
 let nextRulePanelId = 0;
 let nextTemplateRowId = 0;
@@ -99,9 +100,10 @@ function normalizeFormats(values) {
     const fields = {};
     for (const name of ['title', 'author', 'identifier', 'publication']) {
       const nested = property(value, name);
+      const rawLabel = property(nested, 'label') ?? property(value, `${name}Label`);
       fields[name] = {
         mode: clean(property(nested, 'mode') ?? property(value, `${name}Mode`)) || (name === 'title' ? 'required' : 'optional'),
-        label: clean(property(nested, 'label') ?? property(value, `${name}Label`)) || (name === 'title' ? 'Title' : name === 'identifier' ? 'Identifier number' : name === 'publication' ? 'Publication Timing' : 'Author')
+        label: typeof rawLabel === 'string' && rawLabel.trim() ? rawLabel : (name === 'title' ? 'Title' : name === 'identifier' ? 'Identifier number' : name === 'publication' ? 'Publication Timing' : 'Author')
       };
     }
     const customFields = {};
@@ -119,7 +121,7 @@ function normalizeFormats(values) {
       version: stringId(property(value, 'version')),
       code: clean(property(value, 'code')) || `format_${index + 1}`,
       ownerOrganizationId: numeric(property(value, 'ownerOrganizationId'), 1),
-      label: clean(property(value, 'label')) || clean(property(value, 'code')) || `Format ${index + 1}`,
+      label: property(value, 'label') ?? 'Unresolved material format',
       sortOrder: numeric(property(value, 'sortOrder'), (index + 1) * 10),
       isEnabled: bool(property(value, 'isEnabled') ?? property(value, 'enabled'), true),
       messageBehavior: clean(property(value, 'messageBehavior')) || 'none',
@@ -587,7 +589,8 @@ function rawSnapshot(configuredSystem, libraryOverride, key, system) {
 }
 
 export function createSettingsDomainEditors({ root, onChange = () => {}, onRetryCodes = () => {},
-  canRemoveTemplate = () => true, onTemplatesRendered = () => {}, onInvalidTemplate = () => {} }) {
+  canRemoveTemplate = () => true, onTemplatesRendered = () => {}, onInvalidTemplate = () => {},
+  confirmReset = async () => true }) {
   const events = new window.AbortController();
   let disposed = false;
   function listen(target, name, handler) {
@@ -605,21 +608,20 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     return button;
   }
 
-  function actions(index, total, move, remove, context = '') {
+  function actions(index, total, move, remove, context = '', kind = 'format rule') {
     const buttons = [
       command('chevron-up', context ? `Move ${context} up` : 'Move up', () => move(index, -1), index === 0),
       command('chevron-down', context ? `Move ${context} down` : 'Move down', () => move(index, 1), index === total - 1)
     ];
-    if (remove) buttons.push(command('trash-o', context ? `Delete ${context} format rule` : 'Delete', () => remove(index)));
+    if (remove) buttons.push(command('trash-o', context ? `Delete ${context}${kind ? ` ${kind}` : ''}` : 'Delete', () => remove(index)));
+    buttons.forEach((button, position) => { button.dataset.rowAction = ['up', 'down', 'delete'][position]; });
     return element('div', { className: 'settings-row-actions' }, buttons);
   }
 
   const dom = {
     publication: root.querySelector('#publication-options-editor'),
-    publicationUseSystem: root.querySelector('#publication-options-use-system'),
     publicationInheritField: root.querySelector('#publication-options-inherit-field'),
     creators: root.querySelector('#common-creators-editor'),
-    creatorsUseSystem: root.querySelector('#common-creators-use-system'),
     creatorsOptions: root.querySelector('#common-authors-options'),
     creatorsInheritField: root.querySelector('#common-creators-inherit-field'),
     codes: root.querySelector('#patron-codes-editor'),
@@ -632,12 +634,12 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     codeRetry: root.querySelector('#patron-code-retry'),
     codeWarning: root.querySelector('#patron-code-warning'),
     codeEligibilityEnabled: root.querySelector('#patron-code-eligibility-enabled'),
-    codesUseSystem: root.querySelector('#patron-codes-use-system'),
     codesInheritField: root.querySelector('#patron-codes-inherit-field'),
     providers: root.querySelector('#external-search-provider-editor'),
     formats: root.querySelector('#material-formats-editor'),
     fields: root.querySelector('#additional-fields-editor'),
     rules: root.querySelector('#format-rules-editor'),
+    ruleAvailability: root.querySelector('#format-rule-availability'),
     claims: root.querySelector('#format-claim-rules-editor'),
     templates: root.querySelector('#email-templates-editor')
   };
@@ -655,7 +657,6 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     system: false,
     data: null,
     models: {},
-    creatorsUseSystem: false,
     ruleRosterCodes: [],
     baseline: null,
     originalTemplates: [],
@@ -663,14 +664,213 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     deletedFormats: [],
     validationError: null,
     selectedCodes: [],
-    codeOverrideDraft: null,
     codeHighlight: -1,
     codeLookupPending: false
   };
   // Disclosure state never participates in the settings snapshot or payload.
   const expandedRuleCodes = new Set();
   const rulePanelIds = new Map();
-  const formatRuleDraftCodes = new WeakMap();
+  // Reserve allocations until this accepted snapshot is replaced, including
+  // deleted draft rows. A rename, redraw, failed save or retry never allocates.
+  const reservedDraftKeys = new Set();
+  const groupIntents = new Map(), groupOwned = new Map();
+  const providerIntents = new Map(), formatIntents = new Map(), templateIntents = new Map();
+  const displayed = new WeakMap();
+  const formatColumns = ['label', 'sortOrder', 'isEnabled', 'messageBehavior', 'message',
+    ...['title', 'author', 'identifier', 'publication'].flatMap(name => [`${name}.mode`, `${name}.label`])];
+
+  function pinItem(intents, id, key) {
+    const old = intents.get(id);
+    const fields = old?.reset ? Object.fromEntries((intents === formatIntents ? formatColumns : ['label', 'urlTemplate', 'isEnabled'])
+      .map(name => [name, 'reset'])) : { ...old?.fields };
+    fields[key] = 'pin';
+    intents.set(id, { reset: false, fields });
+  }
+
+  function itemOwned(accepted, intent, keys) {
+    if (intent?.reset) return false;
+    if (!intent) return Boolean(accepted);
+    return keys.some(key => {
+      const action = intent.fields[key];
+      if (action) return action === 'pin';
+      const [group, part] = key.split('.');
+      const rawKey = part ? `${group}${part[0].toUpperCase()}${part.slice(1)}` : key;
+      return property(accepted, rawKey) !== null && property(accepted, rawKey) !== undefined;
+    });
+  }
+
+  function controlStatus(control, status) {
+    let wrapper = control.closest('.settings-inheritance-field');
+    if (!wrapper) {
+      const label = control.closest('label');
+      wrapper = element('div', { className: 'settings-inheritance-field' });
+      wrapper.hidden = label.hidden;
+      label.hidden = false;
+      label.before(wrapper); wrapper.append(label);
+    }
+    const previous = wrapper.querySelector(':scope > .settings-inheritance');
+    const comparison = status.querySelector('details.settings-system-comparison');
+    if (comparison) comparison.open = Boolean(previous?.querySelector('details.settings-system-comparison')?.open);
+    previous?.remove();
+    wrapper.append(status);
+  }
+
+  function watchControl(control, changed) {
+    const read = () => control.type === 'checkbox' ? control.checked : control.value;
+    displayed.set(control, read());
+    const edit = () => {
+      const value = read();
+      if (displayed.get(control) === value) return;
+      displayed.set(control, value);
+      changed();
+      onChange();
+    };
+    listen(control, 'input', edit); listen(control, 'change', edit);
+  }
+
+  function systemFormat(code) {
+    return normalizeFormats(property(systemConfig(state.data), 'formats')).find(value => value.code === code);
+  }
+
+  function rawFormat(code) {
+    const source = systemFormat(code);
+    return array(property(libraryConfig(state.data), 'formats')).find(value =>
+      property(value, 'kind') === 'systemOverride' && stringId(property(value, 'materialFormatId')) === source?.id);
+  }
+
+  function formatRuleValue(code) {
+    const source = systemFormat(code);
+    return source ? normalizeRule({ ...source.fields, messageBehavior: source.messageBehavior, message: source.message, code }) : null;
+  }
+
+  function resetFormat(code, focusRule = false) {
+    if (disposed || !systemFormat(code)) return;
+    formatIntents.set(code, { reset: true, fields: {} });
+    const formats = readFormats().map(value => value.code === code ? { ...value, ...systemFormat(code), version: value.version } : value);
+    const rules = readRules().map(value => value.code === code ? { ...formatRuleValue(code), customFields: value.customFields } : value);
+    renderFormats(formats); renderRules(rules); onChange({ resetLabel: `${ruleFormatLabel(code)} format and built-in rules` });
+    if (focusRule) {
+      [...dom.rules.querySelectorAll('[data-rule-code]')].find(row => row.dataset.ruleCode === code)?.querySelector('[data-rule-toggle]')?.focus();
+    } else {
+      [...dom.formats.querySelectorAll('[data-format-code]')].find(row => row.dataset.formatCode === code)
+        ?.querySelector('[data-material-field="label"]')?.focus();
+    }
+  }
+
+  function formatComparison(code, system = false) {
+    const material = system ? systemFormat(code) : readFormats().find(value => value.code === code);
+    const rule = system ? formatRuleValue(code) : readRules().find(value => value.code === code) || state.models.rules.find(value => value.code === code);
+    return [material?.label, material?.isEnabled, material?.sortOrder, rule?.messageBehavior, rule?.message ?? '',
+      ...['title', 'author', 'identifier', 'publication'].flatMap(name => [rule?.[name]?.mode, rule?.[name]?.label])];
+  }
+
+  function refreshFormatStatus(row, code) {
+    row.querySelector(':scope > .settings-inheritance')?.remove();
+    if (state.system || !systemFormat(code)) return;
+    const intent = formatIntents.get(code), source = systemFormat(code);
+    const accepted = rawFormat(code);
+    const status = inheritanceStatus({ owned: itemOwned(accepted, intent, formatColumns),
+      value: formatComparison(code), systemValue: formatComparison(code, true), pending: Boolean(intent), label: ruleFormatLabel(code), showComparison: false,
+      onReset: () => resetFormat(code) });
+    row.append(status);
+    for (const [selector, key] of [['[data-material-field="label"]', 'label'], ['[data-material-field="enabled"]', 'isEnabled']]) {
+      const control = row.querySelector(selector), local = intent?.fields?.[key];
+      const columnStatus = inheritanceStatus({ owned: intent?.reset ? false : local ? local === 'pin' : property(accepted, key) !== null && property(accepted, key) !== undefined,
+        value: key === 'isEnabled' ? control.checked : control.value, systemValue: source[key], pending: Boolean(intent?.reset || local),
+        label: `${ruleFormatLabel(code)} ${key === 'label' ? 'label' : 'visibility'}`, onReset: () => {
+          const old = formatIntents.get(code);
+          formatIntents.set(code, { reset: false, fields: { ...old?.fields, [key]: 'reset' } });
+          if (key === 'isEnabled') control.checked = source[key]; else control.value = source[key];
+          displayed.set(control, key === 'isEnabled' ? control.checked : control.value);
+          refreshFormatStatus(row, code);
+          for (const rule of dom.rules.querySelectorAll('[data-rule-code]')) if (rule.dataset.ruleCode === code) attachRuleInheritance(rule, readRules().find(value => value.code === code));
+          onChange({ target: control, resetLabel: `${ruleFormatLabel(code)} ${key}` }); control.focus();
+        } });
+      columnStatus.dataset.materialStatus = key; controlStatus(control, columnStatus);
+    }
+  }
+
+  function attachRuleInheritance(row, value) {
+    if (state.system || !systemFormat(value.code)) return;
+    const source = formatRuleValue(value.code), accepted = rawFormat(value.code), intent = formatIntents.get(value.code);
+    for (const control of row.querySelectorAll('[data-rule-property], [data-format-field], [data-format-label]')) {
+      const name = control.dataset.ruleProperty || `${control.dataset.formatField || control.dataset.formatLabel}.${control.dataset.formatField ? 'mode' : 'label'}`;
+      const [group, propertyName] = name.split('.');
+      const inherited = propertyName ? source[group][propertyName] : source[group];
+      const rawKey = propertyName ? `${group}${propertyName[0].toUpperCase()}${propertyName.slice(1)}` : group;
+      const local = intent?.fields?.[name];
+      const owned = intent?.reset ? false : local ? local === 'pin' : property(accepted, rawKey) !== null && property(accepted, rawKey) !== undefined;
+      const status = inheritanceStatus({ owned, value: control.value, systemValue: inherited ?? '',
+        pending: Boolean(intent?.reset || local), label: control.getAttribute('aria-label'), onReset: () => {
+          const old = formatIntents.get(value.code);
+          formatIntents.set(value.code, { reset: false, fields: { ...old?.fields, [name]: 'reset' } });
+          control.value = inherited ?? ''; displayed.set(control, control.value);
+          attachRuleInheritance(row, value);
+          for (const formatRow of dom.formats.querySelectorAll('[data-format-code]')) refreshFormatStatus(formatRow, formatRow.dataset.formatCode);
+          row.querySelector('[data-rule-property="messageBehavior"]')?.dispatchEvent(new window.Event('change', { bubbles: true }));
+          onChange({ target: control, resetLabel: control.getAttribute('aria-label') }); control.focus();
+        } });
+      status.dataset.ruleInheritance = name;
+      controlStatus(control, status);
+      if (!displayed.has(control)) watchControl(control, () => {
+        pinItem(formatIntents, value.code, name);
+        attachRuleInheritance(row, value);
+        for (const formatRow of dom.formats.querySelectorAll('[data-format-code]')) refreshFormatStatus(formatRow, formatRow.dataset.formatCode);
+      });
+    }
+    row.querySelector(':scope > .settings-inheritance')?.remove();
+    const status = inheritanceStatus({ owned: itemOwned(accepted, intent, formatColumns),
+      value: formatComparison(value.code), systemValue: formatComparison(value.code, true), pending: Boolean(intent), label: `${ruleFormatLabel(value.code)} format and built-in rules`, showComparison: false,
+      onReset: () => resetFormat(value.code, true) });
+    row.append(status);
+  }
+
+  function inheritedGroup(name) {
+    return groupIntents.has(name) ? groupIntents.get(name) === 'reset' : !groupOwned.get(name);
+  }
+
+  function markGroup(name) {
+    if (state.system) return;
+    groupIntents.set(name, 'pin');
+    refreshGroupStatus(name);
+  }
+
+  function refreshGroupStatus(name) {
+    const wrapper = name === 'publication' ? dom.publicationInheritField : name === 'creators' ? dom.creatorsInheritField : dom.codesInheritField;
+    if (!wrapper) return;
+    wrapper.hidden = state.system;
+    if (state.system) { wrapper.replaceChildren(); return; }
+    const current = name === 'publication' ? readPublication() : name === 'creators' ? readSetRows(dom.creators, 'creator') : readSelectedCodes();
+    const label = name === 'publication' ? 'Publication options' : name === 'creators' ? 'Common creators' : 'Allowed patron codes';
+    const comparison = values => name === 'publication' ? values.map(item => `${item.label}${item.enabled ? '' : ' (disabled)'}`) : values;
+    const comparable = values => name === 'publication' ? values.map(item => [item.id, item.label, item.enabled])
+      : name === 'codes' ? [...values].sort((left, right) => Number(left) - Number(right)) : values;
+    const status = inheritanceStatus({ owned: !inheritedGroup(name), value: comparison(current),
+      systemValue: comparison(setValues(name, true)), pending: groupIntents.has(name), label,
+      comparisonOpen: wrapper.querySelector('details.settings-system-comparison')?.open,
+      matchesSystem: JSON.stringify(comparable(current)) === JSON.stringify(comparable(setValues(name, true))),
+      onReset: async () => {
+        const owner = state.data, stamp = readSnapshot();
+        if (!await confirmReset(`${label}: replace the entire library selection with the System selection when you save. Library choices in this group will be removed; historical request selections are preserved.`) ||
+            disposed || state.data !== owner || readSnapshot() !== stamp) return;
+        groupIntents.set(name, 'reset');
+        renderDomain(name, setValues(name, true));
+        refreshGroupStatus(name);
+        onChange({ resetLabel: label });
+        (name === 'codes' ? dom.codeSearch : addButtons[name])?.focus();
+      } });
+    wrapper.replaceChildren(status);
+  }
+
+  function draftKey(prefix, existing) {
+    for (const value of existing) reservedDraftKeys.add(String(value || '').toLowerCase());
+    let key;
+    do {
+      key = `${prefix}${window.crypto.randomUUID().replaceAll('-', '')}`;
+    } while (reservedDraftKeys.has(key.toLowerCase()));
+    reservedDraftKeys.add(key.toLowerCase());
+    return key;
+  }
 
   function currentOrganizationId() {
     const value = property(state.data, 'orgId');
@@ -714,15 +914,6 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     }).filter(Boolean);
   }
 
-  function setOverrideUi(input, wrapper, overridden) {
-    if (!input || !wrapper) return;
-    input.checked = Boolean(overridden);
-    wrapper.hidden = state.system;
-    for (const control of wrapper.closest('.settings-domain-block')?.querySelectorAll('[data-domain-editable]') || []) {
-      control.disabled = !state.system && !input.checked;
-    }
-  }
-
   function rowControls(row) {
     return [...row.querySelectorAll('[data-domain-editable]')];
   }
@@ -732,16 +923,52 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     for (const button of row.querySelectorAll('.settings-row-actions button')) button.disabled = disabled;
   }
 
-  function updateSetDisabled(container, input, addButton) {
-    const disabled = !state.system && Boolean(input?.checked);
-    updateRowDisabled(container, disabled);
-    if (addButton) addButton.disabled = disabled;
+  function updateCreatorRowsDisabled(container, disabled) {
+    const rows = [...(container?.querySelectorAll('[data-domain-row]') || [])];
+    for (const [index, row] of rows.entries()) {
+      for (const control of rowControls(row)) control.disabled = disabled;
+      for (const button of row.querySelectorAll('.settings-row-actions button')) {
+        const action = button.dataset.rowAction;
+        const atBoundary = (action === 'up' && index === 0) || (action === 'down' && index === rows.length - 1);
+        button.disabled = disabled || atBoundary;
+      }
+    }
   }
 
   function setEditorControls(type, container) {
-    const input = type === 'publication' ? dom.publicationUseSystem : dom.creatorsUseSystem;
     const addButton = type === 'publication' ? addButtons.publication : addButtons.creators;
-    updateSetDisabled(container, input, addButton);
+    if (type === 'creator') {
+      updateCreatorRowsDisabled(container, false);
+      if (addButton) addButton.disabled = false;
+      return;
+    }
+    updateRowDisabled(container, false);
+    if (addButton) addButton.disabled = false;
+  }
+
+  function focusSetRow(index, action) {
+    const row = dom.creators.querySelectorAll('[data-domain-row]')[index];
+    const target = action ? row?.querySelector(`[data-row-action="${action}"]:not(:disabled)`) : null;
+    const input = row?.querySelector('input');
+    const focusTarget = target || input || addButtons.creators;
+    focusTarget?.focus();
+    if (!row || focusTarget !== input) return;
+
+    const view = root.ownerDocument.defaultView;
+    const style = view.getComputedStyle(input);
+    const clearance = Math.max(6, (parseFloat(style.outlineWidth) || 0) + (parseFloat(style.outlineOffset) || 0)) + 1;
+    const viewport = view.visualViewport;
+    const top = (viewport?.offsetTop || 0) + clearance;
+    let bottom = (viewport?.offsetTop || 0) + (viewport?.height || view.innerHeight) - clearance;
+    const saveBar = root.querySelector('.settings-save-bar');
+    if (saveBar && view.getComputedStyle(saveBar).position === 'sticky') {
+      bottom = Math.min(bottom, saveBar.getBoundingClientRect().top - clearance);
+    }
+
+    const bounds = row.getBoundingClientRect();
+    if (!bounds.height || bounds.height > bottom - top) return;
+    const scroll = bounds.top < top ? bounds.top - top : Math.max(0, bounds.bottom - bottom);
+    if (scroll) view.scrollBy({ top: scroll, behavior: 'instant' });
   }
 
   function updateCodeWarning() {
@@ -759,6 +986,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     if (values.length === 0) {
       container.append(element('p', { className: 'settings-empty', text: 'No values configured.' }));
       setEditorControls('creator', container);
+      refreshGroupStatus('creators');
       return;
     }
     for (const [index, value] of values.entries()) {
@@ -767,27 +995,36 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           value,
           'data-domain-editable': 'true'
         });
-      const row = element('div', { className: 'settings-editor-row', 'data-domain-row': 'true' }, [
+      const row = element('div', {
+        className: type === 'creator' ? 'settings-editor-row settings-creator-row' : 'settings-editor-row',
+        'data-domain-row': 'true'
+      }, [
         field('Creator', input),
         actions(index, values.length, (from, offset) => {
           if (type === 'creator' && creatorsOptionsHidden()) return;
           const next = from + offset;
           if (next < 0 || next >= values.length) return;
           const current = readSetRows(container, type);
+          markGroup('creators');
           [current[from], current[next]] = [current[next], current[from]];
           renderSetRows(container, current, type);
+          if (type === 'creator') focusSetRow(next, offset < 0 ? 'up' : 'down');
           onChange();
         }, from => {
           if (type === 'creator' && creatorsOptionsHidden()) return;
           const current = readSetRows(container, type);
+          markGroup('creators');
           current.splice(from, 1);
           renderSetRows(container, current, type);
+          if (type === 'creator') focusSetRow(Math.min(from, current.length - 1));
           onChange();
         })
       ]);
       container.append(row);
+      watchControl(input, () => markGroup('creators'));
     }
     setEditorControls('creator', container);
+    refreshGroupStatus('creators');
   }
 
   function readSetRows(container, type) {
@@ -800,7 +1037,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   }
 
   function codesInherited() {
-    return !state.system && Boolean(dom.codesUseSystem?.checked);
+    return !state.system && inheritedGroup('codes');
   }
 
   function codeChoices() {
@@ -898,6 +1135,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       listen(option, 'pointerdown', event => event.preventDefault());
       listen(option, 'click', () => {
         if (dom.codeSearch.disabled || !availableCodes().some(value => value.id === choice.id)) return;
+        markGroup('codes');
         renderCodes([...state.selectedCodes, choice.id]);
         dom.codeSearch.value = '';
         closeCodePicker();
@@ -927,28 +1165,30 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     for (const [index, id] of values.entries()) {
       const label = choices.find(choice => choice.id === id)?.label || `Unavailable code (${id})`;
       const remove = element('button', { type: 'button', className: 'patron-code-remove',
-        'aria-label': `Remove ${label}`, text: '×', disabled: inherited });
+        'aria-label': `Remove ${label}`, text: '×' });
       listen(remove, 'click', () => {
-        if (codesInherited() || !state.selectedCodes.includes(id)) return;
+        if (!state.selectedCodes.includes(id)) return;
+        markGroup('codes');
         renderCodes(state.selectedCodes.filter(value => value !== id));
         const buttons = [...dom.codes.querySelectorAll('button')];
         const fallback = !dom.codeSearch.disabled ? dom.codeSearch
           : !dom.codeRetry.disabled ? dom.codeRetry
-          : !dom.codesUseSystem.disabled ? dom.codesUseSystem : dom.codeEligibilityEnabled;
+          : dom.codeEligibilityEnabled;
         (buttons[Math.min(index, buttons.length - 1)] || fallback).focus();
         onChange();
       });
       dom.codes.append(element('li', { 'data-code-id': id }, [element('span', { text: label }), remove]));
     }
     dom.codeCount.textContent = `${values.length} patron ${values.length === 1 ? 'code' : 'codes'} selected${inherited ? ' (using system IDs)' : ''}.`;
-    dom.codeSearch.disabled = inherited || state.codeLookupPending || Boolean(property(state.data, 'patronCodeChoicesUnavailable'));
+    dom.codeSearch.disabled = state.codeLookupPending || Boolean(property(state.data, 'patronCodeChoicesUnavailable'));
     dom.codeRetry.hidden = !property(state.data, 'patronCodeChoicesUnavailable');
     dom.codeRetry.disabled = state.codeLookupPending;
     dom.codeAvailability.textContent = state.codeLookupPending ? 'Loading patron codes…' : property(state.data, 'patronCodeChoicesUnavailable')
       ? 'Patron-code lookup unavailable. Saved selections are preserved. Retry to add codes.'
-      : inherited ? 'Using system IDs. Turn off Use system IDs to edit the library selection.' : '';
+      : '';
     closeCodePicker();
     updateCodeWarning();
+    refreshGroupStatus('codes');
     if (focusedChip) {
       const button = [...dom.codes.children].find(chip => chip.dataset.codeId === focusedChip)?.querySelector('button');
       if (button && !button.disabled) button.focus();
@@ -960,25 +1200,44 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     dom.publication.replaceChildren();
     if (values.length === 0) dom.publication.append(element('p', { className: 'settings-empty', text: 'No publication options configured.' }));
     for (const [index, value] of values.entries()) {
-      const key = element('input', { type: 'text', value: value.id, 'data-domain-editable': 'true' });
-      const label = element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true' });
-      const enabled = element('input', { type: 'checkbox', checked: value.enabled, 'data-domain-editable': 'true' });
-      const row = element('div', { className: 'settings-editor-row settings-option-row', 'data-domain-row': 'true' }, [
-        field('Stable ID', key),
+      const label = element('input', { type: 'text', value: value.label, 'data-publication-field': 'label', 'data-domain-editable': 'true' });
+      const enabled = element('input', { type: 'checkbox', checked: value.enabled, 'data-publication-field': 'enabled', 'data-domain-editable': 'true' });
+      const row = element('div', { className: 'settings-editor-row settings-option-row', 'data-domain-row': 'true', 'data-option-id': value.id }, [
         field('Label', label),
         element('label', { className: 'settings-domain-check' }, [enabled, element('span', { text: 'Enabled' })]),
-        actions(index, values.length, (from, offset) => reorder('publication', from, offset), from => remove('publication', from))
+        actions(index, values.length, (from, offset) => reorder('publication', from, offset), from => remove('publication', from), 'publication option', '')
       ]);
+      const refreshNames = () => {
+        const context = `${clean(label.value) || 'Untitled'}, publication option ${index + 1}`;
+        label.setAttribute('aria-label', `Label for ${context}`);
+        enabled.setAttribute('aria-label', `Enabled for ${context}`);
+        const names = [`Move ${context} up`, `Move ${context} down`, `Delete ${context}`];
+        [...row.querySelectorAll('.settings-row-actions button')].forEach((button, position) => {
+          button.title = names[position];
+          button.setAttribute('aria-label', names[position]);
+        });
+      };
+      listen(label, 'input', refreshNames);
+      listen(label, 'change', refreshNames);
+      refreshNames();
       dom.publication.append(row);
+      watchControl(label, () => markGroup('publication'));
+      watchControl(enabled, () => markGroup('publication'));
     }
     setEditorControls('publication', dom.publication);
+    const inherited = false;
+    [...dom.publication.querySelectorAll('[data-domain-row]')].forEach((row, index) => {
+      row.querySelector('[data-row-action="up"]').disabled = inherited || index === 0;
+      row.querySelector('[data-row-action="down"]').disabled = inherited || index === values.length - 1;
+    });
+    refreshGroupStatus('publication');
   }
 
   function readPublication() {
     return [...(dom.publication?.querySelectorAll('[data-domain-row]') || [])].map((row, index) => ({
-      id: stringId(row.querySelector('input')?.value),
-      label: clean(row.querySelectorAll('input')[1]?.value),
-      enabled: Boolean(row.querySelector('input[type="checkbox"]')?.checked),
+      id: stringId(row.dataset.optionId),
+      label: clean(row.querySelector('[data-publication-field="label"]')?.value),
+      enabled: Boolean(row.querySelector('[data-publication-field="enabled"]')?.checked),
       sortOrder: (index + 1) * 10
     }));
   }
@@ -990,8 +1249,6 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     for (const [index, value] of values.entries()) {
       const id = stringId(value.id);
       const enabled = element('input', { type: 'checkbox', checked: value.isEnabled, 'data-domain-editable': 'true' });
-      const override = checkbox('Override', state.system || value.overridden, 'settings-inline-check settings-domain-override');
-      override.input.className = 'settings-domain-override-toggle';
       const row = element('div', {
         className: 'settings-editor-row settings-provider-row',
         'data-domain-row': 'true',
@@ -1002,37 +1259,62 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         field('Label', element('input', { type: 'text', value: value.label || '', 'data-domain-editable': 'true' })),
         field('URL template', element('input', { type: 'url', value: value.urlTemplate || '', 'data-domain-editable': 'true' })),
         element('label', { className: 'settings-domain-check' }, [enabled, element('span', { text: 'Enabled' })]),
-        state.system ? null : override.wrapper,
         actions(index, values.length, (from, offset) => reorder('providers', from, offset), from => remove('providers', from))
       ]);
-      listen(override.input, 'change', () => {
-        setProviderDisabled();
-        onChange();
-      });
       dom.providers.append(row);
-      function setProviderDisabled() {
-        const inherited = !state.system && !override.input.checked;
-        updateRowDisabled(row, inherited);
-        row.querySelector('[aria-label="Move up"]').disabled = inherited || index === 0;
-        row.querySelector('[aria-label="Move down"]').disabled = inherited || index === values.length - 1;
+      if (!state.system) {
+        const inherited = array(property(systemConfig(state.data), 'providers')).find(item => stringId(property(item, 'id')) === id);
+        const accepted = array(property(libraryConfig(state.data), 'providers')).find(item => stringId(property(item, 'id')) === id);
+        const refresh = () => {
+          row.querySelector(':scope > .settings-inheritance')?.remove();
+          const intent = providerIntents.get(id);
+          const current = readProviders().find(item => item.id === id);
+          const compare = item => [property(item, 'label'), property(item, 'urlTemplate'), property(item, 'isEnabled')];
+          row.append(inheritanceStatus({ owned: itemOwned(accepted, intent, ['label', 'urlTemplate', 'isEnabled']),
+            value: compare(current), systemValue: compare(inherited), pending: Boolean(intent), label: value.label || value.key, showComparison: false,
+            onReset: () => {
+              providerIntents.set(id, { reset: true, fields: {} });
+              const currentValues = readProviders().map(item => item.id === id ? { ...item, ...inherited } : item);
+              renderProviders(currentValues); onChange({ resetLabel: value.label || 'Provider' });
+              [...dom.providers.querySelectorAll('[data-provider-id]')].find(item => item.dataset.providerId === id)?.querySelector('input')?.focus();
+            } }));
+          for (const [position, key] of ['label', 'urlTemplate', 'isEnabled'].entries()) {
+            const control = row.querySelectorAll('input')[position], local = intent?.fields?.[key];
+            const status = inheritanceStatus({ owned: intent?.reset ? false : local ? local === 'pin' : property(accepted, key) !== null && property(accepted, key) !== undefined,
+              value: key === 'isEnabled' ? control.checked : control.value, systemValue: property(inherited, key), pending: Boolean(intent?.reset || local),
+              label: `${value.label || value.key} ${key}`, onReset: () => {
+                const old = providerIntents.get(id);
+                providerIntents.set(id, { reset: false, fields: { ...old?.fields, [key]: 'reset' } });
+                if (key === 'isEnabled') control.checked = property(inherited, key); else control.value = property(inherited, key) ?? '';
+                displayed.set(control, key === 'isEnabled' ? control.checked : control.value);
+                refresh(); onChange({ target: control, resetLabel: `${value.label || 'Provider'} ${key}` }); control.focus();
+              } });
+            status.dataset.providerStatus = key; controlStatus(control, status);
+          }
+        };
+        [...row.querySelectorAll('input')].forEach((control, position) => watchControl(control, () => {
+          pinItem(providerIntents, id, ['label', 'urlTemplate', 'isEnabled'][position]); refresh();
+        }));
+        refresh();
+        // Provider ordering and creation belong to System; nullable overrides own content only.
+        for (const button of row.querySelectorAll('.settings-row-actions button')) button.disabled = true;
       }
-      setProviderDisabled();
     }
   }
 
   function readProviders() {
     return [...(dom.providers?.querySelectorAll('[data-domain-row]') || [])].map((row, index) => {
       const inputs = [...row.querySelectorAll('input')];
-      const override = row.querySelector('.settings-domain-override-toggle');
       return {
         id: stringId(row.dataset.providerId),
         key: row.dataset.providerKey,
-        label: clean(inputs[0]?.value),
-        urlTemplate: clean(inputs[1]?.value),
-        isEnabled: Boolean(row.querySelector('input[type="checkbox"]:not(.settings-domain-override-toggle)')?.checked),
+        label: inputs[0]?.value ?? '',
+        urlTemplate: inputs[1]?.value ?? '',
+        isEnabled: Boolean(row.querySelector('input[type="checkbox"]')?.checked),
         sortOrder: numeric(row.dataset.providerSortOrder, (index + 1) * 10),
-        overridden: state.system || Boolean(override?.checked),
-        reset: !state.system && Boolean(override) && !override.checked
+        overridden: state.system || !providerIntents.get(row.dataset.providerId)?.reset &&
+          (Boolean(providerIntents.get(row.dataset.providerId)) || Boolean(state.models.providers.find(value => value.id === row.dataset.providerId)?.overridden)),
+        reset: !state.system && Boolean(providerIntents.get(row.dataset.providerId)?.reset)
       };
     });
   }
@@ -1067,24 +1349,19 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     if (values.length === 0) dom.formats.append(element('p', { className: 'settings-empty', text: 'No material formats configured.' }));
     for (const [index, value] of values.entries()) {
       const custom = value.ownerOrganizationId === currentOrganizationId() && !state.system;
-      const code = element('input', { type: 'text', value: value.code, readOnly: Boolean(value.id), 'data-domain-editable': 'true' });
-      const label = element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true' });
-      const enabled = element('input', { type: 'checkbox', checked: value.isEnabled, 'data-domain-editable': 'true' });
-      const override = checkbox('Override', state.system || value.overridden, 'settings-inline-check settings-domain-override');
-      override.input.className = 'settings-domain-override-toggle';
+      const label = element('input', { type: 'text', value: value.label, 'data-material-field': 'label', 'data-domain-editable': 'true' });
+      const enabled = element('input', { type: 'checkbox', checked: value.isEnabled, 'data-material-field': 'enabled', 'data-domain-editable': 'true' });
       const row = element('div', {
         className: 'settings-editor-row settings-format-row',
         'data-domain-row': 'true',
         'data-format-id': value.id || '',
+        'data-format-code': value.code,
         'data-format-owner': value.ownerOrganizationId,
         'data-format-version': value.version || '',
-        'data-format-sort-order': value.sortOrder,
-        'data-format-rule-code': formatRuleDraftCodes.get(value) ?? value.code
+        'data-format-sort-order': value.sortOrder
       }, [
-        field('Code', code),
         field('Label', label),
         element('label', { className: 'settings-domain-check' }, [enabled, element('span', { text: 'Shown' })]),
-        custom || state.system ? null : override.wrapper,
         actions(
           index,
           values.length,
@@ -1097,80 +1374,71 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       };
       listen(label, 'input', refreshNames);
       listen(label, 'change', refreshNames);
-      let ruleCode = row.dataset.formatRuleCode;
-      listen(code, 'change', () => {
-        const nextCode = clean(code.value);
-        const formats = readFormats();
-        if (code.readOnly || !nextCode || nextCode === ruleCode ||
-            formats.filter(format => format.code === nextCode).length !== 1 ||
-            state.ruleRosterCodes.includes(nextCode)) return;
-        // A duplicate draft may have survived a Material formats redraw. It
-        // must not acquire the rule belonging to the other format with that code.
-        const sharedCode = formats.some((format, otherIndex) => otherIndex !== index &&
-          format.code.toLowerCase() === ruleCode.toLowerCase());
-        const rule = !sharedCode && [...(dom.rules?.querySelectorAll('[data-rule-code]') || [])]
-          .find(item => item.dataset.ruleCode === ruleCode);
-        if (rule) {
-          if (!canRedrawRules()) return;
-          // Only unsaved formats have editable codes. Move their draft rule's
-          // identity without replacing controls or changing persisted codes.
-          rule.dataset.ruleCode = nextCode;
-          state.ruleRosterCodes = state.ruleRosterCodes.map(item => item === ruleCode ? nextCode : item);
-          for (const item of state.models.rules) {
-            if (item.code === ruleCode) item.code = nextCode;
-          }
-          if (expandedRuleCodes.delete(ruleCode)) expandedRuleCodes.add(nextCode);
-          if (rulePanelIds.has(ruleCode)) {
-            rulePanelIds.set(nextCode, rulePanelIds.get(ruleCode));
-            rulePanelIds.delete(ruleCode);
-          }
-          refreshRuleFormatName(rule);
-        }
-        ruleCode = nextCode;
-        row.dataset.formatRuleCode = nextCode;
-      });
-      if (!state.system && !custom) {
-        listen(override.input, 'change', () => {
-          updateRowDisabled(row, !override.input.checked);
-          onChange();
-        });
-      }
       dom.formats.append(row);
-      if (!state.system && !custom) updateRowDisabled(row, !override.input.checked);
+      if (!state.system && !custom) {
+        for (const [control, key] of [[label, 'label'], [enabled, 'isEnabled']]) watchControl(control, () => {
+          pinItem(formatIntents, value.code, key); refreshFormatStatus(row, value.code);
+          for (const rule of dom.rules.querySelectorAll('[data-rule-code]')) if (rule.dataset.ruleCode === value.code) attachRuleInheritance(rule, readRules().find(item => item.code === value.code));
+        });
+        refreshFormatStatus(row, value.code);
+      }
     }
+    updateRuleAvailability();
+  }
+
+  function eligibleRuleFormats(values = readRules()) {
+    const represented = new Set(values.map(rule => rule.code));
+    return readFormats().filter(format => !represented.has(format.code));
+  }
+
+  function updateRuleAvailability() {
+    if (!addButtons.rules || !dom.ruleAvailability) return;
+    const formats = readFormats();
+    const available = eligibleRuleFormats();
+    const message = formats.length === 0
+      ? 'Add a material format before adding a rule.'
+      : available.length === 0
+        ? 'All available formats already have rules.'
+        : '';
+    addButtons.rules.disabled = available.length === 0;
+    dom.ruleAvailability.textContent = message;
+    dom.ruleAvailability.hidden = !message;
   }
 
   function removeFormat(index) {
     const values = readFormats();
     const item = values[index];
-    if (!item || !item.id || state.system || String(item.ownerOrganizationId) !== String(currentOrganizationId())) return;
-    state.deletedFormats.push({ id: item.id, version: item.version || '' });
+    if (!item || state.system || String(item.ownerOrganizationId) !== String(currentOrganizationId())) return;
+    if (!item.id && !canRedrawRules()) return;
+    if (item.id) state.deletedFormats.push({ id: item.id, version: item.version || '' });
     values.splice(index, 1);
     renderFormats(values);
+    if (!item.id) {
+      const rules = readRules().filter(rule => rule.code !== item.code);
+      state.ruleRosterCodes = state.ruleRosterCodes.filter(code => code !== item.code);
+      renderRules(rules);
+    }
+    (dom.formats.querySelectorAll('[data-domain-row]')[Math.min(index, values.length - 1)]
+      ?.querySelector('[data-material-field="label"]') || addButtons.formats)?.focus();
     onChange();
   }
 
   function readFormats() {
     return [...(dom.formats?.querySelectorAll('[data-domain-row]') || [])].map((row, index) => {
-      const inputs = [...row.querySelectorAll('input')];
-      const override = row.querySelector('.settings-domain-override-toggle');
       const owner = numeric(row.dataset.formatOwner, 1);
-      const code = clean(inputs[0]?.value);
-      const result = {
+      const code = clean(row.dataset.formatCode);
+      return {
         id: stringId(row.dataset.formatId),
         version: stringId(row.dataset.formatVersion),
         code,
         ownerOrganizationId: owner,
-        label: clean(inputs[1]?.value) || code,
+        label: row.querySelector('[data-material-field="label"]')?.value ?? '',
         sortOrder: numeric(row.dataset.formatSortOrder, (index + 1) * 10),
-        isEnabled: Boolean(row.querySelector('input[type="checkbox"]:not(.settings-domain-override-toggle)')?.checked),
-        overridden: state.system || owner === currentOrganizationId() || Boolean(override?.checked),
-        reset: !state.system && owner !== currentOrganizationId() && Boolean(override) && !override.checked
+        isEnabled: Boolean(row.querySelector('[data-material-field="enabled"]')?.checked),
+        overridden: state.system || owner === currentOrganizationId() || !formatIntents.get(code)?.reset &&
+          (Boolean(formatIntents.get(code)) || Boolean(rawFormat(code))),
+        reset: !state.system && owner !== currentOrganizationId() && Boolean(formatIntents.get(code)?.reset)
       };
-      // Carry the rule association through intentional Material formats
-      // redraws without adding presentation metadata to snapshots or payloads.
-      formatRuleDraftCodes.set(result, row.dataset.formatRuleCode);
-      return result;
     });
   }
 
@@ -1179,54 +1447,31 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     dom.fields.replaceChildren();
     if (values.length === 0) dom.fields.append(element('p', { className: 'settings-empty', text: 'No custom fields configured.' }));
     for (const [index, value] of values.entries()) {
-      const keyInput = element('input', { type: 'text', value: value.key, 'data-domain-editable': 'true' });
       const row = element('div', {
         className: 'settings-editor-row settings-custom-field-row',
         'data-domain-row': 'true',
-        'data-field-id': value.id || ''
+        'data-field-id': value.id || '',
+        'data-field-key': value.key
       }, [
-        field('Stable key', keyInput),
-        field('Label', element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true' })),
+        field('Label', element('input', { type: 'text', value: value.label, 'data-custom-field': 'label', 'data-domain-editable': 'true' })),
         field('Type', select([
           { value: 'text', label: 'Text' },
           { value: 'textarea', label: 'Long text' },
           { value: 'select', label: 'Select' }
-        ], value.type, { 'data-domain-editable': 'true' })),
-        field('Help text', element('input', { type: 'text', value: value.helpText || '', 'data-domain-editable': 'true' })),
-        element('label', { className: 'settings-domain-check' }, [element('input', { type: 'checkbox', checked: value.enabled, 'data-domain-editable': 'true' }), element('span', { text: 'Enabled' })]),
+        ], value.type, { 'data-custom-field': 'type', 'data-domain-editable': 'true' })),
+        field('Help text', element('input', { type: 'text', value: value.helpText || '', 'data-custom-field': 'helpText', 'data-domain-editable': 'true' })),
+        element('label', { className: 'settings-domain-check' }, [element('input', { type: 'checkbox', checked: value.enabled, 'data-custom-field': 'enabled', 'data-domain-editable': 'true' }), element('span', { text: 'Enabled' })]),
         element('div', { className: 'settings-custom-options', 'data-options-editor': 'true' }),
         actions(index, values.length, (from, offset) => reorder('fields', from, offset), from => remove('fields', from))
       ]);
       const optionsEditor = row.querySelector('[data-options-editor]');
       renderFieldOptions(optionsEditor, value.options, value.type === 'select');
-      let originalKey = value.key;
-      listen(keyInput, 'change', event => {
-        const nextKey = clean(event.target.value);
-        if (!originalKey || !nextKey || nextKey === originalKey) return;
-        const previousKeys = new Set(readFields().map(item => item.key === nextKey ? originalKey : item.key));
-        if (!canRedrawRules(previousKeys)) return;
-        const rules = readRules();
-        if (rules.some(rule => Object.prototype.hasOwnProperty.call(rule.customFields, nextKey))) {
-          state.validationError = 'Custom field keys must remain unique across saved rules.';
-          return;
-        }
-        for (const rule of rules) {
-          if (Object.prototype.hasOwnProperty.call(rule.customFields, originalKey)) {
-            rule.customFields[nextKey] = rule.customFields[originalKey];
-            delete rule.customFields[originalKey];
-          }
-        }
-        state.models.rules = clone(rules);
-        originalKey = nextKey;
-        renderRules(rules);
-        onChange();
-      });
       listen(row.querySelector('select'), 'change', event => {
         optionsEditor.hidden = event.target.value !== 'select';
         onChange();
       });
       // Definition labels and enabled status affect the draft rule summary too.
-      for (const control of [row.querySelectorAll('input')[1], row.querySelector('input[type="checkbox"]')]) {
+      for (const control of [row.querySelector('[data-custom-field="label"]'), row.querySelector('[data-custom-field="enabled"]')]) {
         listen(control, 'input', () => refreshRuleDefinitions());
         listen(control, 'change', () => refreshRuleDefinitions());
       }
@@ -1239,17 +1484,16 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     container.hidden = !visible;
     container.replaceChildren(element('strong', { text: 'Select options' }));
     for (const [index, value] of values.entries()) {
-      const row = element('div', { className: 'settings-option-subrow', 'data-option-row': 'true' }, [
-        element('input', { type: 'text', value: value.id, 'data-domain-editable': 'true', 'aria-label': 'Option stable ID' }),
-        element('input', { type: 'text', value: value.label, 'data-domain-editable': 'true', 'aria-label': 'Option label' }),
-        element('label', { className: 'settings-domain-check' }, [element('input', { type: 'checkbox', checked: value.enabled, 'data-domain-editable': 'true' }), element('span', { text: 'Enabled' })]),
+      const row = element('div', { className: 'settings-option-subrow', 'data-option-row': 'true', 'data-option-id': value.id }, [
+        element('input', { type: 'text', value: value.label, 'data-option-field': 'label', 'data-domain-editable': 'true', 'aria-label': 'Option label' }),
+        element('label', { className: 'settings-domain-check' }, [element('input', { type: 'checkbox', checked: value.enabled, 'data-option-field': 'enabled', 'data-domain-editable': 'true' }), element('span', { text: 'Enabled' })]),
         command('trash-o', 'Delete option', () => {
           const current = readFields();
-          current.find(item => item.options[index] === value);
           const parent = container.closest('[data-domain-row]');
           const fieldIndex = [...dom.fields.querySelectorAll('[data-domain-row]')].indexOf(parent);
           current[fieldIndex].options.splice(index, 1);
           renderFields(current);
+          focusFieldOption(current[fieldIndex].key, Math.min(index, current[fieldIndex].options.length - 1));
           onChange();
         })
       ]);
@@ -1260,26 +1504,35 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       const current = readFields();
       const parent = container.closest('[data-domain-row]');
       const fieldIndex = [...dom.fields.querySelectorAll('[data-domain-row]')].indexOf(parent);
-      current[fieldIndex].options.push({ id: `option_${current[fieldIndex].options.length + 1}`, label: 'New option', enabled: true, sortOrder: (current[fieldIndex].options.length + 1) * 10 });
+      const fieldValue = current[fieldIndex];
+      const accepted = state.models.fields.find(item => item.key === fieldValue.key)?.options || [];
+      fieldValue.options.push({ id: draftKey('option_', [...accepted, ...fieldValue.options].map(item => item.id)), label: 'New option', enabled: true, sortOrder: (fieldValue.options.length + 1) * 10 });
       renderFields(current);
+      focusFieldOption(fieldValue.key, fieldValue.options.length - 1);
       onChange();
     });
     container.append(add);
   }
 
+  function focusFieldOption(key, index) {
+    const row = [...dom.fields.querySelectorAll('[data-domain-row]')].find(item => item.dataset.fieldKey === key);
+    (row?.querySelectorAll('[data-option-field="label"]')[index] ||
+      row?.querySelector('[data-options-editor] > button'))?.focus();
+  }
+
   function readFields() {
     return [...(dom.fields?.querySelectorAll('[data-domain-row]') || [])].map((row, index) => ({
       id: stringId(row.dataset.fieldId),
-      key: clean(row.querySelectorAll('input')[0]?.value),
-      label: clean(row.querySelectorAll('input')[1]?.value),
-      type: row.querySelector('select')?.value || 'text',
-      helpText: clean(row.querySelectorAll('input')[2]?.value),
-      enabled: Boolean(row.querySelector('input[type="checkbox"]')?.checked),
+      key: clean(row.dataset.fieldKey),
+      label: clean(row.querySelector('[data-custom-field="label"]')?.value),
+      type: row.querySelector('[data-custom-field="type"]')?.value || 'text',
+      helpText: clean(row.querySelector('[data-custom-field="helpText"]')?.value),
+      enabled: Boolean(row.querySelector('[data-custom-field="enabled"]')?.checked),
       sortOrder: (index + 1) * 10,
       options: [...(row.querySelectorAll('[data-option-row]') || [])].map((option, optionIndex) => ({
-        id: stringId(option.querySelectorAll('input')[0]?.value),
-        label: clean(option.querySelectorAll('input')[1]?.value),
-        enabled: Boolean(option.querySelector('input[type="checkbox"]')?.checked),
+        id: stringId(option.dataset.optionId),
+        label: clean(option.querySelector('[data-option-field="label"]')?.value),
+        enabled: Boolean(option.querySelector('[data-option-field="enabled"]')?.checked),
         sortOrder: (optionIndex + 1) * 10
       }))
     }));
@@ -1315,12 +1568,20 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     }
   }
 
+  function ruleFormatLabel(code) {
+    const format = readFormats().find(item => item.code === code);
+    const label = format?.reset
+      ? property(array(property(systemConfig(state.data), 'formats')).find(item => property(item, 'code') === code), 'label')
+      : format?.label;
+    return clean(label) || 'Unresolved material format';
+  }
+
   function refreshRuleFormatName(row) {
-    const code = row.dataset.ruleCode;
-    const label = readFormats().find(format => format.code === code)?.label || code;
-    const context = `${label} (${code})`;
+    const label = ruleFormatLabel(row.dataset.ruleCode);
+    const rows = [...dom.rules.querySelectorAll('[data-rule-code]')];
+    const duplicates = rows.filter(item => ruleFormatLabel(item.dataset.ruleCode) === label);
+    const context = duplicates.length > 1 ? `${label}, format ${rows.indexOf(row) + 1}` : label;
     row.querySelector('.settings-rule-identity strong').textContent = label;
-    row.querySelector('.settings-rule-code').textContent = code;
     const toggle = row.querySelector('[data-rule-toggle]');
     toggle.setAttribute('aria-label', `${toggle.getAttribute('aria-expanded') === 'true' ? 'Collapse' : 'Expand'} ${context} format rules`);
     for (const [property, name] of [['messageBehavior', 'Message behavior'], ['message', 'Message']]) {
@@ -1352,6 +1613,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const focusedIndex = [...dom.rules.children].indexOf(focusedRow);
     const focusedCode = focusedRow?.dataset.ruleCode;
     const focusedName = focused?.getAttribute('aria-label');
+    const focusedAction = focused?.dataset.rowAction;
     const codes = new Set(values.map(value => value.code));
     for (const code of expandedRuleCodes) {
       if (!codes.has(code)) expandedRuleCodes.delete(code);
@@ -1362,17 +1624,16 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     dom.rules.replaceChildren();
     if (values.length === 0) dom.rules.append(element('p', { className: 'settings-empty', text: 'No format rules configured.' }));
     const customFields = readFields();
-    const formats = readFormats();
     for (const [index, value] of values.entries()) {
-      const formatLabel = formats.find(format => format.code === value.code)?.label || value.code;
-      const formatContext = `${formatLabel} (${value.code})`;
+      const formatLabel = ruleFormatLabel(value.code);
+      const formatContext = formatLabel;
       if (!rulePanelIds.has(value.code)) rulePanelIds.set(value.code, `format-rule-panel-${++nextRulePanelId}`);
       const panelId = rulePanelIds.get(value.code);
       const toggle = element('button', { type: 'button', className: 'settings-rule-toggle',
         'aria-controls': panelId, 'aria-describedby': `${panelId}-summary`, 'data-rule-toggle': 'true' }, [
         element('span', { className: 'settings-rule-chevron', 'aria-hidden': 'true', text: '›' }),
         element('span', { className: 'settings-rule-identity' }, [
-          element('strong', { text: formatLabel }), element('span', { className: 'settings-rule-code', text: value.code })
+          element('strong', { text: formatLabel })
         ]),
         element('span', { id: `${panelId}-summary`, className: 'settings-rule-summary', 'data-rule-summary': 'true',
           role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' })
@@ -1412,10 +1673,10 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
                 { value: 'optional', label: 'Optional' },
                 { value: 'required', label: 'Required' }
               ], current.mode, { 'data-custom-rule-property': 'mode', 'data-domain-editable': 'true',
-                'aria-label': `${fieldLabel} mode for ${value.code}` })),
+                'aria-label': `${fieldLabel} mode for ${formatContext}` })),
               field('Patron-facing label override', element('input', { type: 'text', value: current.labelOverride || '', placeholder: 'Label override',
                 'data-custom-rule-property': 'labelOverride', 'data-domain-editable': 'true',
-                'aria-label': `${fieldLabel} label override for ${value.code}` }))
+                'aria-label': `${fieldLabel} label override for ${formatContext}` }))
             ]);
           }))
         ])
@@ -1441,20 +1702,27 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       const updateMessage = () => {
         const control = row.querySelector('[data-rule-property="message"]');
         const usesMessage = behavior.value !== 'none';
-        control.closest('label').hidden = !usesMessage;
+        (control.closest('.settings-inheritance-field') || control.closest('label')).hidden = !usesMessage;
         control.disabled = !usesMessage;
       };
       updateMessage();
       listen(behavior, 'change', updateMessage);
       dom.rules.append(row);
+      attachRuleInheritance(row, value);
     }
     refreshRuleDefinitions();
+    for (const row of dom.formats.querySelectorAll('[data-format-code]')) refreshFormatStatus(row, row.dataset.formatCode);
+    updateRuleAvailability();
     if (focusedRow) {
       const rows = [...dom.rules.querySelectorAll('[data-rule-code]')];
-      const row = rows.find(item => item.dataset.ruleCode === focusedCode) || rows[Math.min(focusedIndex, rows.length - 1)];
-      const action = [...(row?.querySelectorAll('.settings-row-actions button') || [])]
-        .find(button => !button.disabled && button.getAttribute('aria-label') === focusedName);
-      (action || row?.querySelector('[data-rule-toggle]') || addButtons.rules)?.focus();
+      const retainedRow = rows.find(item => item.dataset.ruleCode === focusedCode);
+      const row = retainedRow || rows[Math.min(focusedIndex, rows.length - 1)];
+      const action = [...(retainedRow?.querySelectorAll('.settings-row-actions button') || [])]
+        .find(button => !button.disabled && (focusedAction
+          ? button.dataset.rowAction === focusedAction : button.getAttribute('aria-label') === focusedName));
+      const target = action || row?.querySelector('[data-rule-toggle]') || addButtons.rules;
+      if (target?.disabled) dom.ruleAvailability?.focus();
+      else target?.focus();
     }
   }
 
@@ -1483,7 +1751,12 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     dom.claims.replaceChildren();
     const formats = readFormats().filter(item => item.id);
     const staff = array(property(state.data, 'autoClaimStaff') ?? property(state.data, 'staffUsers'));
-    const formatOptions = formats.map(item => ({ value: item.id, label: `${item.label} (${item.code})` }));
+    const formatLabels = formats.map(item => item.label || 'Unresolved material format');
+    const formatOptions = formats.map((item, index) => ({
+      value: item.id,
+      label: formatLabels.filter(label => label === formatLabels[index]).length > 1
+        ? formatLabels[index] + ', format ' + (index + 1) : formatLabels[index]
+    }));
     for (const [index, value] of values.entries()) {
       const formatId = stringId(property(value, 'materialFormatId') ?? property(value, 'formatId'));
       const staffId = stringId(property(value, 'staffUserId') ?? property(value, 'staffId'));
@@ -1620,10 +1893,6 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         continue;
       }
       const lineage = !value.isCustom && !state.system;
-      const override = lineage
-        ? checkbox('Override', value.overridden, 'settings-inline-check settings-template-override-control')
-        : null;
-      if (override) override.input.className = 'settings-template-override';
       const row = element('div', {
         className: 'settings-editor-row settings-template-row',
         'data-domain-row': 'true',
@@ -1631,6 +1900,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         'data-template-sort-order': value.sortOrder ?? 0,
         'data-template-baseline-sort-order': value.sortOrder ?? 0,
         'data-template-id': stringId(value.id) || '',
+        'data-template-key': value.templateKey,
         'data-template-version': stringId(value.version) || '',
         'data-template-source-id': stringId(value.sourceTemplateId) || '',
         'data-template-kind': value.isCustom ? 'custom' : lineage ? 'lineage' : 'system',
@@ -1642,13 +1912,6 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         'data-template-inherited-subject': value.inheritedSubject || '',
         'data-template-inherited-body': value.inheritedBody || ''
       }, [
-        field('Template key', element('input', {
-          type: 'text',
-          className: 'template-key',
-          value: value.templateKey || '',
-          readOnly: lineage || Boolean(value.id),
-          'data-domain-editable': 'true'
-        })),
         field('Display name', element('input', {
           type: 'text',
           className: 'template-display-name',
@@ -1674,41 +1937,18 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
           checked: value.enabled !== false,
           'data-domain-editable': 'true'
         }), element('span', { text: 'Enabled' })]),
-        override?.wrapper,
         element('p', { className: 'field-help settings-template-order-help', hidden: 'true' }),
         actions(index, values.length, (_, offset) => reorder('templates', templateRowIndex(row), offset), value.isCustom ? () => {
           const currentIndex = templateRowIndex(row);
           if (canRemoveTemplate(readTemplates()[currentIndex])) remove('templates', currentIndex);
-        } : null)
+        } : !value.id ? () => remove('templates', templateRowIndex(row)) : null)
       ]);
       row.dataset.templateBaselineSubject = row.querySelector('.template-subject').value;
       row.dataset.templateBaselineBody = row.querySelector('.template-body').value;
       row.dataset.templateBaselineDisplayName = clean(row.querySelector('.template-display-name').value) || '';
       row.dataset.templateBaselineEnabled = String(row.querySelector('.template-enabled').checked);
-      if (override) {
-        let draft = null;
-        listen(override.input, 'change', () => {
-          const subject = row.querySelector('.template-subject');
-          const body = row.querySelector('.template-body');
-          const name = row.querySelector('.template-display-name');
-          const enabled = row.querySelector('.template-enabled');
-          if (!override.input.checked) {
-            draft = { subject: subject.value, body: body.value, name: name.value, enabled: enabled.checked };
-            subject.value = value.inheritedSubject || '';
-            body.value = value.inheritedBody || '';
-            name.value = value.inheritedDisplayName || '';
-            enabled.checked = value.inheritedEnabled;
-          } else if (draft) {
-            subject.value = draft.subject; body.value = draft.body;
-            name.value = draft.name; enabled.checked = draft.enabled;
-          }
-          updateRowDisabled(row, !override.input.checked);
-          updateTemplateRowActions(row, templateRowIndex(row), readTemplates());
-          onChange();
-        });
-        updateRowDisabled(row, !override.input.checked);
-      }
       dom.templates.append(row);
+      if (lineage) attachTemplateInheritance(row, value);
       updateTemplateRowActions(row, index, values);
     }
     for (const row of existing.values()) row.remove();
@@ -1717,6 +1957,66 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       const target = focused.disabled ? focused.closest('[data-domain-row]')?.querySelector('[data-template-toggle]') : focused;
       target?.focus({ preventScroll: true });
     }
+  }
+
+  function attachTemplateInheritance(row, value) {
+    const id = row.dataset.templateUiId;
+    const fields = ['displayName', 'subject', 'body', 'enabled'];
+    const selectors = ['.template-display-name', '.template-subject', '.template-body', '.template-enabled'];
+    const intent = templateIntents.get(id);
+    const inheritedValue = name => value[`inherited${name[0].toUpperCase()}${name.slice(1)}`] ?? '';
+    const inheritedDisplay = name => {
+      if (name === 'enabled') return Boolean(inheritedValue(name));
+      const control = row.querySelector(selectors[fields.indexOf(name)]).cloneNode(false);
+      control.value = inheritedValue(name);
+      return control.value;
+    };
+    const preview = name => {
+      const control = row.querySelector(selectors[fields.indexOf(name)]);
+      if (name === 'enabled') control.checked = Boolean(inheritedValue(name));
+      else control.value = inheritedValue(name);
+      displayed.set(control, control.type === 'checkbox' ? control.checked : control.value);
+    };
+    for (const [index, name] of fields.entries()) {
+      const control = row.querySelector(selectors[index]);
+      const local = intent?.fields?.[name];
+      const comparisonOpen = row.querySelector(`[data-template-status="${name}"] .settings-system-comparison`)?.open;
+      row.querySelector(`[data-template-status="${name}"]`)?.remove();
+      const raw = value[`raw${name[0].toUpperCase()}${name.slice(1)}`];
+      const owned = intent?.reset ? false : local ? local === 'pin' : name === 'enabled' ? value.hadOverride : raw !== null && raw !== undefined;
+      const status = inheritanceStatus({ owned,
+        value: name === 'enabled' ? control.checked : control.value,
+        systemValue: inheritedDisplay(name), comparisonOpen,
+        pending: Boolean(intent?.reset || local), label: `${value.displayName} ${name}`, onReset: () => {
+          const old = templateIntents.get(id);
+          templateIntents.set(id, { reset: false, fields: { ...old?.fields, [name]: 'reset' } });
+          preview(name); attachTemplateInheritance(row, value); onTemplatesRendered(); onChange({ target: control, resetLabel: `${value.displayName} ${name}` }); control.focus();
+        } });
+      status.dataset.templateStatus = name;
+      const field = control.closest('.settings-template-field');
+      if (field) field.append(status);
+      else control.closest('label')?.after(status);
+      if (!displayed.has(control)) watchControl(control, () => {
+        const old = templateIntents.get(id);
+        const next = old?.reset ? Object.fromEntries(fields.map(key => [key, 'reset'])) : { ...old?.fields };
+        next[name] = 'pin';
+        templateIntents.set(id, { reset: false, fields: next });
+        attachTemplateInheritance(row, value);
+      });
+    }
+    row.querySelector('[data-template-item-status]')?.remove();
+    const current = fields.map((name, index) => {
+      const control = row.querySelector(selectors[index]); return name === 'enabled' ? control.checked : control.value;
+    });
+    const status = inheritanceStatus({ owned: intent?.reset ? false : value.hadOverride || Object.values(intent?.fields || {}).includes('pin'),
+      value: current, systemValue: fields.map(inheritedDisplay), pending: Boolean(intent), label: `${value.displayName} template`, showComparison: false,
+      onReset: () => {
+        templateIntents.set(id, { reset: true, fields: {} });
+        fields.forEach(preview); attachTemplateInheritance(row, value); onTemplatesRendered(); onChange({ resetLabel: `${value.displayName} template` });
+        row.querySelector('.template-display-name')?.focus();
+      } });
+    status.dataset.templateItemStatus = 'true';
+    (row.querySelector('.settings-template-admin') || row).append(status);
   }
 
   function templateRowIndex(row) {
@@ -1748,7 +2048,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       const baselineBody = row.dataset.templateBaselineBody;
       const baselineDisplayName = clean(row.dataset.templateBaselineDisplayName);
       const baselineEnabled = row.dataset.templateBaselineEnabled === 'true';
-      const override = row.querySelector('.settings-template-override');
+      const intent = templateIntents.get(row.dataset.templateUiId);
       const persisted = Boolean(row.dataset.templateId);
       const sortOrder = numeric(row.dataset.templateSortOrder, 0);
       return {
@@ -1756,7 +2056,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         id: stringId(row.dataset.templateId),
         version: stringId(row.dataset.templateVersion),
         sourceTemplateId: stringId(row.dataset.templateSourceId),
-        templateKey: clean(row.querySelector('.template-key')?.value),
+        templateKey: clean(row.dataset.templateKey),
         displayName: currentDisplayName,
         subject: currentSubject,
         body: currentBody,
@@ -1765,33 +2065,71 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         sortOrderBaseline: numeric(row.dataset.templateBaselineSortOrder, 0),
         sortOrderChanged: !persisted || sortOrder !== numeric(row.dataset.templateBaselineSortOrder, 0),
         isCustom: row.dataset.templateKind === 'custom',
-        overridden: lineage ? Boolean(override?.checked) : !lineage,
+        overridden: lineage ? !intent?.reset && (row.dataset.templateHadOverride === 'true' || Object.values(intent?.fields || {}).includes('pin')) : !lineage,
         hadOverride: row.dataset.templateHadOverride === 'true',
-        reset: lineage && row.dataset.templateHadOverride === 'true' && !override?.checked,
+        reset: lineage && Boolean(intent?.reset),
+        fieldIntents: intent?.fields || {},
         subjectBaseline: baselineSubject,
         bodyBaseline: baselineBody,
         displayNameBaseline: baselineDisplayName,
         enabledBaseline: baselineEnabled,
-        subjectChanged: !persisted || currentSubject !== baselineSubject,
-        bodyChanged: !persisted || currentBody !== baselineBody,
-        displayNameChanged: !persisted || currentDisplayName !== baselineDisplayName,
-        enabledChanged: !persisted || currentEnabled !== baselineEnabled
+        subjectChanged: Boolean(intent?.fields?.subject) || !persisted || currentSubject !== baselineSubject,
+        bodyChanged: Boolean(intent?.fields?.body) || !persisted || currentBody !== baselineBody,
+        displayNameChanged: Boolean(intent?.fields?.displayName) || !persisted || currentDisplayName !== baselineDisplayName,
+        enabledChanged: Boolean(intent?.fields?.enabled) || !persisted || currentEnabled !== baselineEnabled
       };
     });
   }
 
   function readSnapshot() {
     return JSON.stringify({
-      publication: { useSystem: state.system || !dom.publicationUseSystem || dom.publicationUseSystem.checked, values: readPublication() },
-      creators: { useSystem: state.system || !dom.creatorsUseSystem || dom.creatorsUseSystem.checked, values: readSetRows(dom.creators, 'creator') },
-      codes: { useSystem: state.system || !dom.codesUseSystem || dom.codesUseSystem.checked,
+      publication: { useSystem: inheritedGroup('publication'), intent: groupIntents.get('publication'), values: readPublication() },
+      creators: { useSystem: inheritedGroup('creators'), intent: groupIntents.get('creators'), values: readSetRows(dom.creators, 'creator') },
+      codes: { useSystem: inheritedGroup('codes'), intent: groupIntents.get('codes'),
         values: readSelectedCodes().sort((left, right) => Number(left) - Number(right)) },
-      providers: readProviders(),
-      formats: readFormats(),
+      providers: { values: readProviders(), intents: [...providerIntents] },
+      formats: { values: readFormats(), intents: [...formatIntents] },
       fields: readFields(),
       rules: readRules(),
       claims: readClaims(),
-      templates: readTemplates()
+      templates: { values: readTemplates(), intents: [...templateIntents] }
+    });
+  }
+
+  function draftDestinations() {
+    if (disposed || !state.baseline) return [];
+    const current = JSON.parse(readSnapshot()), baseline = JSON.parse(state.baseline);
+    const definitions = [
+      ['publication', 'patron', 'Publication options'], ['creators', 'workflow', 'Common creator list'],
+      ['codes', 'workflow', 'Allowed patron codes'], ['providers', 'workflow', 'External search providers'],
+      ['formats', 'patron', 'Material formats'], ['fields', 'patron', 'Custom fields'],
+      ['rules', 'patron', 'Format rules'], ['claims', 'patron', 'Auto-claim rules'],
+      ['templates', 'templates', 'Additional templates']
+    ];
+    return definitions.flatMap(([name, panel, label]) => {
+      // Equal-display resets still own a draft, including built-in rule
+      // columns sharing the MaterialFormatOverride row with Material formats.
+      const ruleIntent = name === 'rules' && [...formatIntents.entries()].find(([, intent]) =>
+        intent.reset || Object.keys(intent.fields).some(key => !['label', 'isEnabled', 'sortOrder'].includes(key)));
+      if (JSON.stringify(current[name]) === JSON.stringify(baseline[name]) && !ruleIntent) return [];
+      const values = Array.isArray(current[name]) ? current[name] : current[name]?.values;
+      const original = Array.isArray(baseline[name]) ? baseline[name] : baseline[name]?.values;
+      let index = Array.isArray(values) ? values.findIndex((value, index) => JSON.stringify(value) !== JSON.stringify(original?.[index])) : -1;
+      const intents = current[name]?.intents;
+      if (index < 0 && intents?.length) {
+        const id = intents[0][0];
+        index = values.findIndex(value => [value.id, value.code, value.uiId].includes(id));
+      }
+      if (index < 0 && ruleIntent) index = values.findIndex(value => value.code === ruleIntent[0]);
+      const row = dom[name]?.querySelectorAll(':scope > [data-domain-row]')[Math.max(0, index)];
+      return [{ key: name, panel, label, reveal() {
+        if (!dom[name]?.isConnected || !root.contains(dom[name])) return null;
+        // Use the existing disclosures; opening them changes presentation only.
+        const toggle = row?.querySelector('[data-rule-toggle], [data-template-toggle]');
+        if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+        return toggle || (name === 'codes' ? dom.codeSearch : row?.querySelector('input, select, textarea')) ||
+          addButtons[name] || dom[name].closest('.settings-fieldset');
+      } }];
     });
   }
 
@@ -1801,6 +2139,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const values = readDomain(name);
     const next = index + offset;
     if (next < 0 || next >= values.length) return;
+    if (name === 'publication') markGroup(name);
     const sortOrder = name === 'templates' ? movedTemplateSortOrder(values, index, offset) : null;
     if (name === 'templates' && !state.system && (!values[index].isCustom || sortOrder === null)) return;
     [values[index], values[next]] = [values[next], values[index]];
@@ -1814,9 +2153,14 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     }
     if (name === 'formats' || name === 'providers') {
       values.forEach((value, order) => { value.sortOrder = (order + 1) * 10; });
+      if (!state.system && name === 'formats') {
+        for (const value of values) pinItem(formatIntents, value.code, 'sortOrder');
+      }
     }
     const focusedAction = document.activeElement?.getAttribute('aria-label');
+    const publicationAction = name === 'publication' ? document.activeElement?.dataset.rowAction : null;
     renderDomain(name, values);
+    if (name === 'publication') focusPublicationRow(next, publicationAction);
     if (name === 'fields') {
       renderRules(rules);
       focusFieldRow(next, focusedAction);
@@ -1827,6 +2171,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   function remove(name, index) {
     if (['fields', 'rules'].includes(name) && !canRedrawRules()) return;
     const values = readDomain(name);
+    if (name === 'publication') markGroup(name);
     const rules = name === 'fields' ? readRules() : null;
     const removedFieldKey = name === 'fields' ? values[index]?.key : null;
     const [removed] = values.splice(index, 1);
@@ -1834,6 +2179,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
       state.ruleRosterCodes = state.ruleRosterCodes.filter(code => code !== removed.code);
     }
     renderDomain(name, values);
+    if (name === 'publication') focusPublicationRow(Math.min(index, values.length - 1));
     if (name === 'templates') {
       const rows = dom.templates.querySelectorAll('[data-domain-row]');
       (rows[Math.min(index, rows.length - 1)]?.querySelector('[data-template-toggle]') || addButtons.templates)?.focus();
@@ -1866,6 +2212,12 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const action = [...(row?.querySelectorAll('.settings-row-actions button') || [])]
       .find(button => !button.disabled && button.getAttribute('aria-label') === actionName);
     (action || row?.querySelector('input') || addButtons.fields)?.focus();
+  }
+
+  function focusPublicationRow(index, action) {
+    const row = dom.publication.querySelectorAll('[data-domain-row]')[index];
+    const target = action ? row?.querySelector(`[data-row-action="${action}"]:not(:disabled)`) : null;
+    (target || row?.querySelector('[data-publication-field="label"]') || addButtons.publication)?.focus();
   }
 
   function renderDomain(name, values) {
@@ -1942,28 +2294,51 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
   }
 
   function validateCurrentFields() {
+    const requireControls = (row, selectors) => {
+      if (selectors.some(selector => row.querySelectorAll(selector).length !== 1)) {
+        throw new Error('The settings editor is incomplete. Reload settings before saving.');
+      }
+    };
+    for (const row of dom.providers.querySelectorAll('[data-domain-row]')) {
+      requireControls(row, ['input[type="text"]', 'input[type="url"]', 'input[type="checkbox"]']);
+      if (!clean(row.dataset.providerKey)) throw new Error('The provider identity is unavailable. Reload settings before saving.');
+    }
+    for (const row of dom.publication.querySelectorAll('[data-domain-row]')) {
+      requireControls(row, ['input[data-publication-field="label"]', 'input[type="checkbox"][data-publication-field="enabled"]']);
+    }
+    for (const row of dom.formats.querySelectorAll('[data-domain-row]')) {
+      requireControls(row, ['input[data-material-field="label"]', 'input[type="checkbox"][data-material-field="enabled"]']);
+      if (!clean(row.dataset.formatCode)) throw new Error('The material-format identity is unavailable. Reload settings before saving.');
+    }
+    for (const row of dom.fields.querySelectorAll('[data-domain-row]')) {
+      requireControls(row, ['input[data-custom-field="label"]', 'select[data-custom-field="type"]',
+        'input[data-custom-field="helpText"]', 'input[type="checkbox"][data-custom-field="enabled"]']);
+      for (const option of row.querySelectorAll('[data-option-row]')) {
+        requireControls(option, ['input[data-option-field="label"]', 'input[type="checkbox"][data-option-field="enabled"]']);
+      }
+    }
     if (readSetRows(dom.creators, 'creator').some(value => !value)) {
       throw new Error('Remove or complete blank creator rows before saving.');
     }
     if (readPublication().some(option => !option.id || !option.label)) {
       throw new Error('Publication options require stable IDs and labels. Delete a row to remove it.');
     }
-    const blankKey = [...dom.templates.querySelectorAll('.template-key')].find(control => !control.value.trim());
-    if (blankKey) {
-      const message = 'Email templates require a stable key. Delete a row to remove it.';
-      onInvalidTemplate(blankKey, message);
-      throw new Error(message);
-    }
     const templateKeys = new Set(state.system ? BUILTIN_TEMPLATE_KEYS : []);
     for (const template of state.models.templates) {
       if (template.id && (state.system || template.isCustom)) templateKeys.add(template.templateKey.toLowerCase());
     }
     for (const row of dom.templates.querySelectorAll('[data-domain-row]')) {
+      requireControls(row, ['input.template-display-name', 'input.template-subject', 'textarea.template-body', 'input[type="checkbox"].template-enabled']);
+      const control = row.querySelector('.template-display-name');
+      const key = clean(row.dataset.templateKey)?.toLowerCase();
+      if (!key) {
+        const message = 'The email-template identity is unavailable. Reload settings before saving.';
+        onInvalidTemplate(control, message);
+        throw new Error(message);
+      }
       if (row.dataset.templateId) continue;
-      const control = row.querySelector('.template-key');
-      const key = control.value.trim().toLowerCase();
       if (templateKeys.has(key)) {
-        const message = 'This email template key is already used in this settings scope. Choose a different key.';
+        const message = 'The email-template identity is already used in this settings scope. Reload settings before saving.';
         onInvalidTemplate(control, message);
         throw new Error(message);
       }
@@ -1987,33 +2362,28 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     }
   }
 
-  function bindSetToggle(input, name, render) {
-    if (!input) return;
-    listen(input, 'change', () => {
-      if (name === 'creators' && creatorsOptionsHidden()) {
-        input.checked = state.creatorsUseSystem;
-        return;
-      }
-      if (name === 'creators') state.creatorsUseSystem = input.checked;
-      render(setValues(name, state.system || input.checked));
-      onChange();
-    });
-  }
-
   function bindAdd(name, factory) {
     listen(addButtons[name], 'click', () => {
       if (name === 'creators' && creatorsOptionsHidden()) return;
       if (['fields', 'rules'].includes(name) && !canRedrawRules()) return;
       const rules = name === 'fields' ? readRules() : null;
       const values = readDomain(name);
+      if (name === 'rules' && eligibleRuleFormats(values).length === 0) {
+        updateRuleAvailability();
+        return;
+      }
       const added = factory(values);
       if (!added) return;
+      if (['creators', 'publication'].includes(name)) markGroup(name);
       values.push(added);
       if (name === 'rules' && !state.ruleRosterCodes.includes(added.code)) {
         state.ruleRosterCodes = [...state.ruleRosterCodes, added.code];
       }
       if (name === 'rules') expandedRuleCodes.add(added.code);
       renderDomain(name, values);
+      if (name === 'creators') focusSetRow(values.length - 1);
+      if (name === 'publication') focusPublicationRow(values.length - 1);
+      if (name === 'formats') dom.formats.lastElementChild?.querySelector('[data-material-field="label"]')?.focus();
       if (name === 'templates') {
         const row = dom.templates.lastElementChild;
         row?.querySelector('[data-template-toggle]')?.click();
@@ -2028,21 +2398,14 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     });
   }
 
-  bindSetToggle(dom.publicationUseSystem, 'publication', renderPublication);
   listen(dom.rules, 'change', event => {
     const row = event.target.closest('[data-rule-code]');
     if (row && event.target.matches('[data-format-field], [data-custom-rule-property="mode"]')) updateRuleSummary(row);
   });
-  bindSetToggle(dom.creatorsUseSystem, 'creators', values => renderSetRows(dom.creators, values, 'creator'));
-  listen(dom.codesUseSystem, 'change', () => {
-    if (state.system) return;
-    if (dom.codesUseSystem.checked) state.codeOverrideDraft = readSelectedCodes();
-    dom.codeSearch.value = '';
-    renderCodes(dom.codesUseSystem.checked ? setValues('codes', true)
-      : state.codeOverrideDraft ?? setValues('codes', false));
-    onChange();
-  });
-  bindAdd('publication', values => ({ id: `option_${values.length + 1}`, label: 'New option', enabled: true, sortOrder: (values.length + 1) * 10 }));
+  bindAdd('publication', values => ({
+    id: draftKey('option_', [...state.models.publication, ...values].map(item => item.id)),
+    label: 'New option', enabled: true, sortOrder: (values.length + 1) * 10
+  }));
   bindAdd('creators', values => 'New creator');
   listen(dom.codeSearch, 'input', renderCodeOptions);
   listen(dom.codeSearch, 'click', renderCodeOptions);
@@ -2095,7 +2458,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
         renderCodes(readSelectedCodes());
         if (restoreFocus && dom.codeRetry.hidden &&
             [dom.codeRetry, document.body].includes(document.activeElement)) {
-          (codesInherited() ? dom.codesUseSystem : dom.codeSearch).focus();
+          dom.codeSearch.focus();
         }
       }
     }
@@ -2111,34 +2474,27 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     return { id: null, key: `provider_${index}`, label: 'New provider', urlTemplate: '', isEnabled: false, overridden: true };
   });
   bindAdd('formats', values => {
-    const codes = new Set([...state.models.formats, ...values].map(value => value.code.toLowerCase()));
-    for (const code of state.ruleRosterCodes) codes.add(code.toLowerCase());
-    let index = values.length + 1;
-    while (codes.has(`custom_${index}`)) index += 1;
-    return { id: null, code: `custom_${index}`, ownerOrganizationId: currentOrganizationId(), label: 'New format', isEnabled: true, overridden: true };
+    const codes = [...state.models.formats, ...values].map(value => value.code).concat(state.ruleRosterCodes);
+    return { id: null, code: draftKey('custom_', codes), ownerOrganizationId: currentOrganizationId(), label: 'New format', isEnabled: true, overridden: true };
   });
   bindAdd('fields', values => {
-    const keys = new Set([...state.models.fields, ...values].map(value => value.key.toLowerCase()));
+    const keys = [...state.models.fields, ...values].map(value => value.key);
     for (const rule of state.models.rules) {
-      for (const key of Object.keys(rule.customFields)) keys.add(key.toLowerCase());
+      keys.push(...Object.keys(rule.customFields));
     }
-    let index = values.length + 1;
-    while (keys.has(`field_${index}`)) index += 1;
-    return { id: null, key: `field_${index}`, type: 'text', label: 'New field', enabled: true, options: [] };
+    return { id: null, key: draftKey('field_', keys), type: 'text', label: 'New field', enabled: true, options: [] };
   });
   bindAdd('rules', values => {
-    const format = readFormats().find(item => !values.some(rule => rule.code === item.code));
+    const format = eligibleRuleFormats(values)[0];
     if (!format) return null;
-    return normalizeRule({ code: format?.code || '' }, format || {});
+    return normalizeRule({ code: format.code }, format);
   });
   bindAdd('claims', values => ({ materialFormatId: readFormats()[0]?.id || '', staffUserId: '' }));
   function unusedTemplateKey(values) {
     // The DACPAC uses a case-insensitive collation for unique template keys.
-    const keys = new Set([...values, ...state.models.templates].map(value => String(value.templateKey || '').toLowerCase()));
+    const keys = [...values, ...state.models.templates].map(value => value.templateKey);
     const prefix = state.system ? 'rejection:template_' : 'rejection:custom_template_';
-    let index = 1;
-    while (keys.has(`${prefix}${index}`)) index += 1;
-    return `${prefix}${index}`;
+    return draftKey(prefix, keys);
   }
 
   bindAdd('templates', values => ({
@@ -2156,8 +2512,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     if (disposed) return;
     state.data = data || {};
     state.system = Boolean(system);
+    groupIntents.clear(); groupOwned.clear(); providerIntents.clear(); formatIntents.clear(); templateIntents.clear();
+    reservedDraftKeys.clear();
     expandedRuleCodes.clear();
-    state.codeOverrideDraft = null;
     state.codeLookupPending = false;
     state.validationError = null;
     try {
@@ -2209,18 +2566,9 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     const libraryPublication = property(library, 'publicationOptions');
     const libraryCreators = property(library, 'commonCreators');
     const libraryCodes = property(library, 'allowedPatronCodeIds');
-    if (dom.publicationUseSystem) dom.publicationUseSystem.checked = state.system || !libraryPublication?.exists;
-    if (dom.creatorsUseSystem) dom.creatorsUseSystem.checked = state.system || !libraryCreators?.exists;
-    state.creatorsUseSystem = Boolean(dom.creatorsUseSystem?.checked);
-    if (dom.codesUseSystem) dom.codesUseSystem.checked = state.system || !libraryCodes?.exists;
-    for (const [input, wrapper] of [
-      [dom.publicationUseSystem, dom.publicationInheritField],
-      [dom.creatorsUseSystem, dom.creatorsInheritField],
-      [dom.codesUseSystem, dom.codesInheritField]
-    ]) {
-      if (wrapper) wrapper.hidden = state.system;
-      if (input) input.disabled = state.system;
-    }
+    groupOwned.set('publication', Boolean(libraryPublication?.exists));
+    groupOwned.set('creators', Boolean(libraryCreators?.exists));
+    groupOwned.set('codes', Boolean(libraryCodes?.exists));
     renderPublication(publication);
     renderSetRows(dom.creators, creators, 'creator');
     renderCodes(codes);
@@ -2283,6 +2631,66 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     for (const name of ['publication', 'creators', 'codes', 'providers', 'formats', 'fields', 'rules', 'claims', 'templates']) {
       domainsChanged[name] = JSON.stringify(current[name]) !== JSON.stringify(baseline[name]);
     }
+    if ([...formatIntents.values()].some(intent => Object.keys(intent.fields).some(key => !['label', 'isEnabled', 'sortOrder'].includes(key)))) {
+      domainsChanged.rules = true;
+    }
+    const sparse = (value, intent, identity) => {
+      if (intent.reset) return { ...identity, reset: true };
+      const result = { ...identity, pinOverrides: true };
+      for (const [key, action] of Object.entries(intent.fields)) {
+        const [group, propertyName] = key.split('.');
+        const currentValue = propertyName ? value[group]?.[propertyName] : value[group];
+        const desired = action === 'reset' ? null : currentValue;
+        if (propertyName) { result[group] ||= {}; result[group][propertyName] = desired; }
+        else result[group] = desired;
+      }
+      return result;
+    };
+    const writes = {
+      providers: state.system ? values.providers.map(value => {
+        const original = baseline.providers?.values.find(item => item.id === value.id);
+        const result = { id: value.id, key: value.key };
+        for (const key of ['label', 'urlTemplate', 'isEnabled', 'sortOrder']) {
+          if (!original || original[key] !== value[key]) result[key] = value[key];
+        }
+        return result;
+      }) : values.providers.filter(value => providerIntents.has(value.id))
+        .map(value => sparse(value, providerIntents.get(value.id), { id: value.id, key: value.key })),
+      formats: state.system ? values.formats.map(value => {
+        const original = baseline.formats?.values.find(item => item.id === value.id);
+        const result = { id: value.id, code: value.code, version: value.version };
+        for (const key of ['label', 'isEnabled', 'sortOrder']) if (!original || original[key] !== value[key]) result[key] = value[key];
+        return result;
+      }) : values.formats.flatMap(value => {
+        if (value.ownerOrganizationId === currentOrganizationId()) {
+          const original = baseline.formats?.values.find(item => item.id && item.id === value.id);
+          if (!original) return [value];
+          const result = { id: value.id, code: value.code, version: value.version, ownerOrganizationId: value.ownerOrganizationId };
+          for (const key of ['label', 'isEnabled', 'sortOrder']) if (original[key] !== value[key]) result[key] = value[key];
+          return [result];
+        }
+        const intent = formatIntents.get(value.code);
+        if (!intent) return [];
+        const fields = Object.fromEntries(Object.entries(intent.fields).filter(([key]) => ['label', 'isEnabled', 'sortOrder'].includes(key)));
+        return intent.reset || Object.keys(fields).length ? [sparse(value, { ...intent, fields },
+          { id: value.id, code: value.code, version: value.version })] : [];
+      }),
+      rules: values.rules.map(value => {
+        const format = values.formats.find(item => item.code === value.code);
+        if (state.system || format?.ownerOrganizationId === currentOrganizationId()) {
+          const original = baseline.rules?.find(item => item.code === value.code);
+          const result = { code: value.code };
+          for (const key of ['messageBehavior', 'message', 'title', 'author', 'identifier', 'publication']) {
+            if (!original || JSON.stringify(original[key]) !== JSON.stringify(value[key])) result[key] = value[key];
+          }
+          if (!state.system) result.customFields = value.customFields;
+          return result;
+        }
+        const intent = formatIntents.get(value.code);
+        const fields = Object.fromEntries(Object.entries(intent?.fields || {}).filter(([key]) => !['label', 'isEnabled', 'sortOrder'].includes(key)));
+        return { ...sparse(value, { reset: false, fields }, { code: value.code }), customFields: value.customFields };
+      })
+    };
     const changed = Object.values(domainsChanged).some(Boolean);
     const collectedValues = {
       ...values,
@@ -2300,6 +2708,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     if (!changed) return {
       changed: deletedFormats.length > 0,
       domainsChanged,
+      writes,
       values: collectedValues,
       templates: [],
       deletedFormats
@@ -2310,6 +2719,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     return {
       changed: true,
       domainsChanged,
+      writes,
       values: collectedValues,
       templates: domainsChanged.templates ? values.templates.concat(deletedTemplates) : [],
       deletedFormats
@@ -2322,6 +2732,7 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     collect,
     setBaseline: () => { state.baseline = readSnapshot(); },
     snapshot: () => readSnapshot(),
+    draftDestinations,
     setCodeChoices(choices) {
       if (disposed) return;
       if (!Array.isArray(choices) || choices.some(choice => !isRecord(choice) ||

@@ -8,7 +8,7 @@ const verifySortKeyboard = require('./request-sort-keyboard.cjs');
 const [baseURL, artifacts, staffId, tenantId, email, library] = process.argv.slice(2);
 
 (async () => {
-  const report = { sorts: [], labels: [], states: [], mutations: [], external: [], errors: [] };
+  const report = { sorts: [], labels: [], states: [], mutations: [], settingsWrites: [], external: [], errors: [] };
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: {
     'X-ASAP-Test-Staff-Id': staffId, 'X-ASAP-Test-Tenant-Id': tenantId, 'X-ASAP-Test-Staff-Email': email
@@ -21,6 +21,9 @@ const [baseURL, artifacts, staffId, tenantId, email, library] = process.argv.sli
     report.external.push(route.request().url()); return route.abort();
   });
   page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/asap/staff/settings' && request.method() !== 'GET') {
+      report.settingsWrites.push(request.method());
+    }
     if (/\/api\/asap\/staff\/users(?:\/|$)/.test(new URL(request.url()).pathname) && request.method() !== 'GET') {
       report.mutations.push({ method: request.method(), path: new URL(request.url()).pathname, body: request.postDataJSON() });
     }
@@ -62,16 +65,35 @@ const [baseURL, artifacts, staffId, tenantId, email, library] = process.argv.sli
       ['patron-suggestion-status-label', 'Suggestion status'], ['patron-closed-status-label', 'Closed status']
     ];
     for (const [id, name] of fields) {
-      assert.equal(await page.getByRole('textbox', { name, exact: true }).getAttribute('id'), id);
-      const toggle = page.getByRole('checkbox', { name: `Override ${name}`, exact: true });
-      assert.equal(await toggle.count(), 1);
-      await toggle.focus(); await page.keyboard.press('Space');
-      assert.equal(await page.locator(`#${id}`).isEnabled(), true);
-      await page.keyboard.press('Tab'); assert.equal(await toggle.evaluate(node => node === document.activeElement), false);
-      await toggle.uncheck(); assert.equal(await page.locator(`#${id}`).isDisabled(), true);
-      report.labels.push({ id, name, override: `Override ${name}`, keyboardAccess: true });
+      const input = page.getByRole('textbox', { name, exact: true });
+      assert.equal(await input.getAttribute('id'), id);
+      const field = page.locator('.settings-field').filter({ has: page.locator(`#${id}`) });
+      const status = field.locator('.settings-inheritance-status');
+      const original = await input.inputValue();
+      assert.equal(await page.getByRole('checkbox', { name: `Override ${name}`, exact: true }).count(), 0);
+      assert.equal(await input.isEditable(), true);
+      assert.equal(await status.innerText(), 'Using system value');
+      await input.focus(); await page.keyboard.press('Tab');
+      assert.equal(await input.evaluate(node => node === document.activeElement), false);
+      assert.equal(await page.locator('#settings-save').isDisabled(), true, 'Focus alone leaves inherited values clean.');
+      await input.fill(original + ' draft');
+      assert.match(await status.innerText(), /Library setting.*Unsaved/);
+      const reset = field.getByRole('button', { name: `Use system value for ${name}`, exact: true });
+      await page.keyboard.press('Tab');
+      assert.equal(await reset.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
+      await page.keyboard.press('Enter');
+      assert.match(await status.innerText(), /Using system value.*Unsaved/);
+      assert.equal(await input.evaluate(node => node === document.activeElement), true);
+      await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
+      await page.waitForFunction(() => document.querySelector('#settings-save-title').textContent === 'No changes' &&
+        !document.querySelector('#settings-form').inert);
+      await settled();
+      assert.equal(await input.inputValue(), original);
+      assert.equal(await status.innerText(), 'Using system value');
+      report.labels.push({ id, name, directEdit: true, keyboardReset: true });
     }
-    assert.equal(await page.locator('#settings-save').isDisabled(), true, 'Naming and override on/off do not manufacture a draft.');
+    assert.equal(await page.locator('#settings-save').isDisabled(), true, 'Discard restores the accepted inherited values.');
+    assert.deepEqual(report.settingsWrites, [], 'Direct edits and pending resets never save implicitly.');
     await scan('settings-library-labels');
     await page.locator('#settings-nav-staff').click(); await settled();
     const create = async address => {

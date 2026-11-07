@@ -10,6 +10,7 @@ import { insertPlaceholderText } from './placeholder-editing.js';
 import { createEmailTestController } from './email-test.js';
 import { confirmAction, controlSnapshot } from './confirmation.js';
 import { byDisplayLabel } from './display-order.js';
+import { inheritanceStatus } from './settings-inheritance.js';
 
 const WORKFLOW_FIELDS = [
   ['suggestionLimit', 'suggestion-limit', 'number'],
@@ -34,13 +35,6 @@ const WORKFLOW_FIELDS = [
   ['patronCodeEligibilityEnabled', 'patron-code-eligibility-enabled', 'boolean'],
   ['patronCodeEligibilityMessage', 'patron-code-eligibility-message', 'text']
 ];
-
-const TIMEOUT_OVERRIDE_KEYS = new Set([
-  'outstandingTimeoutEnabled', 'outstandingTimeoutDays', 'outstandingTimeoutSendEmail',
-  'outstandingTimeoutRejectionTemplateId', 'holdPickupTimeoutEnabled', 'holdPickupTimeoutDays',
-  'pendingHoldTimeoutEnabled', 'pendingHoldTimeoutDays', 'additionalCopyTimeoutEnabled',
-  'additionalCopyTimeoutDays'
-]);
 
 const PATRON_FIELDS = [
   ['pageTitle', 'patron-page-title'],
@@ -198,7 +192,7 @@ function writeControl(control, value) {
 }
 
 function snapshotForm(form) {
-  return [...form.elements].filter(control => !control.closest?.('[data-settings-ignore="true"]')).map(control => [
+  return [...form.elements].filter(control => control.matches('input, textarea, select') && !control.closest?.('[data-settings-ignore="true"]')).map(control => [
     control.id,
     control.type === 'checkbox' ? control.checked : control.value
   ]);
@@ -278,6 +272,7 @@ export function createSettingsController({
 }) {
   const dom = {
     message: root.querySelector('#settings-message'),
+    draftBlockers: root.querySelector('#settings-draft-blockers'),
     commonAuthorsEnabled: root.querySelector('#common-authors-enabled'),
     commonAuthorsOptions: root.querySelector('#common-authors-options'),
     scopeField: root.querySelector('#settings-scope-field'),
@@ -354,7 +349,10 @@ export function createSettingsController({
     baselineSnapshot: [],
     baselineEditors: new Map(),
     baselineTemplates: new Map(),
-    baselineOverrides: new Map(),
+    scalarIntents: new Map(),
+    templateIntents: new Map(),
+    scalarDisplays: new Map(),
+    baselineOwnership: '',
     pendingDeletedFormats: [],
     savedRejectionTemplateId: '',
     awaitingReload: false,
@@ -369,9 +367,7 @@ export function createSettingsController({
   };
   let currentStaffUrlSuggestion = null;
   let acceptedPostmarkToken = false;
-  let commonAuthorsEnabledOverrideDraft = null;
   let pendingCommonAuthorsFocus = false;
-  const timeoutOverrideDrafts = new Map();
   const reads = createLatestLoad(), events = new window.AbortController();
   let disposed = false, contextGeneration = 0, drafts = createDraftScope(), scopePreparation = null;
   const emailTest = createEmailTestController({ root: root.querySelector('#settings-email-test'),
@@ -380,7 +376,20 @@ export function createSettingsController({
       ready: Boolean(state.data && String(state.data.orgId) === String(state.scope) && !state.awaitingReload && !state.loading),
       dirty: isDirty(), blocked: Boolean(state.pendingMutation || state.saving || state.outcomeUncertain || state.awaitingReload) }),
     onOperations: onEmailTestOperations, onSubmitted: onEmailTestSubmitted });
-  let settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
+  // Capture developer-authored labels before inheritance/status content and
+  // runtime template/roster labels are rendered. Draft values never label links.
+  const settingsPanelLabels = new Map(dom.nav.map(button => [button.dataset.settingsPanel, button.textContent.trim()]));
+  const settingsFields = [...dom.form.elements]
+    .filter(control => control.matches('input, textarea, select') && control.id && control.type !== 'hidden' && !control.closest('[data-settings-ignore="true"]'))
+    .map(control => {
+      const field = control.closest('.settings-field');
+      const template = control.closest('.settings-template');
+      return { control, key: control.id, panel: control.closest('[data-settings-panel-content]')?.dataset.settingsPanelContent,
+        label: [template?.querySelector('legend')?.textContent, field?.querySelector('label, span')?.textContent].filter(Boolean).join(' — ') || 'Settings field',
+        scalar: field?.dataset.settingSection ? `${field.dataset.settingSection}.${field.dataset.settingKey}` : null,
+        template: template ? `${template.dataset.templateKey}.${control.dataset.templateField}` : null };
+    });
+  let settingsDraft = registerSettingsDraft();
   let staffCreateDraft = null;
   let polarisTest = null;
   const staffDrafts = new Map(), rosterDrafts = new Set(), staffRows = new Map();
@@ -392,6 +401,7 @@ export function createSettingsController({
   let copyGeneration = 0;
   let notificationGeneration = 0, staffStatusGeneration = 0;
   let blockedDraftNotice = null;
+  let pendingInheritanceNotice = null;
   let templateValidationTarget = null;
   let staffEmailValidationNotice = null;
   let staffFocusSequence = 0;
@@ -489,6 +499,7 @@ export function createSettingsController({
     onTemplatesRendered: () => placeholders.refresh(),
     onInvalidTemplate: (control, message) => placeholders.showError(control, message),
     onRetryCodes: retryPatronCodes,
+    confirmReset: message => confirmSettings('Use system value?', message, 'Use system value'),
     canRemoveTemplate: template => {
       const id = stringValue(template.id);
       const savedReference = state.savedRejectionTemplateId;
@@ -574,7 +585,7 @@ export function createSettingsController({
     if (!popup.showPopover) popup.hidden = true;
 
     function overrideValue() {
-      return field.querySelector('.settings-override-toggle')?.checked ?? null;
+      return state.scalarIntents.get('workflow.suggestionLimitMessage') ?? null;
     }
 
     function editable() {
@@ -673,11 +684,11 @@ export function createSettingsController({
   async function confirmSettings(title, message, confirmLabel, tone = 'normal') {
     const context = captureSettingsContext(), data = state.data, version = state.data?.version;
     const scope = drafts, stamp = drafts.stamp(), panel = state.activePanel;
-    const snapshot = controlSnapshot(root), awaitingReload = state.awaitingReload;
+    const snapshot = controlSnapshot(root), ownership = ownershipSnapshot(), awaitingReload = state.awaitingReload;
     const isCurrent = () => isSettingsContextCurrent(context) && state.visible && root.isConnected &&
       !state.pendingMutation && !state.loading && state.activePanel === panel && state.data === data &&
       state.data?.version === version && state.awaitingReload === awaitingReload && drafts === scope &&
-      drafts.stamp() === stamp && snapshot === controlSnapshot(root);
+      drafts.stamp() === stamp && snapshot === controlSnapshot(root) && ownership === ownershipSnapshot();
     return await confirmAction({ title, message, confirmLabel, tone, isCurrent }) && isCurrent();
   }
 
@@ -693,15 +704,139 @@ export function createSettingsController({
 
   function clearBlockedDraftNotice() {
     blockedDraftNotice?.clear();
+    if (typeof blockedDraftNotice?.clearNavigation === 'function') blockedDraftNotice.clearNavigation();
     blockedDraftNotice = null;
+    dom.draftBlockers.replaceChildren();
+    dom.draftBlockers.hidden = true;
+  }
+
+  function registerSettingsDraft() {
+    return drafts.register({ root: dom.form, kind: 'settings', isDirty: hasSettingsDraft, metadata: settingsDraftDestinations });
+  }
+
+  function settingsDraftDestinations() {
+    const baseline = new Map(state.baselineSnapshot);
+    const [scalarValues = [], templateValues = []] = state.baselineOwnership ? JSON.parse(state.baselineOwnership) : [];
+    const scalars = new Map(scalarValues), templates = new Map(templateValues);
+    const changed = settingsFields.filter(field => {
+      const control = field.control;
+      return baseline.get(control.id) !== (control.type === 'checkbox' ? control.checked : control.value) ||
+        field.scalar && scalars.get(field.scalar) !== state.scalarIntents.get(field.scalar) ||
+        field.template && templates.get(field.template) !== state.templateIntents.get(field.template);
+    });
+    return changed.map(field => ({ key: field.key, panel: field.panel, label: field.label, reveal() {
+      if (!field.control.isConnected || !dom.form.contains(field.control)) return null;
+      const toggle = field.control.closest('.settings-template')?.querySelector('[data-template-toggle]');
+      if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+      return field.control;
+    } })).concat(domainEditors.draftDestinations());
+  }
+
+  function blockerEntries(admission) {
+    return (admission.blockers || []).flatMap(blocker => (blocker.metadata?.() || [])
+      .map(destination => ({ ...destination, handle: blocker.handle })));
+  }
+
+  function renderBlockedDraftNotice(notice, admission) {
+    const entries = blockerEntries(admission);
+    const count = admission.blockers.length;
+    if (notice.count !== count) {
+      notice.count = count;
+      dom.message.textContent = blockedDraftMessage(count);
+      if (typeof notice.clearNavigation === 'function') notice.clearNavigation();
+      notice.clearNavigation = announce(dom.message.textContent, 'warning');
+    }
+    if (notice.entries?.length === entries.length && entries.every((entry, index) =>
+      ['handle', 'key', 'label', 'panel'].every(key => notice.entries[index][key] === entry[key]))) return;
+    notice.entries = entries;
+    const list = node('ul', { 'aria-label': 'Unsaved drafts blocking this action' });
+    for (const entry of entries) {
+      const section = settingsPanelLabels.get(entry.panel) || 'Settings';
+      const button = node('button', { type: 'button', className: 'secondary-button', text: `Go to ${section} — ${entry.label}` });
+      // The opaque owner and destination key stay in this closure, never DOM.
+      listen(button, 'click', () => navigateToBlockingDraft(notice, entry.handle, entry.key));
+      list.append(node('li', {}, [node('span', { text: `${entry.label} in ${section}.` }), button]));
+    }
+    dom.draftBlockers.replaceChildren(list);
+    dom.draftBlockers.hidden = entries.length === 0;
+  }
+
+  function blockedDraftMessage(count) {
+    return `${count} unsaved ${count === 1 ? 'draft is' : 'drafts are'} blocking this action. Save or cancel each listed draft, then retry.`;
+  }
+
+  function reportDraftRecovery(message) {
+    notify(message, 'warning');
+    dom.refresh.focus();
+  }
+
+  function navigateToBlockingDraft(notice, handle, key) {
+    if (!isSettingsContextCurrent(notice.context) || drafts !== notice.scope || !state.staff ||
+        state.staff.active === false || !['admin', 'super_admin'].includes(state.staff.role) || !state.visible || !root.isConnected) {
+      reportDraftRecovery('This draft belongs to an earlier Settings context. Open Settings for your current access and review current drafts before retrying.');
+      return;
+    }
+    if (state.awaitingReload || state.outcomeUncertain) {
+      reportDraftRecovery('Refresh settings to reconcile the previous change before reviewing drafts or retrying.');
+      return;
+    }
+    if (state.pendingMutation || state.loading || dom.form.hidden || dom.form.inert) {
+      reportDraftRecovery('Wait for the current Settings operation to finish, then retry the original action to review its blockers.');
+      return;
+    }
+    const admission = drafts.admit(notice.declaration);
+    if (notice !== blockedDraftNotice || admission.reason !== 'competing_draft') {
+      reportDraftRecovery('This blocker notice is no longer current. Review current drafts and retry the original action.');
+      return;
+    }
+    const blocker = admission.blockers.find(item => item.handle === handle);
+    const destination = blocker?.metadata?.().find(item => item.key === key);
+    if (!destination) {
+      reportDraftRecovery('That draft is no longer a current blocker. Review current drafts and retry the original action.');
+      return;
+    }
+    if (destination.unavailable) {
+      reportDraftRecovery(destination.unavailable);
+      return;
+    }
+    const section = dom.nav.find(button => button.dataset.settingsPanel === destination.panel);
+    if (!section || section.hidden || section.disabled || !activatePanel(destination.panel, true) ||
+        !isSettingsContextCurrent(notice.context)) return;
+    let target = destination.reveal();
+    if (!target || !target.isConnected || !dom.form.contains(target)) {
+      reportDraftRecovery('This editor is no longer available. Review current drafts or explicitly refresh Settings before retrying.');
+      return;
+    }
+    // A feature can hide/disable its dependent dirty field. Reveal the owning
+    // visible group without changing the feature or manufacturing an override.
+    if (target.matches(':disabled') || target.closest('[hidden], [inert]')) {
+      target = target.closest('.settings-fieldset');
+      if (target?.closest('[hidden], [inert]')) return;
+      target?.setAttribute('tabindex', '-1');
+    }
+    if (target && !target.matches('input, select, textarea, button, [tabindex]')) target.setAttribute('tabindex', '-1');
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: 'instant' });
+    queueStaffReveal(target);
+    if (typeof notice.clearNavigation === 'function') notice.clearNavigation();
+    notice.clearNavigation = announce(`Showing ${destination.label} in ${settingsPanelLabels.get(destination.panel)}. ${destination.recovery ? `${destination.recovery} ` : ''}Unsaved changes are preserved.`);
   }
 
   function beginSettingsMutation(slot, consumes, preserves = []) {
     if (disposed || !state.staff || !state.visible || !root.isConnected || state.pendingMutation || state.awaitingReload) return null;
     const declaration = { consumes, preserves };
-    if (!drafts.admit(declaration).allowed) {
+    const admission = drafts.admit(declaration);
+    if (!admission.allowed) {
       clearBlockedDraftNotice();
-      blockedDraftNotice = { declaration, clear: notify('Save or discard the competing Settings draft before this action.', 'warning') };
+      if (admission.reason !== 'competing_draft') {
+        notify('This action belongs to an earlier draft. Review current Settings or explicitly refresh before retrying.', 'warning');
+        return null;
+      }
+      const count = admission.blockers.length;
+      const clear = notify(blockedDraftMessage(count), 'warning');
+      blockedDraftNotice = { declaration, clear, count, context: captureSettingsContext(), scope: drafts };
+      renderBlockedDraftNotice(blockedDraftNotice, admission);
+      dom.draftBlockers.querySelector('button')?.focus();
       return null;
     }
     clearBlockedDraftNotice();
@@ -775,7 +910,7 @@ export function createSettingsController({
     cancelPolarisTest();
     dom.syncOrganizations.disabled = false;
     contextGeneration += 1; drafts.dispose(); drafts = createDraftScope();
-    settingsDraft = drafts.register({ root: dom.form, isDirty: hasSettingsDraft });
+    settingsDraft = registerSettingsDraft();
     staffDrafts.clear(); rosterDrafts.clear(); staffRows.clear(); staffCreateDraft = null;
     state.staffCanAssignSuperAdmin = false;
     dom.staffUsers.replaceChildren();
@@ -996,6 +1131,7 @@ export function createSettingsController({
   }
 
   function notify(message, kind = '') {
+    clearBlockedDraftNotice();
     const generation = ++notificationGeneration;
     dom.message.textContent = message || '';
     dom.message.className = `settings-message${kind ? ` ${kind}` : ''}`;
@@ -1010,17 +1146,22 @@ export function createSettingsController({
   }
 
   function hasSettingsDraft() {
-    return state.data !== null && !state.awaitingReloadMutation && !sameSnapshot(state.baselineSnapshot, snapshotForm(dom.form));
+    return state.data !== null && !state.awaitingReloadMutation &&
+      (!sameSnapshot(state.baselineSnapshot, snapshotForm(dom.form)) || state.baselineOwnership !== ownershipSnapshot());
+  }
+
+  function ownershipSnapshot() {
+    return JSON.stringify([[...state.scalarIntents], [...state.templateIntents], domainEditors.snapshot()]);
   }
 
   function isDirty() { return !disposed && drafts.isDirty(); }
 
   function hasStaffDraft() { return [...staffDrafts.values()].some(isDirty => isDirty()); }
 
-  function registerStaffDraft(ownerRoot, controls, kind) {
+  function registerStaffDraft(ownerRoot, controls, kind, metadata) {
     const baseline = controls.map(control => control.value);
     const dirty = () => ownerRoot.isConnected && state.staff !== null && !state.awaitingReloadMutation && controls.some((control, index) => control.value !== baseline[index]);
-    const handle = drafts.register({ root: ownerRoot, kind, isDirty: dirty });
+    const handle = drafts.register({ root: ownerRoot, kind, isDirty: dirty, metadata });
     staffDrafts.set(handle, dirty);
     return handle;
   }
@@ -1031,11 +1172,14 @@ export function createSettingsController({
     dom.staffEmail.value = '';
     populateStaffCreateControls();
     staffCreateDraft = registerStaffDraft(dom.staffEmail.closest('fieldset'),
-      [dom.staffEmail, dom.staffRole, dom.staffOrganization], 'new staff user');
+      [dom.staffEmail, dom.staffRole, dom.staffOrganization], 'new staff user', () => [{
+        key: 'create', panel: 'staff', label: 'New staff-account draft',
+        reveal() { setStaffCreateOpen(true); return dom.staffEmail; }
+      }]);
   }
 
   function snapshotDrafts() {
-    return JSON.stringify([...dom.form.querySelectorAll('input, select, textarea')]
+    return ownershipSnapshot() + JSON.stringify([...dom.form.querySelectorAll('input, select, textarea')]
       .filter(control => control.id !== 'patron-code-picker' && control !== dom.staffShowInactive)
       .map(control => [control.value, control.checked]));
   }
@@ -1044,6 +1188,7 @@ export function createSettingsController({
     if (blockedDraftNotice) {
       const admission = drafts.admit(blockedDraftNotice.declaration);
       if (admission.allowed || admission.reason === 'invalid_owner' || admission.reason === 'invalid_preservation') clearBlockedDraftNotice();
+      else if (admission.reason === 'competing_draft') renderBlockedDraftNotice(blockedDraftNotice, admission);
     }
     const dirty = isDirty();
     const settingsDirty = hasSettingsDraft();
@@ -1073,6 +1218,11 @@ export function createSettingsController({
   function draftChanged(event) {
     if (event?.target === dom.staffShowInactive) return;
     drafts.touch(event?.target); updateDirtyState();
+    if (event?.resetLabel) {
+      drafts.touch();
+      pendingInheritanceNotice?.();
+      pendingInheritanceNotice = notify(`${event.resetLabel}: using the System value is pending. Save settings to apply.`, '');
+    }
     queueStaffReveal(event?.target);
   }
 
@@ -1087,11 +1237,11 @@ export function createSettingsController({
   }
 
   function hasRawOverride(section, key) {
-    return meaningful(property(rawSection(section), key));
+    return property(rawSection(section), key) !== null && property(rawSection(section), key) !== undefined;
   }
 
   function fieldInput(field) {
-    return field.querySelector('input:not(.settings-override-toggle), textarea, select');
+    return field.querySelector('input, textarea, select');
   }
 
   function applyTimeoutDependencies() {
@@ -1108,17 +1258,12 @@ export function createSettingsController({
     for (const [id, ruleEnabled] of dependents) {
       const control = document.getElementById(id);
       const field = control.closest('[data-setting-section][data-setting-key]');
-      const override = field?.querySelector('.settings-override-toggle');
-      const editable = isSystem() || override?.checked === true;
-      control.disabled = !editable || !ruleEnabled;
+      control.disabled = !ruleEnabled;
     }
   }
 
   function commonAuthorsFocusTarget() {
-    const override = dom.commonAuthorsEnabled?.closest('[data-setting-section][data-setting-key]')
-      ?.querySelector('.settings-override-toggle');
-    if (!dom.commonAuthorsEnabled?.disabled) return dom.commonAuthorsEnabled;
-    return override && !override.disabled ? override : null;
+    return !dom.commonAuthorsEnabled?.disabled ? dom.commonAuthorsEnabled : null;
   }
 
   function syncCommonAuthorsOptions(focusedBeforePopulate = false) {
@@ -1142,46 +1287,53 @@ export function createSettingsController({
     commonAuthorsFocusTarget()?.focus({ preventScroll: true });
   }
 
-  function syncOverrideToggles(section, key, checked) {
-    for (const field of root.querySelectorAll(
-      `[data-setting-section="${section}"][data-setting-key="${key}"]`
-    )) {
-      const toggle = field.querySelector('.settings-override-toggle');
-      const input = fieldInput(field);
-      if (section === 'workflow' && TIMEOUT_OVERRIDE_KEYS.has(key) && input) {
-        const draftKey = `${section}.${key}`;
-        if (checked) {
-          if (timeoutOverrideDrafts.has(draftKey)) {
-            writeControl(input, timeoutOverrideDrafts.get(draftKey));
-          }
-        } else {
-          timeoutOverrideDrafts.set(draftKey, input.type === 'checkbox' ? input.checked : input.value);
-          const configuredSystem = object(object(state.data?.stored).configuredSystem);
-          writeControl(input, property(configuredSystem.workflow, key));
-        }
-      }
-      if (section === 'workflow' && key === 'commonAuthorsEnabled' && input) {
-        if (checked) {
-          if (commonAuthorsEnabledOverrideDraft !== null) {
-            writeControl(input, commonAuthorsEnabledOverrideDraft);
-          }
-        } else {
-          commonAuthorsEnabledOverrideDraft = input.checked;
-          const configuredSystem = object(object(state.data?.stored).configuredSystem);
-          writeControl(input, property(configuredSystem.workflow, key));
-        }
-      }
-      if (toggle) toggle.checked = checked;
-      if (input) input.disabled = !checked;
-    }
-    applyTimeoutDependencies();
-    if (section === 'workflow' && key === 'commonAuthorsEnabled') syncCommonAuthorsOptions();
+  function inheritedScalar(section, key) {
+    return (section === 'workflow' ? property(state.data?.systemValues?.workflowDefaults, key) : undefined) ??
+      property(property(state.data?.systemValues, section), key) ??
+      property(property(state.data?.stored?.configuredSystem, section), key);
   }
 
-  function createOverrideToggle(field, section, key) {
+  function refreshScalarStatus(section, key) {
+    const name = `${section}.${key}`;
+    const intent = state.scalarIntents.get(name);
+    for (const field of root.querySelectorAll(`[data-setting-section="${section}"][data-setting-key="${key}"]`)) {
+      const comparisonOpen = field.querySelector('.settings-system-comparison')?.open;
+      field.querySelector('.settings-inheritance')?.remove();
+      const input = fieldInput(field);
+      const fields = section === 'workflow' ? WORKFLOW_FIELDS : section === 'patron' ? PATRON_FIELDS : EMAIL_FIELDS;
+      const kind = fields.find(item => item[0] === key)?.[2];
+      const inherited = inheritedScalar(section, key);
+      const normalize = value => kind === 'boolean' ? Boolean(value) : kind === 'number' ? value === null || value === undefined ? null : Number(value)
+        : kind === 'message' ? (String(value ?? '').trim() ? String(value) : null)
+        : typeof value === 'string' ? clean(value) : value ?? null;
+      const inheritedTemplate = kind === 'id' ? templateRows(state.data).find(row => String(row.id) === String(inherited)) : null;
+      const comparison = kind === 'id' ? [...input.options].find(option => option.value === stringValue(inherited))?.textContent ||
+        inheritedTemplate?.displayName || (inherited ? 'Unavailable rejection template' : 'Use no rejection template') : normalize(inherited);
+      field.append(inheritanceStatus({ owned: intent ? intent === 'pin' : hasRawOverride(section, key),
+        value: readControl(input, kind), systemValue: comparison, pending: Boolean(intent), comparisonOpen,
+        matchesSystem: kind === 'id' ? readControl(input, kind) === normalize(inherited) : undefined,
+        label: field.querySelector('label, span')?.textContent || key,
+        onReset: () => {
+          if (!state.data || isSystem() || dom.form.inert || state.awaitingReload || !field.isConnected) return;
+          state.scalarIntents.set(name, 'reset');
+          if (kind === 'id') setRejectionTemplateOptions(state.data, { outstandingTimeoutRejectionTemplateId: inheritedScalar(section, key) });
+          for (const sibling of root.querySelectorAll(`[data-setting-section="${section}"][data-setting-key="${key}"]`)) {
+            const control = fieldInput(sibling);
+            writeControl(control, inheritedScalar(section, key));
+            state.scalarDisplays.set(control.id, control.type === 'checkbox' ? control.checked : control.value);
+          }
+          refreshScalarStatus(section, key);
+          applyTimeoutDependencies();
+          syncCommonAuthorsOptions();
+          patronPlaceholders.refresh(); suggestionLimitPlaceholders.refresh(); placeholders.refresh();
+          draftChanged({ target: input, resetLabel: field.querySelector('label, span')?.textContent || key }); input.focus();
+        } }));
+    }
+  }
+
+  function configureScalar(field, section, key) {
     if (field.localName === 'label') {
-      // Each field and Override checkbox needs its own label. Nesting a second
-      // input in the field label makes both names include the override text.
+      // Reset is a separate action, outside the field's label.
       const control = fieldInput(field);
       const title = field.querySelector('span');
       const container = node('div');
@@ -1193,26 +1345,12 @@ export function createSettingsController({
       label.append(title);
       field = container;
     }
-    let input = field.querySelector('.settings-override-toggle');
-    if (!input) {
-      input = node('input', {
-        type: 'checkbox',
-        className: 'settings-override-toggle',
-        'aria-label': `Override ${field.querySelector('span')?.textContent || key}`
-      });
-      const wrapper = node('label', { className: 'settings-override-control' }, [
-        input,
-        node('span', { text: 'Override' })
-      ]);
-      listen(input, 'change', () => {
-        syncOverrideToggles(section, key, input.checked);
-        updateDirtyState();
-      });
-      field.append(wrapper);
-    }
-    input.checked = hasRawOverride(section, key);
     const control = fieldInput(field);
-    if (control) control.disabled = !input.checked;
+    if (control) {
+      control.disabled = false;
+      state.scalarDisplays.set(control.id, control.type === 'checkbox' ? control.checked : control.value);
+    }
+    refreshScalarStatus(section, key);
   }
 
   function configureScopedFields() {
@@ -1225,15 +1363,15 @@ export function createSettingsController({
       const systemOnly = field.dataset.systemOnly === 'true';
       if (systemOnly) {
         if (input) input.disabled = !system;
-        field.querySelector('.settings-override-control')?.remove();
+        field.querySelector('.settings-inheritance')?.remove();
         continue;
       }
       if (!['workflow', 'patron', 'email', 'branding'].includes(section)) continue;
       if (system) {
         if (input) input.disabled = false;
-        field.querySelector('.settings-override-control')?.remove();
+        field.querySelector('.settings-inheritance')?.remove();
       } else {
-        createOverrideToggle(field, section, key);
+        configureScalar(field, section, key);
       }
     }
     for (const fieldset of root.querySelectorAll('fieldset[data-system-only="true"]')) {
@@ -1341,45 +1479,42 @@ export function createSettingsController({
       const inherited = findTemplate(systemRows, key) || {};
       fieldset.dataset.templateInheritedSubject = inherited.subject || '';
       fieldset.dataset.templateInheritedBody = inherited.body || '';
-      fieldset.querySelector('.settings-template-override-control')?.remove();
       document.getElementById(subjectId).disabled = false;
       document.getElementById(bodyId).disabled = false;
-      if (!isSystem()) {
-        const systemRow = findTemplate(systemRows, key);
-        const libraryRow = libraryRows.find(row =>
-          String(row.sourceTemplateId || '') === String(systemRow?.id || '') && !row.isCustom);
-        const input = node('input', {
-          type: 'checkbox',
-          className: 'settings-template-override',
-          'aria-label': `Override ${fieldset.querySelector('legend')?.textContent || key}`,
-          checked: Boolean(libraryRow)
-        });
-        const wrapper = node('span', { className: 'settings-template-override-control' }, [
-          input,
-          node('span', { text: 'Override' })
-        ]);
-        fieldset.querySelector('legend').append(wrapper);
-        let draft = null;
-        listen(input, 'change', () => {
-          const subject = document.getElementById(subjectId);
-          const body = document.getElementById(bodyId);
-          if (!input.checked) {
-            draft = { subject: subject.value, body: body.value };
-            subject.value = fieldset.dataset.templateInheritedSubject;
-            body.value = fieldset.dataset.templateInheritedBody;
-          } else if (draft) {
-            subject.value = draft.subject;
-            body.value = draft.body;
-          }
-          document.getElementById(subjectId).disabled = !input.checked;
-          document.getElementById(bodyId).disabled = !input.checked;
-          updateDirtyState();
-        });
-        document.getElementById(subjectId).disabled = !input.checked;
-        document.getElementById(bodyId).disabled = !input.checked;
+      for (const [role, id] of [['subject', subjectId], ['body', bodyId]]) {
+        const control = document.getElementById(id);
+        state.scalarDisplays.set(control.id, control.value);
+        fieldset.querySelector(`[data-template-status="${role}"]`)?.remove();
+        if (!isSystem()) refreshBuiltinTemplateStatus(key, role, control);
       }
     }
 
+  }
+
+  function refreshBuiltinTemplateStatus(key, role, control) {
+    const fieldset = control.closest('[data-template-key]');
+    const comparisonOpen = fieldset.querySelector(`[data-template-status="${role}"] .settings-system-comparison`)?.open;
+    fieldset.querySelector(`[data-template-status="${role}"]`)?.remove();
+    const source = templateRows(state.data).find(row => Number(row.organizationId) === 1 && row.templateKey === key);
+    const accepted = templateRows(state.data).find(row => Number(row.organizationId) === organizationId() && !row.isCustom &&
+      String(row.sourceTemplateId) === String(source?.id));
+    const intent = state.templateIntents.get(`${key}.${role}`);
+    const inheritedControl = control.cloneNode(false);
+    inheritedControl.value = source?.[role] ?? '';
+    const status = inheritanceStatus({ owned: intent ? intent === 'pin' : accepted?.[role] !== null && accepted?.[role] !== undefined,
+      value: control.value, systemValue: inheritedControl.value, comparisonOpen,
+      pending: Boolean(intent), label: `${key} ${role}`, onReset: () => {
+        if (dom.form.inert || state.awaitingReload || !control.isConnected) return;
+        state.templateIntents.set(`${key}.${role}`, 'reset');
+        control.value = source?.[role] ?? '';
+        state.scalarDisplays.set(control.id, control.value);
+        refreshBuiltinTemplateStatus(key, role, control);
+        placeholders.refresh(); draftChanged({ target: control, resetLabel: `${fieldset.querySelector('legend')?.textContent || key} ${role}` }); control.focus();
+      } });
+    status.dataset.templateStatus = role;
+    const wrapper = control.closest('.settings-template-field');
+    if (wrapper) wrapper.append(status);
+    else control.parentElement.after(status);
   }
 
   function setRejectionTemplateOptions(data, workflow) {
@@ -1707,9 +1842,28 @@ export function createSettingsController({
     });
     record.reset();
     // The baseline changes only after this account's accepted save/cancel/reload.
+    const ownerContext = captureSettingsContext();
     record.draft = drafts.register({ root: row, kind: 'staff editor', isDirty: () =>
       row.isConnected && state.staff !== null && (!state.awaitingReloadMutation ||
-        state.awaitingReloadMutation.preserves?.includes(record.draft)) && record.dirty() });
+        state.awaitingReloadMutation.preserves?.includes(record.draft)) && record.dirty(), metadata: () => {
+      const position = [...dom.staffUsers.children].indexOf(row) + 1;
+      const scope = scopedStaffOrganizationId();
+      const unavailable = !isSettingsContextCurrent(ownerContext) || staffRows.get(id) !== record ||
+        !dom.staffUsers.contains(row) ||
+        scope && String(property(record.user, 'organizationId')) !== scope;
+      return [{ key: 'editor', panel: 'staff', label: `Staff-account edits (roster row ${position})`,
+        unavailable: unavailable ? 'This staff draft is no longer available in the current Settings context. Review current access and explicitly reload Settings before retrying.' : null,
+        recovery: record.unavailable ? 'This account is no longer in the current roster. Cancel discards only this retained staff draft.' : null,
+        reveal() {
+          if (unavailable || !drafts.owns(record.draft)) return null;
+          if (property(record.user, 'active') === false) {
+            dom.staffShowInactive.checked = true;
+            updateStaffVisibility();
+          }
+          setOpen(true);
+          return record.unavailable ? cancel : email;
+        } }];
+    } });
     staffDrafts.set(record.draft, () => row.isConnected && (!state.awaitingReloadMutation ||
       state.awaitingReloadMutation.preserves?.includes(record.draft)) && record.dirty());
     rosterDrafts.add(record.draft);
@@ -1722,7 +1876,7 @@ export function createSettingsController({
     const focused = dom.staffUsers.contains(document.activeElement) ? document.activeElement : null;
     const ids = new Set(state.staffUsers.map(user => stringValue(property(user, 'id'))));
     for (const [id, record] of staffRows) {
-      if (ids.has(id)) continue;
+      if (ids.has(id) && drafts.owns(record.draft)) continue;
       if (!discard && record.dirty()) {
         record.markUnavailable();
         continue;
@@ -1734,6 +1888,9 @@ export function createSettingsController({
     if (!staffCreateDraft) resetStaffCreateDraft();
     for (const user of [...state.staffUsers].sort(staffRosterOrder)) {
       const id = stringValue(property(user, 'id'));
+      // Explicit discard/reload replaces a retired owner above. A preserving
+      // refresh cannot grant a reinserted former row fresh editing authority.
+      if (staffRows.has(id) && !drafts.owns(staffRows.get(id).draft)) continue;
       const record = staffRows.get(id) || createStaffRow(user);
       staffRows.set(id, record);
       record.accept(user, discard);
@@ -1763,15 +1920,15 @@ export function createSettingsController({
   }
 
   function populate(data) {
+    pendingInheritanceNotice?.(); pendingInheritanceNotice = null;
     const commonAuthorsOptionsHadFocus = dom.commonAuthorsOptions?.contains(document.activeElement) === true;
     pendingCommonAuthorsFocus = false;
-    commonAuthorsEnabledOverrideDraft = null;
     clearPolarisFeedback();
-    timeoutOverrideDrafts.clear();
     releaseLogoDraft();
     dom.logo.value = '';
     dom.discardLogoDraft.hidden = true;
     state.data = data;
+    state.scalarIntents.clear(); state.templateIntents.clear(); state.scalarDisplays.clear();
     state.scope = String(data.orgId || state.scope);
     const stored = object(data.stored);
     const configuredSystem = object(stored.configuredSystem);
@@ -1780,12 +1937,13 @@ export function createSettingsController({
     renderCurrentStaffUrlSuggestion();
     const effective = object(data.effective);
     const effectivePatron = object(data.ui_text || effective);
-    const systemWorkflow = mergeConfigured(configuredSystem.workflow, null);
+    const systemWorkflow = { ...mergeConfigured(configuredSystem.workflow, null), ...data.systemValues?.workflow,
+      ...data.systemValues?.workflowDefaults };
     const workflow = isSystem()
       ? systemWorkflow
       : mergeConfigured(systemWorkflow, libraryOverride.workflow, data.workflow);
     state.savedRejectionTemplateId = stringValue(property(workflow, 'outstandingTimeoutRejectionTemplateId'));
-    const systemPatron = mergeConfigured(configuredSystem.patron, null, effectivePatron);
+    const systemPatron = data.systemValues?.patron || mergeConfigured(configuredSystem.patron, null, effectivePatron);
     const patron = isSystem()
       ? systemPatron
       : mergeConfigured(systemPatron, libraryOverride.patron, effectivePatron);
@@ -1808,10 +1966,6 @@ export function createSettingsController({
     placeholders.populate(data.templatePlaceholders);
     setRejectionTemplateOptions(data, workflow);
 
-    state.baselineOverrides.clear();
-    for (const [section, fields] of [['workflow', WORKFLOW_FIELDS], ['patron', PATRON_FIELDS], ['email', EMAIL_FIELDS], ['branding', [['altText', 'branding-alt']]]]) {
-      for (const [key] of fields) state.baselineOverrides.set(`${section}.${key}`, hasRawOverride(section, key));
-    }
     configureScopedFields();
     syncCommonAuthorsOptions(commonAuthorsOptionsHadFocus);
     patronPlaceholders.refresh();
@@ -1829,6 +1983,7 @@ export function createSettingsController({
     renderStaffUsers({ discard: true });
     dom.scope.value = state.scope;
     state.baselineSnapshot = snapshotForm(dom.form);
+    state.baselineOwnership = ownershipSnapshot();
     updateDirtyState();
   }
 
@@ -2155,12 +2310,13 @@ export function createSettingsController({
       const input = document.getElementById(id);
       if (!input) continue;
       const field = input.closest('[data-setting-section]');
-      if (!isSystem()) {
-        const toggle = field?.querySelector('.settings-override-toggle');
-        if (!toggle?.checked) {
-          if (state.baselineOverrides.get(`${section}.${key}`)) result[key] = null;
-          continue;
-        }
+      if (isSystem()) {
+        const current = input.type === 'checkbox' ? input.checked : input.value;
+        if (state.baselineSnapshot.find(item => item[0] === id)?.[1] === current) continue;
+      } else {
+        const intent = state.scalarIntents.get(`${section}.${key}`);
+        if (!intent) continue;
+        if (intent === 'reset') { result[key] = null; continue; }
       }
       const value = readControl(input, kind);
       if (kind === 'text' && value === null && field?.dataset.secret === 'true') continue;
@@ -2210,23 +2366,16 @@ export function createSettingsController({
         if (Object.keys(row).length > 1) append(row, fieldset);
         continue;
       }
-      const overrideToggle = fieldset.querySelector('.settings-template-override');
       const libraryRow = libraryRows.find(row =>
         String(row.sourceTemplateId || '') === String(systemRow?.id || '') && !row.isCustom);
-      if (!overrideToggle?.checked) {
-        if (libraryRow) append({
-          templateKey: key,
-          sourceTemplateId: String(systemRow?.id || libraryRow.sourceTemplateId || ''),
-          reset: true
-        }, fieldset);
-        continue;
-      }
       const row = {
         templateKey: key,
         sourceTemplateId: String(systemRow?.id || libraryRow?.sourceTemplateId || '')
       };
-      if (subject !== (baseline.subject ?? '')) row.subject = subject;
-      if (body !== (baseline.body ?? '')) row.body = body;
+      for (const [role, value] of [['subject', subject], ['body', body]]) {
+        const intent = state.templateIntents.get(`${key}.${role}`);
+        if (intent === 'pin' || libraryRow && intent === 'reset') row[role] = intent === 'reset' ? null : value;
+      }
       if (Object.keys(row).length > 2) append(row, fieldset);
     }
     if (domainData?.domainsChanged?.templates) {
@@ -2251,10 +2400,14 @@ export function createSettingsController({
         if (item.reset) {
           row.reset = true;
         } else {
-          if (item.subjectChanged) row.subject = item.subject;
-          if (item.bodyChanged) row.body = item.body;
-          if (item.displayNameChanged) row.displayName = item.displayName;
-          if (item.enabledChanged) row.enabled = item.enabled;
+          // Resets remove accepted columns. Without a lineage row they have
+          // nothing to remove; only a remaining explicit pin can create a row.
+          const writesField = key => item[`${key}Changed`] &&
+            (isSystem() || item.hadOverride || item.fieldIntents?.[key] === 'pin');
+          if (writesField('subject')) row.subject = item.fieldIntents?.subject === 'reset' ? null : item.subject;
+          if (writesField('body')) row.body = item.fieldIntents?.body === 'reset' ? null : item.body;
+          if (writesField('displayName')) row.displayName = item.fieldIntents?.displayName === 'reset' ? null : item.displayName;
+          if (writesField('enabled')) row.enabled = item.fieldIntents?.enabled === 'reset' ? true : item.enabled;
           if (isSystem() && item.sortOrderChanged) row.sortOrder = item.sortOrder;
         }
         if (row.reset || !isSystem() && item.overridden && !item.hadOverride || Object.keys(row).length > 2) append(row, editor);
@@ -2274,16 +2427,14 @@ export function createSettingsController({
       ? domainData.deletedFormats.filter(item => item?.id)
       : [];
     const brandingInput = document.getElementById('branding-alt');
-    const brandingField = brandingInput.closest('[data-setting-section]');
     const branding = {};
     if (isSystem()) {
       if (brandingInput.value !== state.baselineSnapshot.find(item => item[0] === 'branding-alt')?.[1]) {
         branding.altText = clean(brandingInput.value);
       }
     } else {
-      const toggle = brandingField?.querySelector('.settings-override-toggle');
-      if (toggle?.checked) branding.altText = clean(brandingInput.value);
-      else if (state.baselineOverrides.get('branding.altText')) branding.altText = null;
+      const intent = state.scalarIntents.get('branding.altText');
+      if (intent) branding.altText = intent === 'reset' ? null : clean(brandingInput.value);
     }
 
     payload.workflow = workflow;
@@ -2305,9 +2456,9 @@ export function createSettingsController({
         ? domainValues.codes.map(value => Number(value))
         : null;
     }
-    if (domainData.domainsChanged.providers) payload.providers = domainValues.providers;
-    if (domainData.domainsChanged.formats) payload.formats = domainValues.formats;
-    if (domainData.domainsChanged.rules) payload.formatRules = domainValues.rules;
+    if (domainData.domainsChanged.providers) payload.providers = domainData.writes.providers;
+    if (domainData.domainsChanged.formats) payload.formats = domainData.writes.formats;
+    if (domainData.domainsChanged.rules) payload.formatRules = domainData.writes.rules;
     if (domainData.domainsChanged.fields && !isSystem()) payload.customFields = domainValues.fields;
     if (domainData.domainsChanged.claims && !isSystem()) payload.autoClaimRules = domainValues.claims;
     if (isSystem()) {
@@ -2516,7 +2667,8 @@ export function createSettingsController({
     if (!state.data || state.awaitingReload || state.pendingMutation) return;
     const withoutLogo = rows => rows.filter(([id]) => id !== 'branding-logo');
     const file = dom.logo.files?.[0];
-    const hasOtherDraft = !sameSnapshot(withoutLogo(state.baselineSnapshot), withoutLogo(snapshotForm(dom.form)));
+    const hasOtherDraft = state.baselineOwnership !== ownershipSnapshot() ||
+      !sameSnapshot(withoutLogo(state.baselineSnapshot), withoutLogo(snapshotForm(dom.form)));
     if ((hasOtherDraft || clear && file) &&
         !await confirmSettings('Update saved logo?', 'Discard unsaved settings changes or image selection before updating the saved logo?',
           clear ? 'Clear logo' : 'Save logo', 'danger')) return;
@@ -2847,7 +2999,6 @@ export function createSettingsController({
     const replaced = actorKey(state.staff) !== actorKey(staff);
     if (replaced) {
       cancelSettingsOperations();
-      commonAuthorsEnabledOverrideDraft = null;
       pendingCommonAuthorsFocus = false;
       state.pendingMutation = null; state.saving = false; state.outcomeUncertain = false; state.awaitingReload = false; state.awaitingReloadMutation = null; state.unconfirmedMutation = null;
       dom.form.inert = false; dom.form.removeAttribute('aria-busy');
@@ -2881,7 +3032,6 @@ export function createSettingsController({
     const message = state.pendingMutation && state.pendingMutation.outcome !== 'committed' || state.outcomeUncertain
       ? 'Settings change outcome is uncertain. Sign in again and check saved values before retrying.' : null;
     cancelSettingsOperations();
-    commonAuthorsEnabledOverrideDraft = null;
     pendingCommonAuthorsFocus = false;
     releaseLogoDraft();
     copyGeneration += 1;
@@ -2904,6 +3054,42 @@ export function createSettingsController({
     if (disposed || state.bound) return;
     state.bound = true;
     listen(dom.form, 'submit', saveSettings);
+    // Preserve the resolved footer position while pointer focus enters it.
+    // Otherwise leaving a focused editor switches static -> sticky between
+    // pointerdown and pointerup, moving the action away from the pointer.
+    listen(dom.saveBar, 'pointerdown', event => {
+      if (event.button !== 0) return;
+      dom.saveBar.classList.toggle('retain-static', window.getComputedStyle(dom.saveBar).position === 'static');
+    }, true);
+    listen(dom.saveBar, 'focusout', event => {
+      if (!dom.saveBar.contains(event.relatedTarget)) dom.saveBar.classList.remove('retain-static');
+    });
+    const trackInheritanceEdit = event => {
+      const control = event.target;
+      if (isSystem() || !state.data || !control.matches('input, textarea, select') || control.disabled) return;
+      const value = control.type === 'checkbox' ? control.checked : control.value;
+      if (!state.scalarDisplays.has(control.id) || state.scalarDisplays.get(control.id) === value) return;
+      state.scalarDisplays.set(control.id, value);
+      const template = control.closest('fieldset.settings-template[data-template-key]');
+      if (template) {
+        const role = control.matches('textarea') ? 'body' : 'subject';
+        state.templateIntents.set(`${template.dataset.templateKey}.${role}`, 'pin');
+        refreshBuiltinTemplateStatus(template.dataset.templateKey, role, control);
+        return;
+      }
+      const field = control.closest('[data-setting-section][data-setting-key]');
+      if (!field || field.dataset.systemOnly === 'true') return;
+      const section = field.dataset.settingSection, key = field.dataset.settingKey;
+      state.scalarIntents.set(`${section}.${key}`, 'pin');
+      if (section === 'email') {
+        for (const sibling of root.querySelectorAll(`[data-setting-section="email"][data-setting-key="${key}"]`)) {
+          const input = fieldInput(sibling); writeControl(input, value); state.scalarDisplays.set(input.id, value);
+        }
+      }
+      refreshScalarStatus(section, key);
+    };
+    listen(dom.form, 'input', trackInheritanceEdit, true);
+    listen(dom.form, 'change', trackInheritanceEdit, true);
     listen(dom.form, 'input', draftChanged);
     listen(dom.form, 'change', draftChanged);
     listen(root.ownerDocument, 'focusin', event => {
@@ -3062,14 +3248,6 @@ export function createSettingsController({
       listen(target, 'input', () => {
         source.value = target.value;
         updateDirtyState();
-      });
-      listen(source, 'change', () => {
-        const toggle = source.closest('[data-setting-section]')?.querySelector('.settings-override-toggle');
-        if (toggle) syncOverrideToggles('email', key, toggle.checked);
-      });
-      listen(target, 'change', () => {
-        const toggle = target.closest('[data-setting-section]')?.querySelector('.settings-override-toggle');
-        if (toggle) syncOverrideToggles('email', key, toggle.checked);
       });
     }
   }

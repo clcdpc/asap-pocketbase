@@ -34,7 +34,8 @@ async function main() {
     ...(process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH
       ? { executablePath: process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH } : {}) });
   const axeSource = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
-  const report = { externalRequests: 0, pageErrors: [], states: [], posts: [] };
+  const report = { externalRequests: 0, pageErrors: [], states: [], posts: [], identities: { fields: {}, options: {} } };
+  const identities = report.identities;
   const releases = [];
   const contexts = [];
   const suggestionPath = '/api/asap/patron/suggestions';
@@ -124,8 +125,7 @@ async function main() {
   async function overrideScalar(page, selector, value) {
     const input = page.locator(selector);
     const field = input.locator('xpath=..');
-    const override = field.locator('.settings-override-toggle');
-    if (await override.count()) await override.check();
+
     await input.fill(value);
   }
 
@@ -146,8 +146,8 @@ async function main() {
     await page.locator('#title').fill(title);
     await page.locator('#author').fill('Acceptance author');
     await page.locator('#isbn').fill('');
-    await page.locator('#custom-field-recommendation_note').fill('Acceptance detail');
-    await page.locator('#custom-field-required_choice').selectOption(choice);
+    await page.locator(`#custom-field-${identities.fields.recommendation_note}`).fill('Acceptance detail');
+    await page.locator(`#custom-field-${identities.fields.required_choice}`).selectOption(identities.options.required_choice[choice]);
     if (await page.locator('#autohold').isChecked()) await page.locator('label[for="autohold"]').click();
     assert.equal(await page.locator('#autohold').isChecked(), false);
   }
@@ -182,31 +182,36 @@ async function main() {
     await admin.locator('#settings-nav-patron').click();
     await admin.locator('#format-rules-editor [data-rule-code="book"] [data-rule-toggle]').click();
     await admin.locator('#format-rules-editor [data-rule-code="book"] [data-format-field="publication"]').selectOption('optional');
-    await admin.locator('#publication-options-use-system').uncheck();
+
     const publications = admin.locator('#publication-options-editor [data-domain-row]');
     // Keep inherited choices and add one library choice through the real editor.
     await admin.locator('#add-publication-option').click();
-    await publications.last().locator('input[type="text"]').nth(0).fill('acceptance_publication');
-    await publications.last().locator('input[type="text"]').nth(1).fill('Acceptance publication');
+    identities.publication = await publications.last().getAttribute('data-option-id');
+    assert.ok(identities.publication, 'The editor allocates a publication identity before editing.');
+    await publications.last().locator('[data-publication-field="label"]').fill('Acceptance publication');
     for (const [key, label, type] of [['recommendation_note', 'Recommendation detail', 'text'],
       ['required_choice', 'Required choice', 'select'], ['optional_choice', 'Optional choice', 'select']]) {
       await admin.locator('#add-custom-field').click();
       const row = admin.locator('#additional-fields-editor [data-domain-row]').last();
-      await row.locator('input[type="text"]').nth(0).fill(key);
-      await row.locator('input[type="text"]').nth(1).fill(label);
-      await row.locator('select').selectOption(type);
+      const fieldKey = await row.getAttribute('data-field-key');
+      assert.ok(fieldKey, 'The editor allocates a field identity before editing.');
+      identities.fields[key] = fieldKey;
+      await row.locator('[data-custom-field="label"]').fill(label);
+      await row.locator('[data-custom-field="type"]').selectOption(type);
       if (type === 'select') {
+        identities.options[key] = {};
         for (const [optionKey, optionLabel, enabled] of [['alpha', 'Alpha display', true],
           ['beta', 'Beta display', true], ['retired', 'Retired display', false]]) {
           const editor = row.locator('[data-options-editor]');
           await editor.getByRole('button', { name: /Add option/i }).click();
           const option = editor.locator('[data-option-row]').last();
-          await option.locator('input[type="text"]').nth(0).fill(optionKey);
-          await option.locator('input[type="text"]').nth(1).fill(optionLabel);
-          await option.locator('input[type="checkbox"]').setChecked(enabled);
+          identities.options[key][optionKey] = await option.getAttribute('data-option-id');
+          assert.ok(identities.options[key][optionKey], 'The editor allocates an option identity before editing.');
+          await option.locator('[data-option-field="label"]').fill(optionLabel);
+          await option.locator('[data-option-field="enabled"]').setChecked(enabled);
         }
       }
-      const rule = admin.locator(`#format-rules-editor [data-rule-code="book"] [data-custom-rule-key="${key}"]`);
+      const rule = admin.locator(`#format-rules-editor [data-rule-code="book"] [data-custom-rule-key="${fieldKey}"]`);
       await rule.locator('[data-custom-rule-property="mode"]').selectOption(key === 'optional_choice' ? 'optional' : 'required');
       if (key === 'recommendation_note') {
         await rule.locator('[data-custom-rule-property="labelOverride"]').fill('Book recommendation detail');
@@ -238,7 +243,7 @@ async function main() {
     const fieldRows = admin.locator('#additional-fields-editor [data-domain-row]');
     let requiredRow;
     for (const row of await fieldRows.all()) {
-      if (await row.locator('input[type="text"]').first().inputValue() === 'required_choice') requiredRow = row;
+      if (await row.getAttribute('data-field-key') === identities.fields.required_choice) requiredRow = row;
     }
     assert.ok(requiredRow, 'The real Settings editor must contain the configured required select.');
     const requiredOptions = await requiredRow.locator('[data-option-row] input[type="checkbox"]').all();
@@ -258,19 +263,21 @@ async function main() {
     await page.locator('#format').selectOption('dvd');
     assert.equal(await page.locator('.custom-field-input').count(), 0, 'Hidden rules must remove fields from submission.');
     await fill(page, 'Acceptance committed');
-    assert.equal(await page.locator('#custom-field-optional_choice').inputValue(), '', 'Optional select must initially be blank.');
-    await page.locator('#custom-field-optional_choice').selectOption('beta');
-    await page.locator('#custom-field-optional_choice').selectOption('');
+    const optionalChoice = page.locator(`#custom-field-${identities.fields.optional_choice}`);
+    assert.equal(await optionalChoice.inputValue(), '', 'Optional select must initially be blank.');
+    await optionalChoice.selectOption(identities.options.optional_choice.beta);
+    await optionalChoice.selectOption('');
     await page.locator('#publication').selectOption({ label: 'Acceptance publication' });
+    assert.equal(await page.locator('#publication').inputValue(), 'Acceptance publication');
     await page.locator('#publication').selectOption('');
-    assert.equal(await page.locator('#custom-field-required_choice option[value="retired"]').count(), 0);
+    assert.equal(await page.locator(`#custom-field-${identities.fields.required_choice} option[value="${identities.options.required_choice.retired}"]`).count(), 0);
     report.optionalChoicesCleared = true;
     // Native validation blocks missing values; whitespace then reaches real server validation.
     await page.locator('#title').fill('');
     await page.locator('#submit-btn').click();
     assert.equal(await page.locator('#title').evaluate(element => element.validity.valueMissing), true);
     await page.locator('#title').fill('Acceptance committed');
-    await page.locator('#custom-field-recommendation_note').fill('   ');
+    await page.locator(`#custom-field-${identities.fields.recommendation_note}`).fill('   ');
     await submit(page, 400);
     assert.match(await page.locator('#submit-error').textContent(), /Book recommendation detail is required/);
     await fill(page, 'Acceptance committed');
@@ -371,7 +378,7 @@ async function main() {
     await page.reload({ waitUntil: 'networkidle' });
     await page.locator('#step-form:not(.hidden)').waitFor();
     await page.locator('#preferred-pickup-branch').selectOption('38078');
-    assert.match(await page.locator('label[for="custom-field-recommendation_note"]').textContent(), /^Book recommendation detail/);
+    assert.match(await page.locator(`label[for="custom-field-${identities.fields.recommendation_note}"]`).textContent(), /^Book recommendation detail/);
     await fill(page, 'Acceptance current config', 'beta');
     await submit(page, 201);
 
@@ -410,8 +417,8 @@ async function main() {
     await scan(page, 'mobile-session-expired');
     await login(page, 2);
     await scan(page, 'mobile-configured-form');
-    assert.equal(await page.locator('#custom-field-optional_choice').inputValue(), '');
-    assert.equal(configured.effective.formats.find(item => item.code === 'book').customFields.required_choice.mode, 'required');
+    assert.equal(await page.locator(`#custom-field-${identities.fields.optional_choice}`).inputValue(), '');
+    assert.equal(configured.effective.formats.find(item => item.code === 'book').customFields[identities.fields.required_choice].mode, 'required');
     assert.deepEqual(report.pageErrors, []);
     assert.equal(report.externalRequests, 0);
   } finally {

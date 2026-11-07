@@ -383,14 +383,15 @@ public sealed partial class AdministrationService
             var desiredEnabled = input.IsEnabled ?? existing?.IsEnabled ?? provider.IsEnabled;
             bool? nextEnabled = input.HasIsEnabled && !input.IsEnabled.HasValue
                 ? null
+                : input.PinOverrides && input.HasIsEnabled ? input.IsEnabled
                 : desiredEnabled == (existing?.IsEnabled ?? provider.IsEnabled)
                     ? existing?.IsEnabled
                     : desiredEnabled == provider.IsEnabled ? null : desiredEnabled;
             var nextLabel = input.HasLabel
-                ? UpdatedStringOverride(existing?.Label, provider.Label, Clean(input.Label))
+                ? input.PinOverrides ? input.Label : UpdatedStringOverride(existing?.Label, provider.Label, Clean(input.Label))
                 : existing?.Label;
             var nextUrl = input.HasUrlTemplate
-                ? UpdatedStringOverride(existing?.UrlTemplate, provider.UrlTemplate, Clean(input.UrlTemplate))
+                ? input.PinOverrides ? input.UrlTemplate : UpdatedStringOverride(existing?.UrlTemplate, provider.UrlTemplate, Clean(input.UrlTemplate))
                 : existing?.UrlTemplate;
             if (nextEnabled is null && nextLabel is null && nextUrl is null)
             {
@@ -481,7 +482,17 @@ public sealed partial class AdministrationService
                 }
                 else
                 {
-                    var overrideRow = await context.MaterialFormatOverrides.SingleOrDefaultAsync(
+                    // A custom-field-only replacement does not edit the shared format row.
+                    if (!new[] { "label", "sortOrder", "isEnabled", "enabled", "messageBehavior", "message", "title", "author", "identifier", "publication" }
+                        .Any(name => HasProperty(item, name)))
+                    {
+                        continue;
+                    }
+                    // Both editors compose one shared override before this transaction saves.
+                    // A row added by the formats entry is not returned by the SQL query yet.
+                    var overrideRow = context.MaterialFormatOverrides.Local.SingleOrDefault(
+                        row => row.LibraryOrganizationId == organizationId && row.MaterialFormatId == target.Id) ??
+                        await context.MaterialFormatOverrides.SingleOrDefaultAsync(
                         row => row.LibraryOrganizationId == organizationId && row.MaterialFormatId == target.Id,
                         cancellationToken);
                     if (overrideRow is null)
@@ -1760,35 +1771,39 @@ public sealed partial class AdministrationService
     private static void ApplyFormatOverride(MaterialFormatOverride row, MaterialFormat baseline, JsonElement item)
     {
         ValidateFormatInput(item);
+        var pin = ReadOptionalBoolean(item, "pinOverrides") == true;
         if (HasProperty(item, "label"))
         {
-            row.Label = UpdatedStringOverride(row.Label, baseline.Label, Clean(GetString(item, "label")));
+            row.Label = pin ? GetString(item, "label") : UpdatedStringOverride(row.Label, baseline.Label, Clean(GetString(item, "label")));
         }
 
         if (GetInt(item, "sortOrder").HasValue)
         {
             var value = GetInt(item, "sortOrder")!.Value;
-            if (value != (row.SortOrder ?? baseline.SortOrder))
+            if (pin || value != (row.SortOrder ?? baseline.SortOrder))
             {
-                row.SortOrder = value == baseline.SortOrder ? null : value;
+                row.SortOrder = pin ? value : value == baseline.SortOrder ? null : value;
             }
         }
 
         var enabled = GetBool(item, "isEnabled") ?? GetBool(item, "enabled");
-        if (enabled.HasValue && enabled.Value != (row.IsEnabled ?? baseline.IsEnabled))
+        if (enabled.HasValue && (pin || enabled.Value != (row.IsEnabled ?? baseline.IsEnabled)))
         {
-            row.IsEnabled = enabled.Value == baseline.IsEnabled ? null : enabled.Value;
+            row.IsEnabled = pin ? enabled.Value : enabled.Value == baseline.IsEnabled ? null : enabled.Value;
         }
+        if (pin && HasProperty(item, "sortOrder") && GetInt(item, "sortOrder") is null) { row.SortOrder = null; }
+        if (pin && HasProperty(item, "isEnabled") && enabled is null) { row.IsEnabled = null; }
 
         if (HasProperty(item, "messageBehavior"))
         {
             var value = NormalizeMessageBehavior(GetString(item, "messageBehavior"));
-            row.MessageBehavior = UpdatedStringOverride(row.MessageBehavior, baseline.MessageBehavior ?? "none", value);
+            row.MessageBehavior = pin ? GetString(item, "messageBehavior") is null ? null : value
+                : UpdatedStringOverride(row.MessageBehavior, baseline.MessageBehavior ?? "none", value);
         }
         if (HasProperty(item, "message"))
         {
             var value = Clean(GetString(item, "message"));
-            row.Message = UpdatedStringOverride(row.Message, Clean(baseline.Message), value);
+            row.Message = pin ? GetString(item, "message") : UpdatedStringOverride(row.Message, Clean(baseline.Message), value);
         }
         ApplyOverrideField(item, "title", baseline.TitleMode ?? "required", baseline.TitleLabel ?? "Title",
             row.TitleMode, row.TitleLabel, value => row.TitleMode = value, value => row.TitleLabel = value);
@@ -1857,6 +1872,18 @@ public sealed partial class AdministrationService
 
         var modeInput = ReadOptionalString(field, "mode");
         var labelInput = ReadOptionalString(field, "label");
+        if (ReadOptionalBoolean(item, "pinOverrides") == true)
+        {
+            if (HasProperty(field, "mode"))
+            {
+                modeSetter(modeInput is null ? null : NormalizeFieldMode(modeInput, name == "title"));
+            }
+            if (HasProperty(field, "label"))
+            {
+                labelSetter(labelInput);
+            }
+            return;
+        }
         var mode = HasProperty(field, "mode") && modeInput is null
             ? null
             : UpdatedStringOverride(currentMode, baselineMode,
@@ -1906,6 +1933,7 @@ public sealed partial class AdministrationService
         ReadOptionalBoolean(item, "reset", "useSystemDefault");
         ReadOptionalBoolean(item, "overridden");
         ValidateResetOverrideIntent(item, "Format");
+        ReadOptionalBoolean(item, "pinOverrides");
         ReadOptionalString(item, "messageBehavior");
         ReadOptionalString(item, "message");
         foreach (var name in new[] { "title", "author", "identifier", "publication" })
@@ -2025,7 +2053,8 @@ public sealed partial class AdministrationService
                 ReadOptionalInt(item, "sortOrder"),
                 HasProperty(item, "isEnabled") || HasProperty(item, "enabled"),
                 HasProperty(item, "label"),
-                HasProperty(item, "urlTemplate") || HasProperty(item, "url")));
+                HasProperty(item, "urlTemplate") || HasProperty(item, "url"),
+                ReadOptionalBoolean(item, "pinOverrides") == true));
         }
         return result;
     }
@@ -2663,7 +2692,8 @@ public sealed partial class AdministrationService
         int? SortOrder,
         bool HasIsEnabled,
         bool HasLabel,
-        bool HasUrlTemplate);
+        bool HasUrlTemplate,
+        bool PinOverrides = false);
 
     private sealed record EffectiveRejectionTemplate(
         long ReferenceId,

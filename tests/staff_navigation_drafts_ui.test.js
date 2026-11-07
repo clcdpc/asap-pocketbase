@@ -270,8 +270,7 @@ for (const settingsScope of ['system', '2']) {
         }
       });
       if (settingsScope !== 'system') {
-        const override = ui.get('[data-setting-key="fromName"] .settings-override-toggle');
-        override.checked = true; override.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+
       }
       ui.edit('#email-from-name', 'Unsaved sender');
       link.click(); await settle();
@@ -2262,8 +2261,7 @@ for (const commit of ['library save', 'system save', 'library reset']) {
       if (commit === 'library reset') ui.get('#settings-reset').click();
       else {
         if (commit === 'library save') {
-          const override = ui.get('[data-setting-key="loginNote"] .settings-override-toggle');
-          override.checked = true; override.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+
         }
         ui.edit('#patron-login-note', 'Configuration B note');
         ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
@@ -2753,8 +2751,7 @@ for (const copy of [false, true]) {
         await until(() => /Old format/.test(ui.get(grid).textContent), 'original workflow DTO');
         ui.get('[data-view="settings"]').click(); await settle();
         if (['2', '3'].includes(settingsScope)) {
-          const toggle = ui.get('[data-setting-key="loginNote"] .settings-override-toggle');
-          toggle.checked = true; toggle.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+
         }
         ui.edit('#patron-login-note', 'Committed configuration');
         ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
@@ -3361,8 +3358,7 @@ for (const owner of ['Title', 'Copy', 'Settings', 'Suggestion']) {
 test('inherited reset combines discard and reset and rejects a newer Settings draft', () =>
   fixture('?stage=settings&settingsScope=2', async ui => {
     require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, () => null);
-    const toggle = ui.get('[data-setting-key="loginNote"] .settings-override-toggle');
-    toggle.checked = true; toggle.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+
     ui.edit('#patron-login-note', 'Draft before reset');
     ui.get('#settings-reset').click();
     await until(() => ui.get('#confirmation-dialog')?.open, 'combined reset displayed');

@@ -275,6 +275,16 @@ public sealed partial class AdministrationService
         row.EbookMessage,
         row.EaudiobookMessage,
         row.DuplicateStatusLabels,
+        suggestionStatusLabel = row.DuplicateStatusLabels[RequestStatus.Suggestion],
+        outstandingPurchaseStatusLabel = row.DuplicateStatusLabels[RequestStatus.OutstandingPurchase],
+        pendingHoldStatusLabel = row.DuplicateStatusLabels[RequestStatus.PendingHold],
+        holdPlacedStatusLabel = row.DuplicateStatusLabels[RequestStatus.HoldPlaced],
+        closedStatusLabel = row.DuplicateStatusLabels[RequestStatus.Closed],
+        rejectedStatusLabel = row.DuplicateStatusLabels["rejected"],
+        holdCompletedStatusLabel = row.DuplicateStatusLabels["hold_completed"],
+        holdNotPickedUpStatusLabel = row.DuplicateStatusLabels["hold_not_picked_up"],
+        manualStatusLabel = row.DuplicateStatusLabels["manual"],
+        silentStatusLabel = row.DuplicateStatusLabels["silent"],
         row.SystemNotEnabledMessage,
         row.MisconfiguredMessage
     };

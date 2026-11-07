@@ -28,7 +28,8 @@ public sealed partial class PatronJourneyTests
                 INSERT INTO [asap].[ExternalSearchProvider]
                     ([OrganizationId], [ProviderKey], [Label], [UrlTemplate], [IsEnabled], [SortOrder])
                 VALUES (1, N'audit_provider_a_' + @suffix, N'System provider A', N'https://catalog.example.org/a?q={query}', 1, 9811),
-                       (1, N'audit_provider_b_' + @suffix, N'System provider B', N'https://catalog.example.org/b?q={query}', 1, 9813);
+                       (1, N'audit_provider_b_' + @suffix, N'System provider B', N'https://catalog.example.org/b?q={query}', 1, 9813),
+                       (1, N'audit_provider_inherited_' + @suffix, N'Inherited provider', N'https://catalog.example.org/inherited?q={query}', 1, 9815);
                 INSERT INTO [asap].[MaterialFormat]
                     ([OwnerOrganizationId], [Code], [Label], [SortOrder], [IsEnabled], [CreatedUtc], [UpdatedUtc])
                 VALUES (1, N'audit_format_a_' + @suffix, N'System format A', 9707, 1, SYSUTCDATETIME(), SYSUTCDATETIME()),
@@ -37,6 +38,10 @@ public sealed partial class PatronJourneyTests
                        (@org, N'audit_custom_' + @suffix, N'Owned format', 9741, 1, SYSUTCDATETIME(), SYSUTCDATETIME()),
                        (@org, N'audit_sparse_' + @suffix, N'Sparse owned format', 9751, 1, SYSUTCDATETIME(), SYSUTCDATETIME()),
                        (@org, N'audit_retired_' + @suffix, N'Retired owned format', 9757, 0, SYSUTCDATETIME(), SYSUTCDATETIME());
+                INSERT INTO [asap].[EmailTemplate]
+                    ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+                VALUES (1, N'rejection:audit_reset_' + @suffix, N'Reset lineage witness', N'System reset subject', N'System reset body', 0, 0, 9900),
+                       (@org, N'rejection:audit_reset_custom_' + @suffix, N'Owned reset witness', N'Owned subject', N'Owned raw' + NCHAR(13) + NCHAR(10) + N'body  ', 0, 1, 9901);
                 """, ("@org", libraryId), ("@suffix", suffix));
             using (var initial = await ReadSettingsDocumentAsync(client, libraryId.ToString()))
             {
@@ -107,9 +112,28 @@ public sealed partial class PatronJourneyTests
             var stderrTask = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
             var output = await stdoutTask + Environment.NewLine + await stderrTask;
+            var resetLineageCount = await ReadCountWithParameterAsync("""
+                SELECT COUNT(*) FROM [asap].[EmailTemplate] library
+                JOIN [asap].[EmailTemplate] source ON source.[Id] = library.[SourceTemplateId]
+                WHERE library.[OrganizationId] = @org
+                  AND source.[TemplateKey] IN (N'suggestion_submitted', N'rejection:audit_reset_' + @suffix);
+                """, ("@org", libraryId), ("@suffix", suffix));
+            TestContext.WriteLine($"Template reset witness physical lineage count after browser: {resetLineageCount}");
             Assert.AreEqual(0, process.ExitCode, output);
+            Assert.AreEqual(0, resetLineageCount, "Reset-only drafts and explicit cleanup must leave no Library lineage for either witness.");
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "settings-browser-results.json")));
             Assert.IsTrue(report.RootElement.GetProperty("libraryOverrideMetadataRoundTrip").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("templateResetOnlyNoLineage").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("templateResetKeepsSiblingPinsAndRawRows").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("inheritanceInteractionWitness").GetProperty("cancelPreservedAndAcceptDiscardedBoth").GetBoolean());
+            var blockers = report.RootElement.GetProperty("draftBlockers");
+            foreach (var flag in new[] { "multipleOwnersAndRetry", "failedAndUncertainBlockerRecovery", "equalDisplayResetPreserved",
+                "settingsFieldsAndDisclosures", "staleContextActionRetired", "retiredOwnerRecovered", "noNavigationWrites",
+                "unavailableStaffRecovery", "unavailableRecoveryStaleContext" })
+            {
+                Assert.IsTrue(blockers.GetProperty(flag).GetBoolean(), flag);
+            }
+            Assert.AreEqual(2, blockers.GetProperty("native200").GetArrayLength());
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
             using var after = await ReadSettingsDocumentAsync(client, libraryId.ToString());
@@ -127,16 +151,23 @@ public sealed partial class PatronJourneyTests
         {
             await ExecuteNonQueryAsync("""
                 DELETE FROM [asap].[AdministrativeAudit] WHERE [OrganizationId] = @org;
+                DELETE audit FROM [asap].[AdministrativeAudit] audit
+                JOIN [asap].[StaffUser] staff ON audit.[TargetType] = N'StaffUser' AND audit.[TargetId] = CONVERT(nvarchar(100), staff.[Id])
+                WHERE staff.[UserPrincipalName] IN (N'draft-a-' + @suffix + N'@example.org', N'draft-b-' + @suffix + N'@example.org');
+                DELETE FROM [asap].[StaffUser] WHERE [OrganizationId] = @org
+                    OR [UserPrincipalName] IN (N'draft-a-' + @suffix + N'@example.org', N'draft-b-' + @suffix + N'@example.org');
                 DELETE FROM [asap].[MaterialFormatOverride] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[MaterialFormatCustomFieldRule] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[ExternalSearchProviderOverride] WHERE [LibraryOrganizationId] = @org;
                 DELETE FROM [asap].[ExternalSearchProvider]
-                WHERE [ProviderKey] IN (N'audit_provider_a_' + @suffix, N'audit_provider_b_' + @suffix);
+                WHERE [ProviderKey] IN (N'audit_provider_a_' + @suffix, N'audit_provider_b_' + @suffix, N'audit_provider_inherited_' + @suffix);
                 DELETE FROM [asap].[MaterialFormat] WHERE [Code] IN
                     (N'audit_format_a_' + @suffix, N'audit_format_b_' + @suffix, N'audit_inherited_' + @suffix,
                      N'audit_custom_' + @suffix, N'audit_sparse_' + @suffix, N'audit_retired_' + @suffix);
                 DELETE FROM [asap].[PatronSettings] WHERE [OrganizationId] = @org;
                 DELETE FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = @org;
+                DELETE FROM [asap].[EmailTemplate] WHERE [OrganizationId] = @org;
+                DELETE FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'rejection:audit_reset_' + @suffix;
                 DELETE FROM [asap].[Organization] WHERE [Id] = @org;
                 """, ("@org", libraryId), ("@suffix", suffix));
         }

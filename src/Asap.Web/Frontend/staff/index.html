@@ -318,6 +318,7 @@
           </div>
         </div>
 
+        <div id="settings-draft-blockers" class="settings-draft-blockers settings-callout" hidden></div>
         <div id="settings-system-context" class="settings-callout" hidden>
           <strong id="settings-library-context-title"></strong>
           <p id="settings-library-context-guidance"></p>
@@ -555,7 +556,7 @@
                   <p id="patron-code-policy-help" class="wide field-help">When enabled with at least one allowed code, only patrons with an allowed code can submit suggestions.</p>
                   <div class="settings-domain-block wide">
                     <label for="patron-code-picker" class="settings-field">Allowed patron-code IDs</label>
-                    <label id="patron-codes-inherit-field" class="settings-inline-check"><input id="patron-codes-use-system" type="checkbox"><span>Use system IDs</span></label>
+                    <div id="patron-codes-inherit-field"></div>
                     <p id="patron-code-picker-help" class="field-help">Type a description or numeric ID, then select a code. Saved IDs unavailable in Polaris remain selected until you remove them.</p>
                     <div class="patron-code-picker" data-settings-ignore="true">
                       <input id="patron-code-picker" type="text" role="combobox" autocomplete="off" aria-autocomplete="list" aria-expanded="false" aria-controls="patron-code-options" aria-describedby="patron-code-picker-help patron-code-availability" placeholder="Search or select patron codes…">
@@ -611,7 +612,7 @@
                     <label class="settings-field wide" data-setting-section="workflow" data-setting-key="commonAuthorsMessage"><span>Common creators message</span><textarea id="common-authors-message" rows="2"></textarea></label>
                     <div class="settings-domain-block wide">
                       <div class="settings-domain-heading"><strong>Common creator list</strong><button id="add-common-creator" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add creator</button></div>
-                      <label id="common-creators-inherit-field" class="settings-inline-check"><input id="common-creators-use-system" type="checkbox"><span>Use system list</span></label>
+                      <div id="common-creators-inherit-field"></div>
                       <div id="common-creators-editor" class="settings-row-editor" aria-live="polite"></div>
                     </div>
                   </fieldset>
@@ -694,7 +695,7 @@
                 <legend>Publication options and formats</legend>
                 <div class="settings-domain-block">
                   <div class="settings-domain-heading"><strong>Publication options</strong><button id="add-publication-option" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add option</button></div>
-                  <label id="publication-options-inherit-field" class="settings-inline-check"><input id="publication-options-use-system" type="checkbox"><span>Use system options</span></label>
+                  <div id="publication-options-inherit-field"></div>
                   <div id="publication-options-editor" class="settings-row-editor" aria-live="polite"></div>
                 </div>
                 <div class="settings-domain-block">
@@ -706,7 +707,8 @@
                   <div id="additional-fields-editor" class="settings-row-editor" aria-live="polite"></div>
                 </div>
                 <div class="settings-domain-block">
-                  <div class="settings-domain-heading"><strong>Format rules</strong><button id="add-format-rule" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add rule</button></div>
+                  <div class="settings-domain-heading"><strong>Format rules</strong><button id="add-format-rule" class="secondary-button" type="button" aria-describedby="format-rule-availability"><i class="fa fa-plus" aria-hidden="true"></i> Add rule</button></div>
+                  <p id="format-rule-availability" class="settings-callout" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" hidden></p>
                   <div id="format-rules-editor" class="settings-row-editor"></div>
                 </div>
                 <div class="settings-domain-block">

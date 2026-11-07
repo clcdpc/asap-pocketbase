@@ -565,6 +565,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         }
         throw new Error(`Unexpected mounted roster request: ${url}`);
       }, { onCommitted: message => commits.push(message) });
+      document.getElementById('workspace').hidden = false;
+      document.getElementById('settings-view').hidden = false;
       document.getElementById('settings-nav-staff').click();
       await waitFor(() => document.querySelector('[data-staff-id="51"]'));
       const row = document.querySelector('[data-staff-id="51"]'), other = document.querySelector('[data-staff-id="52"]');
@@ -598,13 +600,30 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       const globalNote = document.getElementById('patron-login-note');
       edit(globalNote, 'Competing global Settings draft');
       document.getElementById('settings-save').click(); await flush();
-      assert.match(document.getElementById('settings-message').textContent, /competing Settings draft/);
+      assert.match(document.getElementById('settings-message').textContent, /unsaved draft is blocking this action/);
       assert.equal(writes.length, 0);
       assert.equal(email.value, 'invalid-email');
+      const blockers = document.getElementById('settings-draft-blockers');
+      assert.match(blockers.textContent, /Staff-account edits \(roster row 1\).*Staff access/);
+      assert.doesNotMatch(blockers.textContent, /Zoe|staff51@|invalid-email|Competing global Settings draft|Symbol/);
+      assert.equal(blockers.querySelectorAll('button').length, 1);
+      assert.equal(document.activeElement, blockers.querySelector('button'), 'A blocked footer Save exposes its keyboard navigation action.');
+      disclosure.click();
+      blockers.querySelector('button').click();
+      assert.equal(disclosure.getAttribute('aria-expanded'), 'true'); assert.equal(document.activeElement, email);
+      assert.equal(globalNote.value, 'Competing global Settings draft'); assert.equal(email.value, 'invalid-email');
+      assert.equal(writes.length, 0, 'Blocker navigation never saves or cancels either owner.');
+      button(row, 'Cancel').click(); edit(name, 'Staff draft blocked by Settings');
+      button(row, 'Save changes').click(); await flush();
+      assert.equal(writes.length, 0);
+      assert.match(blockers.textContent, /Login note in Patron experience/);
+      blockers.querySelector('button').click();
+      assert.equal(document.activeElement, globalNote, `The main Settings owner routes to its actual dirty field in another section: ${blockers.textContent}; ${document.getElementById('settings-message').textContent}`);
+      assert.equal(name.value, 'Staff draft blocked by Settings');
       edit(globalNote, '');
       mounted.controller.activatePanel('staff');
       assert.equal(editor.disabled, false);
-      assert.equal(email.checkValidity(), false);
+      assert.equal(email.checkValidity(), true, 'The explicit row Cancel above restored its accepted email.');
       button(row, 'Cancel').click();
       assert.equal(email.value, 'staff51@example.org');
       assert.equal(mounted.controller.isDirty(), false);
@@ -621,6 +640,21 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       edit(other.querySelector('input[type="text"]'), 'Other draft');
       button(row, 'Deactivate').click(); await flush();
       assert.equal(writes.length, 1, 'lifecycle remains blocked by dirty roster drafts');
+      assert.equal(blockers.querySelectorAll('button').length, 2, 'Each competing row has its own action.');
+      document.getElementById('staff-add-toggle').click();
+      edit(document.getElementById('staff-add-email'), 'private.create@example.org');
+      document.getElementById('staff-add-toggle').click();
+      button(row, 'Deactivate').click(); await flush();
+      assert.equal(blockers.querySelectorAll('button').length, 3, 'Creation is independent of both mounted roster owners.');
+      assert.doesNotMatch(blockers.textContent, /private.create|one@example|Other draft|Zoe Zulu/);
+      const createLink = [...blockers.querySelectorAll('button')].find(item => item.textContent.includes('New staff-account draft'));
+      createLink.click();
+      assert.equal(document.activeElement, document.getElementById('staff-add-email'));
+      assert.equal(document.getElementById('staff-add-email').value, 'private.create@example.org');
+      assert.equal(name.value, 'Zoe Zulu'); assert.equal(other.querySelector('input[type="text"]').value, 'Other draft');
+      assert.equal(writes.length, 1);
+      document.getElementById('staff-add-cancel').click();
+      assert.equal(blockers.querySelectorAll('button').length, 2);
       disclosure.click(); openRow(row);
       assert.equal(name.value, 'Zoe Zulu');
       assert.equal(other.querySelector('input[type="text"]').value, 'Other draft');
@@ -633,6 +667,11 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       assert.equal(name.value, 'Zoe Zulu'); assert.equal(role.value, 'admin'); assert.equal(library.value, '3');
       assert.equal(roster[0].displayName, 'Zoe Adams', 'failed combined save never presents partial profile success');
       assert.equal(commits.length, 1);
+      button(row, 'Deactivate').click(); await flush();
+      assert.match(document.getElementById('staff-access-status').textContent, /Staff save failed/);
+      blockers.querySelector('button').click();
+      assert.equal(document.activeElement, email); assert.equal(name.value, 'Zoe Zulu');
+      assert.equal(writes.length, 2, 'Failed blocker save remains an actual blocker until explicitly resolved.');
       rejection = 409;
       button(row, 'Save changes').click();
       await waitFor(() => !mounted.controller.hasPendingMutation() && row.textContent.includes('Saved values changed elsewhere'));
@@ -650,14 +689,47 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       assert.deepEqual([...document.querySelectorAll('.settings-staff-row')].map(item => item.dataset.staffId),
         ['52', '9223372036854775807', '51', '54']);
       assert.equal(document.activeElement, disclosure, 'disabled completed Save returns focus to its moved summary');
-      rejection = 'partial'; edit(name, 'Unconfirmed draft'); button(row, 'Save changes').click();
+      rejection = 'partial'; edit(name, 'Unconfirmed draft');
+      button(row, 'Deactivate').click(); await flush();
+      const uncertainLink = blockers.querySelector('button');
+      button(row, 'Save changes').click();
       await waitFor(() => mounted.controller.hasUnconfirmedOutcome() && !mounted.controller.hasPendingMutation());
       assert.equal(commits.length, 2, 'a partial or mismatched unified receipt cannot announce complete success');
       assert.equal(name.value, 'Unconfirmed draft');
+      blockers.hidden = false; blockers.append(uncertainLink); uncertainLink.click();
+      assert.match(document.getElementById('settings-message').textContent, /Refresh settings to reconcile/);
+      assert.equal(mounted.controller.hasUnconfirmedOutcome(), true); assert.equal(name.value, 'Unconfirmed draft');
       document.getElementById('staff-refresh').click();
       await waitFor(() => !mounted.controller.hasUnconfirmedOutcome());
       assert.equal(name.value, 'Zoe Zulu', 'explicit authoritative review resolves the uncertain draft');
+      rejection = null; edit(name, 'Retired row draft');
+      disclosure.click();
+      button(other, 'Deactivate').click(); await flush();
+      const detachedLink = blockers.querySelector('button'), beforeRetired = writes.length;
+      row.remove(); await flush(); document.getElementById('settings-staff-users-list').append(row);
+      detachedLink.click();
+      assert.match(document.getElementById('settings-message').textContent, /no longer current/);
+      assert.equal(disclosure.getAttribute('aria-expanded'), 'false', 'A detached then reinserted owner is never revived by navigation.');
+      openRow(row); button(row, 'Save changes').click(); await flush();
+      assert.equal(writes.length, beforeRetired, 'Retirement also retains mutation admission protection.');
+      document.getElementById('staff-refresh').click();
+      await waitFor(() => document.querySelector('[data-staff-id="51"]') !== row);
+      const recovered = document.querySelector('[data-staff-id="51"]');
+      assert.equal(row.isConnected, false, 'Explicit roster recovery replaces the retired owner rather than reviving its handle.');
+      openRow(recovered); edit(recovered.querySelector('input[type="text"]'), 'Accepted fresh-owner edit');
+      button(recovered, 'Save changes').click();
+      await waitFor(() => writes.length === beforeRetired + 1 && !mounted.controller.hasPendingMutation());
+      button(row, 'Save changes').click(); await flush();
+      assert.equal(writes.length, beforeRetired + 1, 'The detached former editor never inherits the recovered owner authority.');
+      edit(other.querySelector('input[type="text"]'), 'Old actor draft');
+      button(other, 'Deactivate').click(); await flush();
+      const oldActorLink = blockers.querySelector('button');
+      mounted.controller.setStaff({ ...superStaff, id: 'replacement', role: 'admin', organizationId: 2 });
+      blockers.hidden = false; blockers.append(oldActorLink); oldActorLink.click();
+      assert.match(document.getElementById('settings-message').textContent, /earlier Settings context/);
+      assert.equal(writes.length, beforeRetired + 1);
       mounted.controller.dispose(); mounted.dom.window.close();
+      oldActorLink.click(); assert.equal(writes.length, beforeRetired + 1, 'Disposed actions cannot route or mutate.');
     }
 
     {
@@ -748,8 +820,15 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
       assert.equal(submits, 1, `Native form submission reaches the owning draft guard despite the filtered invalid input: ${JSON.stringify(
         [...document.getElementById('settings-form').elements].filter(control => control.willValidate && !control.checkValidity())
           .map(control => [control.id, control.getAttribute('aria-label'), control.value, control.validationMessage]))}`);
-      assert.match(document.getElementById('settings-message').textContent, /competing Settings draft/);
+      assert.match(document.getElementById('settings-message').textContent, /unsaved draft is blocking this action/);
       assert.equal(writes.length, 0);
+      const hiddenLink = document.querySelector('#settings-draft-blockers button');
+      hiddenLink.click();
+      assert.equal(filter.checked, true, 'Navigation reveals the existing hidden inactive owner through its display preference.');
+      assert.equal(document.activeElement, email);
+      assert.match(announcement, /Showing Staff-account edits .*Staff access.*Unsaved changes are preserved/);
+      assert.equal(note.value, 'An unrelated Settings draft'); assert.equal(name.value, 'Hidden draft');
+      filter.click();
       edit(note, originalNote); filtered.controller.activatePanel('staff');
       filter.click();
       assert.equal(row('63'), inactive); assert.equal(inactive.querySelector('input[type="email"]'), email);
@@ -784,7 +863,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         edit(input, change === 'email' ? 'replacement.actor@example.org' : 'admin');
         button(self, 'Save changes').click(); await flush();
         assert.equal(writes.length, 3, `${change}: an actor-context-changing save cannot retire another roster draft`);
-        assert.match(document.getElementById('settings-message').textContent, /competing Settings draft/);
+        assert.match(document.getElementById('settings-message').textContent, /unsaved draft is blocking this action/);
         button(self, 'Cancel').click();
       }
       edit(self.querySelector('input[type="email"]'), 'replacement.actor@example.org');
@@ -1088,7 +1167,7 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
         edit(document.getElementById('staff-add-email'), 'Competing-create@example.org');
         [...owner.querySelectorAll('button')].find(button => button.textContent === 'Save changes').click();
         await flush();
-        assert.match(document.getElementById('settings-message').textContent, /competing Settings draft/);
+        assert.match(document.getElementById('settings-message').textContent, /unsaved draft is blocking this action/);
         let newerNotice = '';
         if (newer) {
           document.getElementById('copy-patron-public-url').click(); await flush();

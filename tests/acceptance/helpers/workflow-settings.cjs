@@ -10,7 +10,7 @@ async function providerGeometry(page) {
     };
     return { paneWidth: root.clientWidth, viewportWidth: innerWidth, rows: [...root.children]
       .filter(row => row.matches('.settings-provider-row')).map(row => ({
-        bounds: rect(row), library: Boolean(row.querySelector('.settings-domain-override')),
+        bounds: rect(row), library: Boolean(row.querySelector(':scope > .settings-inheritance-field')),
         controls: [row.querySelector('input[type="text"]'), row.querySelector('input[type="url"]'),
           row.querySelector('.settings-domain-check'), row.querySelector('.settings-domain-override'),
           ...row.querySelectorAll('.settings-row-actions button')].filter(Boolean).map(rect),
@@ -26,8 +26,9 @@ async function providerGeometry(page) {
       'Each provider control fits inside its card');
     }
     const tops = row.controls.map(control => control.top);
-    if (geometry.paneWidth >= (row.library ? 820 : 720)) {
-      assert.ok(Math.max(...tops) - Math.min(...tops) <= 4, 'Wide provider controls share one row');
+    if (geometry.paneWidth >= 720) {
+      assert.ok(Math.max(...tops) - Math.min(...tops) <= 4,
+        'Wide provider controls share one row: ' + JSON.stringify({ paneWidth: geometry.paneWidth, tops }));
       assert.ok(row.controls[1].width >= 240, 'Wide provider URL remains readable');
     } else {
       assert.ok(row.controls[1].width >= Math.min(240, row.bounds.width - 28), 'Wrapped provider URL uses available width');
@@ -112,6 +113,7 @@ async function pickerGeometry(page, { open = true, active = true } = {}) {
       footer: footer ? rect(footer) : null,
       footerContent: footer ? [...footer.querySelectorAll('strong, span, button')]
         .filter(node => node.getClientRects().length).map(node => ({ ...rect(node), reachable: visible(node) })) : [],
+      inheritanceHeight: document.querySelector('#patron-codes-inherit-field')?.getBoundingClientRect().height || 0,
       clipping, scrollX, scrollY, pageOverflow: document.documentElement.scrollWidth > innerWidth
     };
   });

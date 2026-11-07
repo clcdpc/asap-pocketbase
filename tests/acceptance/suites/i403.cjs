@@ -142,7 +142,7 @@ const scenarios = [
     assert.equal(t.mutations.length, 0);
   } },
   { id: 'i403-keyboard-and-guarded-dispatch', writes: true, requirements: ['#403: direct/overflow share workflow review; exactly one dispatch; Enter/Space/Escape; menu/focus reconciliation'], run: async t => {
-    const { f, before, row } = await start(t, 'purchase-reminder-off'); t.allowFixture(f);
+    const { f, before, row } = await start(t, 'purchase-reminder-off');
     const more = row.locator('.request-row-more');
     await more.press('Space'); assert.equal(await more.getAttribute('aria-expanded'), 'true');
     await t.page.keyboard.press('Escape'); assert.equal(await more.getAttribute('aria-expanded'), 'false');

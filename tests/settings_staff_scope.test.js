@@ -241,8 +241,9 @@ async function flush() {
 
     assert.deepStrictEqual(settingsRequests, ['/api/asap/staff/settings?orgId=2']);
     const timeout = id => document.getElementById(id);
-    const timeoutOverride = key => document.querySelector(
-      `[data-setting-section="workflow"][data-setting-key="${key}"] .settings-override-toggle`);
+    const workflowField = key => document.querySelector(`[data-setting-section="workflow"][data-setting-key="${key}"]`);
+    const overridden = key => workflowField(key).querySelector('.settings-inheritance-status')?.textContent.startsWith('Library setting');
+    const reset = key => workflowField(key).querySelector('.settings-use-system')?.click();
     const change = control => control.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     const setChecked = (control, checked) => { control.checked = checked; change(control); };
     controller.activatePanel('workflow');
@@ -250,7 +251,7 @@ async function flush() {
     const suggestionTrigger = timeout('suggestion-limit-placeholder-trigger');
     const suggestionPicker = timeout('suggestion-limit-placeholder-picker');
     const suggestionOption = suggestionPicker.querySelector('[data-suggestion-placeholder="next_available_date"]');
-    const suggestionOverride = timeoutOverride('suggestionLimitMessage');
+    assert.equal(suggestionMessage.disabled, false);
     let suggestionInputEvents = 0;
     suggestionMessage.addEventListener('input', () => suggestionInputEvents++);
     assert.equal(suggestionMessage.value, librarySuggestionLimitMessage);
@@ -280,14 +281,14 @@ async function flush() {
     suggestionMessage.setSelectionRange(11, 20);
     suggestionTrigger.click();
     assert.equal(document.activeElement, suggestionOption);
-    const staleOverrideDraft = suggestionMessage.value;
-    setChecked(suggestionOverride, false);
-    assert.equal(suggestionTrigger.disabled, true, 'Resetting to inherited content disables the insertion control.');
+    const staleOverrideDraft = systemSuggestionLimitMessage;
+    reset('suggestionLimitMessage');
+    assert.equal(suggestionTrigger.disabled, false, 'Inherited content remains directly editable.');
     suggestionOption.click();
     assert.equal(suggestionMessage.value, staleOverrideDraft,
       'A retained picker option cannot insert after the Library Override value changes.');
     assert.equal(suggestionInputEvents, 1, 'Rejected stale options do not dispatch editor input.');
-    setChecked(suggestionOverride, true);
+    await controller.load({ silent: true });
     suggestionMessage.value = librarySuggestionLimitMessage;
     suggestionMessage.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
     assert.equal(controller.isDirty(), false, 'Restoring the accepted message and Override state leaves a clean draft.');
@@ -332,9 +333,9 @@ async function flush() {
     assert.equal(rejectionTemplate.value, '9007199254740993');
     assert.equal(rejectionTemplate.disabled, true);
 
-    setChecked(timeoutOverride('outstandingTimeoutEnabled'), false);
+    reset('outstandingTimeoutEnabled');
     assert.equal(outstandingEnabled.checked, true, 'Reset displays the configured System value, not the raw Library row.');
-    assert.equal(outstandingEnabled.disabled, true);
+    assert.equal(outstandingEnabled.disabled, false);
     assert.equal(outstandingDays.disabled, false, 'An inherited true parent enables its explicit Library dependent.');
     assert.equal(sendRejectionEmail.disabled, false);
     assert.equal(rejectionTemplate.disabled, false);
@@ -343,40 +344,39 @@ async function flush() {
     assert.equal(rejectionTemplate.value, '9007199254740993', 'Email gating retains the selected template.');
     setChecked(sendRejectionEmail, true);
     assert.equal(rejectionTemplate.disabled, false);
-    setChecked(timeoutOverride('outstandingTimeoutEnabled'), true);
-    assert.equal(outstandingEnabled.checked, false, 'Re-enabling Override restores the local checkbox draft.');
+    setChecked(outstandingEnabled, false);
+    assert.equal(outstandingEnabled.checked, false, 'Direct editing prepares a false Library draft.');
     assert.equal(outstandingDays.value, '45');
     assert.equal(outstandingDays.disabled, true);
     assert.equal(rejectionTemplate.value, '9007199254740993');
-    setChecked(timeoutOverride('outstandingTimeoutEnabled'), false);
+    reset('outstandingTimeoutEnabled');
     assert.equal(outstandingEnabled.checked, true);
     assert.equal(outstandingDays.disabled, false);
 
     const holdEnabled = timeout('hold-pickup-timeout-enabled');
     const holdDays = timeout('hold-pickup-timeout-days');
     assert.equal(holdEnabled.checked, true);
-    assert.equal(holdEnabled.disabled, true, 'The inherited parent remains read-only.');
+    assert.equal(holdEnabled.disabled, false, 'The inherited parent is directly editable.');
     assert.equal(holdDays.value, '9');
     assert.equal(holdDays.disabled, false);
-    setChecked(timeoutOverride('holdPickupTimeoutDays'), false);
+    reset('holdPickupTimeoutDays');
     assert.equal(holdDays.value, '7');
-    assert.equal(holdDays.disabled, true, 'An inherited true parent does not unlock an inherited dependent.');
-    setChecked(timeoutOverride('holdPickupTimeoutDays'), true);
+    assert.equal(holdDays.disabled, false, 'An inherited true parent enables its directly editable dependent.');
+    holdDays.value = '9'; change(holdDays);
     assert.equal(holdDays.value, '9', 'Re-enabling the dependent override restores its draft.');
     assert.equal(holdDays.disabled, false);
-    setChecked(timeoutOverride('holdPickupTimeoutEnabled'), true);
     setChecked(holdEnabled, false);
     assert.equal(holdDays.disabled, true);
     assert.equal(holdDays.value, '9');
     setChecked(holdEnabled, true);
     assert.equal(holdDays.disabled, false);
-    setChecked(timeoutOverride('holdPickupTimeoutEnabled'), false);
+    reset('holdPickupTimeoutEnabled');
 
     const pendingEnabled = timeout('pending-hold-timeout-enabled');
     const pendingDays = timeout('pending-hold-timeout-days');
     assert.equal(pendingEnabled.checked, true);
     assert.equal(pendingDays.disabled, false);
-    setChecked(timeoutOverride('pendingHoldTimeoutEnabled'), false);
+    reset('pendingHoldTimeoutEnabled');
     assert.equal(pendingEnabled.checked, false,
       'A null configured System value resets a true Library override to the accepted false presentation.');
     assert.equal(pendingDays.value, '18');
@@ -385,36 +385,35 @@ async function flush() {
     const additionalEnabled = timeout('additional-copy-timeout-enabled');
     const additionalDays = timeout('additional-copy-timeout-days');
     assert.equal(additionalEnabled.checked, false);
-    assert.equal(additionalEnabled.disabled, true);
+    assert.equal(additionalEnabled.disabled, false);
     assert.equal(additionalDays.value, '33');
     assert.equal(additionalDays.disabled, true);
-    setChecked(timeoutOverride('additionalCopyTimeoutEnabled'), true);
     setChecked(additionalEnabled, true);
     assert.equal(additionalDays.disabled, false);
     setChecked(additionalEnabled, false);
     assert.equal(additionalDays.disabled, true);
     assert.equal(additionalDays.value, '33');
-    setChecked(timeoutOverride('additionalCopyTimeoutEnabled'), false);
+    reset('additionalCopyTimeoutEnabled');
 
     const commonAuthorsEnabled = timeout('common-authors-enabled');
     const commonAuthorsOptions = timeout('common-authors-options');
-    const commonAuthorsOverride = timeoutOverride('commonAuthorsEnabled');
-    const commonCreatorsUseSystem = timeout('common-creators-use-system');
+    const commonAuthorsOverride = commonAuthorsEnabled;
+    const creatorsInherited = () => timeout('common-creators-inherit-field').textContent.includes('Using system value');
     const commonCreatorsEditor = timeout('common-creators-editor');
     const commonCreatorInput = () => commonCreatorsEditor.querySelector('[data-domain-row] input');
     assert.equal(commonAuthorsEnabled.checked, false);
-    assert.equal(commonAuthorsOverride.checked, true);
+    assert.equal(overridden('commonAuthorsEnabled'), true);
     assert.equal(commonAuthorsOptions.hidden, true, 'An initially disabled feature keeps its options collapsed.');
     assert.equal(commonAuthorsOptions.disabled, true);
-    setChecked(commonAuthorsOverride, false);
+    reset('commonAuthorsEnabled');
     assert.equal(commonAuthorsEnabled.checked, true, 'Reset displays the configured System feature flag.');
-    assert.equal(commonAuthorsEnabled.disabled, true);
+    assert.equal(commonAuthorsEnabled.disabled, false);
     assert.equal(commonAuthorsOptions.hidden, false, 'An inherited true flag reveals its read-only options.');
-    assert.equal(commonCreatorsUseSystem.checked, false);
+    assert.equal(creatorsInherited(), false);
     assert.equal(commonCreatorInput().value, 'Library creator');
     commonCreatorInput().focus();
-    setChecked(commonAuthorsOverride, true);
-    assert.equal(commonAuthorsEnabled.checked, false, 'Re-enabling Override restores the Library flag draft.');
+    setChecked(commonAuthorsEnabled, false);
+    assert.equal(commonAuthorsEnabled.checked, false, 'A direct false edit hides the options.');
     assert.equal(commonAuthorsOptions.hidden, true);
     assert.strictEqual(document.activeElement, commonAuthorsEnabled,
       'Hiding focused options with an editable parent returns focus to its checkbox.');
@@ -439,9 +438,8 @@ async function flush() {
       'Hiding focused editable options returns focus to the controlling checkbox.');
     timeout('add-common-creator').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     retainedCreatorDelete.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-    commonCreatorsUseSystem.checked = true;
-    change(commonCreatorsUseSystem);
-    assert.equal(commonCreatorsUseSystem.checked, false,
+    timeout('common-creators-inherit-field').querySelector('.settings-use-system').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    assert.equal(creatorsInherited(), false,
       'A hidden Use system list action cannot change creator-list ownership.');
     assert.strictEqual(retainedCreatorRow.isConnected, true, 'A retained hidden Delete handler cannot remove its row.');
     assert.equal(commonCreatorsEditor.querySelectorAll('[data-domain-row]').length, 1,
@@ -479,16 +477,10 @@ async function flush() {
     document.getElementById('email-postmark-token').value = 'forged-browser-token';
     document.getElementById('email-clear-postmark-token').checked = true;
 
-    const fromToggle = document.querySelector('[data-setting-key="fromAddress"] .settings-override-toggle');
-    fromToggle.checked = true;
-    fromToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
     document.getElementById('email-from-address').value = 'library@example.org';
-
-    for (const id of ['publication-options-use-system', 'common-creators-use-system']) {
-      const toggle = document.getElementById(id);
-      toggle.checked = false;
-      toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
-    }
+    document.getElementById('email-from-address').dispatchEvent(new window.Event('input', { bubbles: true }));
+    document.getElementById('add-publication-option').click();
+    document.querySelector('#publication-options-editor [data-row-action="delete"]').click();
 
     const note = document.getElementById('patron-login-note');
     note.value = 'Own library edit';
@@ -505,17 +497,17 @@ async function flush() {
     assert.strictEqual(saveBody.email.fromAddress, 'library@example.org');
     assert.strictEqual(saveBody.workflow.outstandingTimeoutEnabled, null,
       'Resetting an enabled override submits an explicit inherited reset.');
-    assert.strictEqual(saveBody.workflow.outstandingTimeoutDays, 45,
+    assert.strictEqual(saveBody.workflow.outstandingTimeoutDays, undefined,
       'Saving with the parent off retains its dependent day override.');
     assert.strictEqual(saveBody.workflow.outstandingTimeoutSendEmail, true);
-    assert.strictEqual(saveBody.workflow.outstandingTimeoutRejectionTemplateId, '9007199254740993',
+    assert.strictEqual(saveBody.workflow.outstandingTimeoutRejectionTemplateId, undefined,
       'Saving with the email parent off retains the selected template override.');
     assert.strictEqual(saveBody.workflow.pendingHoldTimeoutEnabled, null,
       'A Library true override can reset to the null System value.');
-    assert.strictEqual(saveBody.workflow.pendingHoldTimeoutDays, 18,
+    assert.strictEqual(saveBody.workflow.pendingHoldTimeoutDays, undefined,
       'Resetting a parent does not transfer or delete its dependent override.');
     assert.strictEqual(saveBody.workflow.holdPickupTimeoutDays, 9);
-    assert.strictEqual(saveBody.workflow.additionalCopyTimeoutDays, 33);
+    assert.strictEqual(saveBody.workflow.additionalCopyTimeoutDays, undefined);
     assert.strictEqual(saveBody.workflow.commonAuthorsEnabled, false,
       'The feature remains explicitly off when its hidden configuration is saved.');
     assert.strictEqual(saveBody.workflow.commonAuthorsLabel, 'Draft creator label');
@@ -534,9 +526,9 @@ async function flush() {
 
     for (let attempt = 0; attempt < 20 &&
       document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
-    assert.strictEqual(timeoutOverride('outstandingTimeoutEnabled').checked, false);
+    assert.strictEqual(overridden('outstandingTimeoutEnabled'), false);
     assert.strictEqual(outstandingEnabled.checked, true);
-    assert.strictEqual(outstandingEnabled.disabled, true);
+    assert.strictEqual(outstandingEnabled.disabled, false);
     assert.strictEqual(outstandingDays.value, '45');
     assert.strictEqual(outstandingDays.disabled, false);
     assert.strictEqual(sendRejectionEmail.checked, true);
@@ -551,25 +543,19 @@ async function flush() {
     assert.strictEqual(timeout('common-authors-message').value, 'Draft creator message');
     assert.strictEqual(suggestionMessage.value, insertedMessage,
       'The accepted Library setting reload retains the inserted workflow message.');
-    assert.strictEqual(commonCreatorsUseSystem.checked, false);
+    assert.strictEqual(creatorsInherited(), false);
     assert.deepStrictEqual([...commonCreatorsEditor.querySelectorAll('[data-domain-row] input')]
       .map(input => input.value), ['Draft library creator'],
     'Accepted reload retains the hidden creator row and keeps the explicit local list selected.');
-    assert.strictEqual(timeoutOverride('pendingHoldTimeoutEnabled').checked, false);
+    assert.strictEqual(overridden('pendingHoldTimeoutEnabled'), false);
     assert.strictEqual(pendingEnabled.checked, false);
-    assert.strictEqual(pendingEnabled.disabled, true);
+    assert.strictEqual(pendingEnabled.disabled, false);
     assert.strictEqual(pendingDays.value, '18');
     assert.strictEqual(pendingDays.disabled, true);
-    for (const id of ['publication-options-use-system', 'common-creators-use-system']) {
-      const toggle = document.getElementById(id);
-      assert.strictEqual(toggle.checked, false);
-      if (id === 'common-creators-use-system') {
-        setChecked(commonAuthorsEnabled, true);
-        assert.equal(commonAuthorsOptions.hidden, false,
-          'The feature must be on before its list inheritance control can be changed.');
-      }
-      toggle.checked = true;
-      toggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    setChecked(commonAuthorsEnabled, true);
+    for (const id of ['publication-options-inherit-field', 'common-creators-inherit-field']) {
+      document.querySelector('#' + id + ' .settings-use-system').click();
+      await flush();
     }
     document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
       bubbles: true,
@@ -585,12 +571,13 @@ async function flush() {
       document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
     assert.strictEqual(commonAuthorsEnabled.checked, true);
     assert.strictEqual(commonAuthorsOptions.hidden, false);
-    assert.strictEqual(commonCreatorsUseSystem.checked, true);
+    assert.strictEqual(creatorsInherited(), true);
     assert.deepStrictEqual([...commonCreatorsEditor.querySelectorAll('[data-domain-row] input')]
       .map(input => input.value), systemCommonCreators,
     'The accepted Use system list selection displays the System creators.');
-    commonCreatorsUseSystem.checked = false;
-    change(commonCreatorsUseSystem);
+    const inheritedCreator = commonCreatorInput();
+    const inheritedCreatorValue = inheritedCreator.value;
+    setText(inheritedCreator, inheritedCreatorValue + ' draft'); setText(inheritedCreator, inheritedCreatorValue);
     document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', {
       bubbles: true,
       cancelable: true
@@ -601,7 +588,7 @@ async function flush() {
       'A Library list can be made explicitly editable before testing focused row refresh.');
     for (let attempt = 0; attempt < 20 &&
       document.getElementById('settings-save-title').textContent !== 'No changes'; attempt++) await flush();
-    assert.strictEqual(commonCreatorsUseSystem.checked, false);
+    assert.strictEqual(creatorsInherited(), false);
 
     systemCommonAuthorsEnabled = null;
     libraryCommonAuthorsEnabledOverridden = false;
@@ -609,7 +596,7 @@ async function flush() {
     document.getElementById('settings-form').inert = true;
     await controller.load({ silent: true });
     assert.strictEqual(commonAuthorsEnabled.checked, false, 'A null System feature value presents as unchecked.');
-    assert.strictEqual(commonAuthorsEnabled.disabled, true);
+    assert.strictEqual(commonAuthorsEnabled.disabled, false);
     assert.strictEqual(commonAuthorsOptions.hidden, true);
     assert.strictEqual(commonAuthorsOptions.disabled, true);
     assert.strictEqual(document.activeElement, commonAuthorsOverride,
@@ -622,33 +609,29 @@ async function flush() {
     assert.strictEqual(commonAuthorsEnabled.checked, false, 'Inherited false remains collapsed after accepted refresh.');
     assert.strictEqual(commonAuthorsOptions.hidden, true);
 
-    setChecked(commonAuthorsOverride, true);
     assert.strictEqual(commonAuthorsEnabled.checked, false, 'A fresh local override begins at the accepted inherited false value.');
     setChecked(commonAuthorsEnabled, true);
-    setChecked(commonAuthorsOverride, false);
+    reset('commonAuthorsEnabled');
     assert.strictEqual(commonAuthorsEnabled.checked, false,
       'Resetting a local true draft shows the latest authoritative System false value.');
     assert.strictEqual(commonAuthorsOptions.hidden, true);
 
-    setChecked(timeoutOverride('outstandingTimeoutEnabled'), true);
     setChecked(outstandingEnabled, false);
-    setChecked(timeoutOverride('outstandingTimeoutEnabled'), false);
+    reset('outstandingTimeoutEnabled');
     assert.strictEqual(outstandingEnabled.checked, true);
     controller.setStaff({
       id: '3', tenantId: 'tenant-1', objectId: 'object-3', role: 'admin', organizationId: 2
     });
     await controller.activate();
-    assert.strictEqual(timeoutOverride('outstandingTimeoutEnabled').checked, false);
+    assert.strictEqual(overridden('outstandingTimeoutEnabled'), false);
     assert.strictEqual(outstandingEnabled.checked, true,
       'A replacement staff identity reloads the accepted System value rather than restoring a retired local override draft.');
-    assert.strictEqual(commonAuthorsOverride.checked, false);
+    assert.strictEqual(overridden('commonAuthorsEnabled'), false);
     assert.strictEqual(commonAuthorsEnabled.checked, false);
     assert.strictEqual(commonAuthorsOptions.hidden, true);
-    setChecked(commonAuthorsOverride, true);
     assert.strictEqual(commonAuthorsEnabled.checked, false,
       'A replacement staff identity cannot restore a retired local common-creators draft.');
     assert.strictEqual(commonAuthorsOptions.hidden, true);
-    setChecked(timeoutOverride('outstandingTimeoutEnabled'), true);
     assert.strictEqual(outstandingEnabled.checked, true,
       'Accepted context population clears the previous identity’s timeout draft cache.');
 
@@ -674,6 +657,22 @@ async function flush() {
     assert.equal(suggestionInputEvents, eventsBeforeRetiredClick,
       'A retained placeholder option cannot mutate a retired account context.');
     assert.equal(controller.isDirty(), false);
+
+    const acceptedReference = rejectionTemplate.value;
+    systemTimeoutValues.outstandingTimeoutRejectionTemplateId = '9007199254740997';
+    await controller.load({ silent: true });
+    controller.activatePanel('workflow');
+    reset('outstandingTimeoutRejectionTemplateId');
+    assert.equal(rejectionTemplate.value, '9007199254740997',
+      'A pending reset preserves the inherited reference even when its template is unavailable.');
+    assert.match(rejectionTemplate.selectedOptions[0].textContent, /Unavailable rejection template/);
+    assert.equal(controller.isDirty(), true);
+    systemTimeoutValues.outstandingTimeoutRejectionTemplateId = null;
+    await controller.load({ silent: true });
+    assert.equal(rejectionTemplate.value, acceptedReference, 'Discard/reload restores the accepted Library reference.');
+    assert.equal(controller.isDirty(), false);
+    assert.doesNotMatch(document.getElementById('settings-message').textContent, /using the System value is pending/,
+      'Accepted Discard/reload retires the pending-reset announcement.');
 
     dom.window.close();
     console.log('Non-super-admin settings scope survives initial option population and save');

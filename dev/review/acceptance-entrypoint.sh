@@ -61,6 +61,7 @@ check_children() {
 
 mkdir -p /artifacts /review/logs
 node /review/runtime.cjs prepare "$@"
+export REVIEW_SUITE="$(node -p "require('/artifacts/results.json').suite")"
 source /review/runtime.env
 export REVIEW_SQL_SERVER=localhost,1433 REVIEW_DATABASE_NAME=AsapReview
 export REVIEW_SA_PASSWORD

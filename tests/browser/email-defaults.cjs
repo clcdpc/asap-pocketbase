@@ -87,9 +87,9 @@ async function main() {
     for (const item of expected) {
       assert.equal(await field(item.key).locator('input[type=text]').inputValue(), item.subject + ' {{barcode}}');
       assert.equal(await field(item.key).locator('textarea').inputValue(), item.body + '\n\n{{firstName}} {{lastName}}');
-      assert.equal(await field(item.key).locator('textarea').isDisabled(), true);
+      assert.equal(await field(item.key).locator('textarea').isDisabled(), false);
     }
-    await field('suggestion_submitted').locator('.settings-template-override').check();
+
     await field('suggestion_submitted').locator('textarea').fill('Library receipt {{title}} for {{name}}');
     await save();
     const overridden = (await snapshot(library)).stored.templates.find(row => String(row.organizationId) === library);

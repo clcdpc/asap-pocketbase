@@ -123,7 +123,7 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(legend('auto-promote'), 'Suggestion and eligibility');
     assert.strictEqual(legend('patron-code-picker'), 'Patron code eligibility');
     assert.deepStrictEqual(controls(fieldset('patron-code-picker')), [
-      'patron-code-eligibility-enabled', 'patron-codes-use-system', 'patron-code-picker',
+      'patron-code-eligibility-enabled', 'patron-code-picker',
       'patron-code-selection', 'patron-code-eligibility-message'
     ]);
     const patronCodeEligibility = document.getElementById('patron-code-eligibility');
@@ -200,7 +200,7 @@ const { JSDOM } = require('jsdom');
     assert.equal(commonAuthorsOptions.contains(commonAuthorsEnabled), false,
       'The controlling checkbox remains outside the hidden options.');
     assert.deepStrictEqual(controls(commonAuthorsOptions), [
-      'common-authors-label', 'common-authors-help', 'common-authors-message', 'common-creators-use-system'
+      'common-authors-label', 'common-authors-help', 'common-authors-message'
     ]);
     for (const id of ['add-common-creator', 'common-creators-editor']) {
       assert.ok(commonAuthorsOptions.contains(document.getElementById(id)), `${id} stays inside the collapsed options.`);
@@ -315,7 +315,7 @@ const { JSDOM } = require('jsdom');
     assert.strictEqual(new Set(modes.map(select => select.getAttribute('aria-label'))).size, modes.length,
       'Requirement names distinguish every field and configured format.');
     const cards = [...root.querySelectorAll('#format-rules-editor [data-rule-code]')];
-    for (const card of cards) {
+    for (const [index, card] of cards.entries()) {
       const toggle = card.querySelector('[data-rule-toggle]');
       const panel = document.getElementById(toggle.getAttribute('aria-controls'));
       assert.ok(panel && panel.hidden && card.contains(panel));
@@ -324,7 +324,7 @@ const { JSDOM } = require('jsdom');
       assert.strictEqual(card.querySelectorAll('button button').length, 0);
       assert.ok([...card.querySelectorAll('.settings-row-actions button')]
         .every(button => !toggle.contains(button) && button.getAttribute('aria-label')
-          .includes(`Shared format label (${card.dataset.ruleCode})`)));
+          .includes(`Shared format label, format ${index + 1}`)));
       toggle.click();
       assert.strictEqual(panel.hidden, false);
       assert.strictEqual(toggle.getAttribute('aria-expanded'), 'true');

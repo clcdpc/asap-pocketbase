@@ -3068,14 +3068,14 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     assert.equal(await page.evaluate(() => window.__copiedPatronText),
       await page.locator('#patron-loader-markup').inputValue());
     await page.locator('#settings-nav-workflow').click();
-    await page.locator('#patron-codes-use-system').uncheck();
+
     while (await page.locator('#patron-codes-editor button').count()) await page.locator('#patron-codes-editor button').first().click();
     await page.locator('#patron-code-picker').fill('Adult');
     await page.locator('#patron-code-picker').press('ArrowDown');
     await page.locator('#patron-code-picker').press('Enter');
     assert.ok(await page.locator('#patron-codes-editor [data-code-id]').count() > 0);
     while (await page.locator('#patron-codes-editor button').count()) await page.locator('#patron-codes-editor button').first().click();
-    await page.locator('[data-setting-key="patronCodeEligibilityEnabled"] .settings-override-toggle').check();
+
     await page.locator('#patron-code-eligibility-enabled').check();
     await page.locator('#patron-code-warning').filter({ hasText: /allows all patron codes/ }).waitFor();
     await page.locator('#settings-nav-patron').click();
@@ -3592,7 +3592,7 @@ async function runStaffRoster(browser, args, axeSource, report) {
     const note = page.locator('#patron-login-note'), originalNote = await note.inputValue();
     await note.fill('Roster native validation ownership probe');
     await page.locator('#settings-save').click();
-    await page.locator('#settings-message').filter({ hasText: 'competing Settings draft' }).waitFor();
+    await page.locator('#settings-message').filter({ hasText: 'unsaved draft is blocking this action' }).waitFor();
     assert.equal(writes.length, 0);
     await note.fill(originalNote);
     await page.locator('#settings-nav-staff').click();
@@ -3613,14 +3613,14 @@ async function runStaffRoster(browser, args, axeSource, report) {
     await note.fill('Competing global Settings draft');
     await page.locator('#settings-nav-staff').click();
     await firstRow.getByRole('button', { name: 'Save changes', exact: true }).click();
-    await page.locator('#settings-message').filter({ hasText: 'competing Settings draft' }).waitFor();
+    await page.locator('#settings-message').filter({ hasText: 'unsaved draft is blocking this action' }).waitFor();
     assert.equal(writes.length, 1);
     await disclosure.click(); await disclosure.click();
     assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Rosa Zulu');
     assert.equal(await secondRow.getByLabel(/^Display name/).inputValue(), 'Independent draft');
     await page.locator('#settings-nav-patron').click(); await note.fill(originalNote); await page.locator('#settings-nav-staff').click();
-    await page.waitForFunction(() => !document.getElementById('settings-message').textContent.includes('competing Settings draft') &&
-      !document.getElementById('app-status').textContent.includes('competing Settings draft'));
+    await page.waitForFunction(() => !document.getElementById('settings-message').textContent.includes('blocking this action') &&
+      !document.getElementById('app-status').textContent.includes('blocking this action'));
     await capture('desktop', 'staff-roster-independent-drafts');
     let failNextRoster = true;
     const failCommittedReview = async route => {
@@ -3688,13 +3688,13 @@ async function runStaffRoster(browser, args, axeSource, report) {
     assert.equal(order.some((row, index) => row.inactive && order.slice(index + 1).some(next => !next.inactive)), false);
     await capture('desktop', 'staff-roster-saved-reordered');
     assert.equal(await page.locator('#settings-save-title').textContent(), 'No changes');
-    assert.equal((await page.locator('#settings-message').textContent()).includes('competing Settings draft'), false);
-    assert.equal((await page.locator('#app-status').textContent()).includes('competing Settings draft'), false);
+    assert.equal((await page.locator('#settings-message').textContent()).includes('blocking this action'), false);
+    assert.equal((await page.locator('#app-status').textContent()).includes('blocking this action'), false);
 
     await firstRow.getByLabel(/^Display name/).fill('Lifecycle draft');
     const beforeLifecycle = writes.length;
     await decideConfirmation(page, () => firstRow.getByRole('button', { name: 'Deactivate', exact: true }).click(), dialog => dialog.accept());
-    await page.locator('#settings-message').filter({ hasText: 'competing Settings draft' }).waitFor();
+    await page.locator('#settings-message').filter({ hasText: 'unsaved draft is blocking this action' }).waitFor();
     assert.equal(writes.length, beforeLifecycle); assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Lifecycle draft');
     await decideConfirmation(page, () => page.locator('#staff-refresh').click(), dialog => dialog.dismiss());
     assert.equal(await firstRow.getByLabel(/^Display name/).inputValue(), 'Lifecycle draft');
