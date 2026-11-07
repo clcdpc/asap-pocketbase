@@ -1,5 +1,29 @@
 # ASAP automated acceptance
 
+The focused `i467` suite checks Search ASAP against a pinned application in a
+fresh disposable SQL Server 2022 runtime with the normal reviewer cookie:
+
+```powershell
+.\scripts\review\Invoke-AsapReview.ps1 -Commit <full-application-sha> -Suite i467
+```
+
+Seven read-only scenarios cover all seven status/type groups, literal and exact
+matching, full patron names, independent library/all-library counts, stable
+pagination, entry from five staff sections, keyboard/IME/focus, full results,
+fresh typed details, failure/retry/stale responses, Settings draft cancellation,
+and desktop/mobile/short/native-200% geometry. Existing synthetic fixtures are
+reused without changing their values. Each scenario verifies that the fixture
+rows/versions and outbox evidence are unchanged. The existing browser, external
+request, image, overflow and serious/critical axe guards remain active.
+
+The exact same-origin `POST /api/asap/staff/search` is a read, including with
+`-ReadOnly`; it is not recorded as a workflow mutation. No sibling path, other
+method or remote request receives this exemption. Retained guard tests prove
+the boundary. This suite does not impersonate library staff, alter identities,
+or replace the retained direct-HTTP role/revocation tests and 12,038-row SQL
+performance receipt. Those two coverage-gap rows and actual human visual/screen
+reader acceptance stay explicit in its report. See [i467-evidence.md](i467-evidence.md).
+
 The focused `i471` suite checks Settings identities and history, Add rule,
 inheritance, compact rows, draft blockers and save recovery using disposable SQL.
 Run from this tooling checkout against an immutable application commit:
