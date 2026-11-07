@@ -103,6 +103,7 @@ async function until(predicate, message) {
   });
   await fixture(async ({ load, get, dom }) => {
     const { createSessionIdentity } = await load('session-identity');
+    const { createClaimsFilter } = await load('claims-filter');
     const { createTitleQueue } = await load('queues');
     const staff = { id: '20', tenantId: 'a', authenticationEmail: 'a@example.org', role: 'super_admin', organizationId: 1 };
     const session = createSessionIdentity(); session.accept(staff);
@@ -127,7 +128,7 @@ async function until(predicate, message) {
       capabilities: { allowedActions: ['purchase', 'reject', 'alreadyOwn', 'silentClose'] },
       research: { patronId: index + 1, leapPatronUrlPattern: 'https://catalog.example.org/patron/{{patron-id}}' }
     })).reverse();
-    const queue = createTitleQueue({ root: get('#queue-view'), sessionIdentity: session, getContext: () => context,
+    const queue = createTitleQueue({ root: get('#queue-view'), sessionIdentity: session, claimsFilter: createClaimsFilter({ sessionIdentity: session }), getContext: () => context,
       announce() {}, onOpen: (...args) => opened.push(args), onNewSuggestion: (...args) => created.push(args),
       polarisLookup: { open: value => searches.push(value), close: value => closed.push(value) },
       onScopeIntent() {}, onStatusIntent() {}, onScopeAccepted() {}, onLibraries() {}, onRefreshed() {}, onRendered() {},
@@ -139,7 +140,7 @@ async function until(predicate, message) {
       logError(...args);
     };
     try {
-    queue.setStaff(staff); await queue.refresh();
+    queue.setStaff(session.preferences()); await queue.refresh();
     const rows = () => [...get('#request-grid').querySelectorAll('tbody tr')];
     const first = () => rows()[0];
     await until(() => first()?.querySelector('.request-title-link'), 'Real Grid.js renders request title links.');
@@ -246,7 +247,7 @@ async function until(predicate, message) {
     const libraryStaff = { ...staff, role: 'staff', organizationId: 3 };
     session.accept(libraryStaff); previousActorButton.click();
     assert.equal(opened.length, previousOpens, 'A role/library identity replacement revokes existing controls immediately');
-    queue.clear(); queue.setStaff(libraryStaff); await queue.refresh();
+    queue.clear(); queue.setStaff(session.preferences()); await queue.refresh();
     await until(() => first()?.querySelector('[data-request-action]'), 'Authorized library staff receive their refreshed server capabilities');
     for (const [status, claim, capabilities, expected] of [
       ['closed', null, { allowedActions: ['reopen'] }, ['reopen']],

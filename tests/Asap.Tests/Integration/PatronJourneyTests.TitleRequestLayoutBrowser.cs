@@ -93,8 +93,8 @@ public sealed partial class PatronJourneyTests
                 client.BaseAddress!.GetLeftPart(UriPartial.Authority), artifacts);
             Assert.AreEqual(0, exitCode, $"{artifacts}{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "browser-results.json")));
-            Assert.AreEqual(4, report.RootElement.GetProperty("viewportMatrix").GetArrayLength());
-            Assert.AreEqual(12, report.RootElement.GetProperty("resizeOnly").GetArrayLength());
+            Assert.AreEqual(5, report.RootElement.GetProperty("viewportMatrix").GetArrayLength());
+            Assert.AreEqual(13, report.RootElement.GetProperty("resizeOnly").GetArrayLength());
             Assert.AreEqual(2, report.RootElement.GetProperty("nativeZoom").GetArrayLength());
         }
         finally

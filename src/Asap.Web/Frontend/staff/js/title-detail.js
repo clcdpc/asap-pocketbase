@@ -3,7 +3,7 @@ import { createLatestLoad } from '../../shared/latest-load.js';
 import { createDraftScope } from './draft-scope.js';
 import { confirmAction, controlSnapshot } from './confirmation.js';
 import { createRequestEditor } from './request-editor.js';
-import { researchRecordValue } from './research.js';
+import { researchRecordUrl, researchRecordValue } from './research.js';
 import { createRequestWorkflows } from './request-workflows.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
 import { element, icon, commandButton, statusLabel, dateTime, text, closeReasonLabel, timeoutLabel, addDetail } from './ui.js';
@@ -500,6 +500,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     };
     const footerRoot = element('div', { className: 'request-footer-slot' });
     const panels = new Map(), tabs = new Map();
+    let updatePatronResearch = () => {};
     function activateTab(name, focus = false) {
       if (!live() || !panels.has(name)) return;
       selectedTab = name;
@@ -542,6 +543,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     });
     editor = createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot,
       closeDetail: () => host.requestClose(), onDirtyChange: dirty => { if (live()) updateBibLinkDraftStatus(dirty); },
+      onResearchConfiguration: research => { if (live()) updatePatronResearch(research); },
       verified, retained, request: send });
     workflows = createRequestWorkflows({ context, editor, announce, request: send });
     const status = statusLabel(request.status);
@@ -594,7 +596,32 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
 
     const details = element('dl', { className: 'detail-grid' });
     addDetail(details, 'Patron', patronName).replaceChildren(patronValue);
-    addDetail(details, 'Barcode', request.barcode).replaceChildren(researchRecordValue(request.barcode, request.research, 'patron'));
+    const barcodeValue = addDetail(details, 'Barcode', request.barcode);
+    barcodeValue.replaceChildren(researchRecordValue(request.barcode, request.research, 'patron'));
+    function updateRecordLink(container, value, research) {
+      if (!live() || !container.isConnected) return;
+      const currentLink = container.firstElementChild;
+      if (!currentLink) return;
+      const next = researchRecordValue(value, research, 'patron');
+      if (currentLink.tagName === 'A' && next.tagName !== 'A') return;
+      if (currentLink.tagName === next.tagName) {
+        if (next.tagName === 'A') {
+          if (currentLink.getAttribute('href') !== next.getAttribute('href')) {
+            currentLink.setAttribute('href', next.getAttribute('href'));
+          }
+          currentLink.setAttribute('target', '_blank');
+          currentLink.setAttribute('rel', 'noopener noreferrer');
+        }
+        if (currentLink.textContent !== next.textContent) currentLink.textContent = next.textContent;
+        return;
+      }
+      currentLink.replaceWith(next);
+    }
+    updatePatronResearch = research => {
+      if (!live() || !researchRecordUrl(research, 'patron')) return;
+      updateRecordLink(patronValue, patronName, research);
+      updateRecordLink(barcodeValue, request.barcode, research);
+    };
     const email = text(request.email, '');
     const emailCell = addDetail(details, 'Email', email);
     if (email) {

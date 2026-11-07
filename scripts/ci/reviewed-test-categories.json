@@ -28,6 +28,7 @@
     "Asap.Tests.Integration.PatronJourneyTests.RequestEmailActivityBrowserPreservesDurableHistoryReferencesDraftsAndAuthorizedLayouts",
     "Asap.Tests.Integration.PatronJourneyTests.SettingsBrowserJourneyRoundTripsEditorSnapshotsThroughRealSqlAndHttp",
     "Asap.Tests.Integration.PatronJourneyTests.SettingsEmailTestBrowserDispatchesAutomaticallyThroughRecordingPostmarkAndObservesSameReference",
+    "Asap.Tests.Integration.PatronJourneyTests.SharedClaimsBrowserRetainsExplicitSelectionAcrossBothSqlQueuesAndActorReloads",
     "Asap.Tests.Integration.PatronJourneyTests.StaffBrowserJourneyRunsOnKestrelWithRealSqlScopeAndRecoveryBarriers",
     "Asap.Tests.Integration.PatronJourneyTests.StaffPresentationBrowserPreservesHeaderNavigationLookupOrderAndTabGeometry",
     "Asap.Tests.Integration.PatronJourneyTests.StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope",

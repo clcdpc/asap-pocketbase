@@ -450,3 +450,108 @@ module.exports.verifyRoster = async function verifyStaffRosterNativeZoom({ baseU
   assert.deepEqual(errors, []); assert.deepEqual(externalRequests, []);
   return states;
 };
+
+module.exports.verifyAnalytics = async function verifyStaffAnalyticsNativeZoom({ baseURL, artifacts, headers }) {
+  const states = [], errors = [], externalRequests = [];
+  const extension = path.join(__dirname, 'native-zoom-extension');
+  const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
+  for (const width of [1280, 1440]) {
+    const context = await chromium.launchPersistentContext(path.join(artifacts, `analytics-zoom-profile-${width}`), {
+      channel: 'chromium', headless: true, viewport: null, timezoneId: 'America/Los_Angeles',
+      extraHTTPHeaders: headers,
+      args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`, `--window-size=${width},900`]
+    });
+    try {
+      await context.route('**/*', route => {
+        if (new URL(route.request().url()).origin === new URL(baseURL).origin) return route.continue();
+        externalRequests.push(route.request().url()); return route.abort();
+      });
+      const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+      const page = context.pages()[0] || await context.newPage();
+      page.on('pageerror', error => errors.push(error.message)); rejectNativeDialogs(page, errors);
+      const requests = [];
+      page.on('request', request => {
+        const url = new URL(request.url());
+        if (request.method() === 'GET' && url.pathname === '/api/asap/staff/analytics') requests.push(url);
+      });
+      await page.goto(`${baseURL}/staff/?stage=analytics`, { waitUntil: 'networkidle' });
+      await page.waitForFunction(() => document.querySelector('.analytics-status')?.textContent.includes('Analytics report updated.'));
+      const ratio = await page.evaluate(() => devicePixelRatio);
+      const zoom = await worker.evaluate(async origin => {
+        const tab = (await chrome.tabs.query({})).find(item => item.url.startsWith(origin));
+        if (!tab) throw new Error('The Analytics tab must exist before changing zoom.');
+        await chrome.tabs.setZoomSettings(tab.id, { mode: 'automatic', scope: 'per-tab' });
+        await chrome.tabs.setZoom(tab.id, 2);
+        return chrome.tabs.getZoom(tab.id);
+      }, new URL(baseURL).origin);
+      assert.equal(zoom, 2);
+      await page.waitForFunction(prior => Math.abs(devicePixelRatio / prior - 2) < .01, ratio);
+
+      const range = page.locator('#analytics-date-range');
+      await range.focus(); await page.keyboard.press('End'); await page.keyboard.press('Enter');
+      await page.locator('.analytics-custom-range:not([hidden])').waitFor();
+      const start = page.locator('#analytics-start-date'), end = page.locator('#analytics-end-date');
+      const apply = page.locator('#analytics-apply-range');
+      await start.fill('2026-11-01'); await end.fill('2026-11-01');
+      const reportResponse = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET' && url.pathname === '/api/asap/staff/analytics' &&
+          url.searchParams.get('range') === 'custom' && url.searchParams.get('startDate') === '2026-11-01' &&
+          url.searchParams.get('endDate') === '2026-11-01' && response.status() === 200;
+      });
+      await apply.focus(); await page.keyboard.press('Enter');
+      const response = await reportResponse;
+      const report = await response.json();
+      await page.waitForFunction(() => document.querySelector('.analytics-status')?.textContent.includes('Analytics report updated.'));
+      assert.equal(report.dateRange.startDate, '2026-11-01');
+      assert.equal(report.dateRange.endDate, '2026-11-01');
+      assert.equal(report.dateRange.timeZoneId, 'America/New_York');
+
+      const scan = async name => {
+        await page.evaluate(axe);
+        const result = await page.evaluate(async () => ({
+          violations: (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)),
+          width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
+          overflow: document.documentElement.scrollWidth > innerWidth, devicePixelRatio,
+          visualViewportScale: visualViewport.scale, htmlZoom: getComputedStyle(document.documentElement).zoom,
+          bodyZoom: getComputedStyle(document.body).zoom,
+          images: [...document.images].filter(node => node.getClientRects().length).every(node => node.complete && node.naturalWidth > 0),
+          controls: [...document.querySelectorAll('#analytics-scope, #analytics-date-range, #analytics-start-date, #analytics-end-date, #analytics-apply-range')]
+            .filter(node => node.getClientRects().length).map(node => {
+              const bounds = node.getBoundingClientRect();
+              return { id: node.id, left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom };
+            }),
+          focusedControl: document.activeElement.id
+        }));
+        assert.deepEqual(result.violations, [], `${width}/${name}: serious or critical axe findings`);
+        assert.ok(result.scrollWidth <= result.width, `${width}/${name}: horizontal overflow`);
+        assert.equal(result.images, true);
+        assert.ok(Math.abs(result.devicePixelRatio / ratio - 2) < .01);
+        assert.equal(result.visualViewportScale, 1);
+        assert.equal(result.htmlZoom, '1'); assert.equal(result.bodyZoom, '1');
+        assert.equal(result.focusedControl, name === 'analytics-custom-applied' ? 'analytics-apply-range' : 'analytics-end-date');
+        assert.ok(result.controls.length >= 5);
+        assert.deepEqual(result.controls.filter(control => control.left < -1 || control.right > result.width + 1), []);
+        const session = await context.newCDPSession(page);
+        const metrics = await session.send('Page.getLayoutMetrics');
+        assert.equal(metrics.visualViewport.zoom, 2);
+        const capture = await session.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        await fs.writeFile(path.join(artifacts, `native-zoom-${width}-${name}.png`), Buffer.from(capture.data, 'base64'));
+        await session.detach();
+        states.push({ physicalWidth: width, name, actualBrowserZoom: zoom, cdpZoom: metrics.visualViewport.zoom, ...result });
+      };
+      await scan('analytics-custom-applied');
+
+      await start.fill('2026-11-02'); await end.fill('2026-11-01');
+      const beforeInvalid = requests.length;
+      await apply.focus(); await page.keyboard.press('Enter');
+      assert.equal(requests.length, beforeInvalid, `${width}: reversed range must not dispatch at native zoom`);
+      assert.equal(await end.getAttribute('aria-invalid'), 'true');
+      assert.equal(await end.evaluate(node => node === document.activeElement), true);
+      await scan('analytics-custom-invalid');
+      assert.deepEqual(errors, [], `${width}: Analytics page error`);
+      assert.deepEqual(externalRequests, [], `${width}: unexpected external request`);
+    } finally { await context.close(); }
+  }
+  return states;
+};

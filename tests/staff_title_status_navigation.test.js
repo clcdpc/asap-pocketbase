@@ -14,6 +14,7 @@ async function until(predicate, message) {
 (async () => {
   await fixture(async ({ load, get, dom }) => {
     const { createSessionIdentity } = await load('session-identity');
+    const { createClaimsFilter } = await load('claims-filter');
     const { createNavigationController } = await load('navigation');
     const { createTitleQueue, createCopyQueue } = await load('queues');
     const { createRouter } = await load('router');
@@ -38,7 +39,7 @@ async function until(predicate, message) {
       views: { queue: { isReady: value => title.isReady(value), refresh: options => title.refresh(options),
         prepare: value => title.prepare(value), find: id => title.find(id), libraryScope: () => '2', resetFilters: () => title.resetFilters() },
         'additional-copies': { refresh: options => copy.refresh(options) } } });
-    const common = { sessionIdentity: session, getContext: navigation.context, announce() {}, onOpen: id => opened.push(id),
+    const common = { sessionIdentity: session, claimsFilter: createClaimsFilter({ sessionIdentity: session }), getContext: navigation.context, announce() {}, onOpen: id => opened.push(id),
       onScopeAccepted: navigation.queueScopeAccepted, onLibraries() {}, onRefreshed() {}, onScopeIntent() {} };
     const title = createTitleQueue({ ...common, root: get('#queue-view'), onRendered: () => rendered++,
       onStatusIntent: status => navigation.changeQueueContext('queue', { status }),
@@ -56,7 +57,7 @@ async function until(predicate, message) {
       request: async url => { copies.push(url); return { scope: navigation.context().scope,
         status: navigation.context().additionalCopyStatus, items: [], availableLibraries: [] }; } });
     try {
-      navigation.align({ scope: '2' }); title.setStaff(staff); copy.setStaff(staff);
+      navigation.align({ scope: '2' }); title.setStaff(session.preferences()); copy.setStaff(session.preferences());
       await title.refresh();
       await until(() => get('#request-grid .request-title-link'), 'Initial title rows render.');
       const counts = () => [...get('#status-tabs').querySelectorAll('[data-status]')].map(tab => tab.getAttribute('aria-label'));

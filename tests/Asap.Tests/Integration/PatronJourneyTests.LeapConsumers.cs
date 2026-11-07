@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
+using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -36,9 +37,13 @@ public sealed partial class PatronJourneyTests
         };
         var unpinned = new TitleRequest
         {
-            LibraryOrganizationId = 2, Barcode = "unpinned-no-native-id", Title = "LEAP unverified " + suffix,
+            LibraryOrganizationId = 2, Barcode = "20000000000002", NameFirst = "Late", NameLast = "Resolved",
+            Title = "LEAP unverified " + suffix,
             MaterialFormatId = format.Id, Status = "suggestion", CreatedUtc = now, UpdatedUtc = now
         };
+        var expectedLatePatronId = await factory.Services.GetRequiredService<IPatronProvider>()
+            .GetPatronIdAsync(unpinned.Barcode, 2, CancellationToken.None);
+        Assert.IsTrue(expectedLatePatronId is > 0, "The deterministic fixture provider must resolve the missing snapshot.");
         var copy = new AdditionalCopyRequest
         {
             LibraryOrganizationId = 2, BibId = 9001, Title = "LEAP copy " + suffix,
@@ -64,7 +69,8 @@ public sealed partial class PatronJourneyTests
             var (exitCode, stdout, stderr) = await RunBrowserScriptAsync(root, "leap-consumers.cjs",
                 client.BaseAddress!.GetLeftPart(UriPartial.Authority), artifacts,
                 actor.Id.ToString(CultureInfo.InvariantCulture), actor.EntraTenantId.ToString(), actor.AuthenticationEmail,
-                request.Id.ToString(CultureInfo.InvariantCulture), unpinned.Id.ToString(CultureInfo.InvariantCulture), copy.Id.ToString(CultureInfo.InvariantCulture));
+                request.Id.ToString(CultureInfo.InvariantCulture), unpinned.Id.ToString(CultureInfo.InvariantCulture),
+                expectedLatePatronId!.Value.ToString(CultureInfo.InvariantCulture), copy.Id.ToString(CultureInfo.InvariantCulture));
             Assert.AreEqual(0, exitCode, $"{artifacts}{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
         }
         finally

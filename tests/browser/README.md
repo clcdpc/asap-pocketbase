@@ -6,11 +6,14 @@ journeys use the Testing Kestrel fixtures:
 
 - `patron.cjs`: 10 desktop/mobile patron states and 3 authentication/session
   race scenarios.
-- `staff.cjs`: 61 desktop/mobile staff states covering scope, recovery,
+- `staff.cjs`: 81 desktop/mobile staff states covering scope, recovery,
   queue, analytics, assignment, stale mutations, draft guards, route/history
   round trips, repeated Operations actions, keyboard workflows, current-actor
   revisions, operational catalog retirement/reactivation after Settings commits,
   and stale rejection, queued notification, reopen and silent close.
+  Analytics coverage includes unapplied custom drafts, scope retention,
+  keyboard date entry and Apply, business-date and DST summaries, retry recovery,
+  and a library-only mobile view.
 - `request-links.cjs`: 18 desktop/mobile success and failure states covering
   native bigint links, scope, missing records, and type-qualified request links.
 - `patron-submit-session.cjs`: controlled frontend response/session races.
@@ -46,7 +49,12 @@ journeys use the Testing Kestrel fixtures:
   overlay and persistent scrollbars. CSS zoom is automated reflow evidence;
   it does not establish human browser-zoom acceptance.
 - `leap-consumers.cjs`: native-ID links in queues, details and verified patron
-  context, safe plain-text fallbacks and a separate malformed-response probe.
+  context, upper patron links resolved after a missing snapshot, no duplicate
+  lower patron action, safe plain-text fallbacks and a separate malformed-response probe.
+- `shared-claims.cjs`: all four retained Claims choices and exact SQL-backed
+  rows across both queues, every status, two libraries and two staff identities;
+  Profile defaults, detail/navigation/refresh, claim mutation, same-session reload,
+  delayed prior-account reads and safe malformed/disabled-storage fallbacks.
 - `saved-email-test.cjs`: saved sender/recipient/mode context, draft guards,
   one click through the normal automatic worker and recording Postmark adapter,
   durable status/reference reload and scoped Operations handoff. No live mail.
@@ -62,7 +70,8 @@ journeys use the Testing Kestrel fixtures:
   format-rules-collapsed, format-rules-expanded and patron-placeholder. The 18
   checkpoints retain both Format-rule scans and the action menu's full offscreen
   focus restoration. The checks require zoom 2, doubled DPR, CDP zoom 2, CSS zoom 1 and
-  pinch scale 1; CSS zoom is not substituted for this acceptance evidence.
+  pinch scale 1; CSS zoom is not substituted for this acceptance evidence. Its
+  Analytics helper adds four applied-range and invalid-range checkpoints at 200%.
 
 - `frontend-cache.cjs`: published staff/patron files served through Program,
   with a controlled deployment, real Chromium cache, stale-module negative

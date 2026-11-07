@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const [baseURL, artifacts, staffId, tenantId, email, requestId, unverifiedRequestId, copyId] = process.argv.slice(2);
+const [baseURL, artifacts, staffId, tenantId, email, requestId, unverifiedRequestId, expectedLatePatronId, copyId] = process.argv.slice(2);
 
 (async () => {
   const browser = await chromium.launch({ headless: true });
@@ -47,11 +47,43 @@ const [baseURL, artifacts, staffId, tenantId, email, requestId, unverifiedReques
     await titleRow.locator('a.grid-open').click();
     await page.locator('#request-dialog[open]').waitFor();
     await checkAnchor(page.locator('#request-dialog .polaris-edit-tools a[href*="#bib/"]'), bib);
-    await checkAnchor(page.locator('#request-dialog dd a[href*="#patron/"]').first(), patron);
+    const patronName = page.locator('#request-dialog .detail-grid dd').nth(0);
+    const barcode = page.locator('#request-dialog .detail-grid dd').nth(1);
+    await checkAnchor(patronName.locator('a'), patron);
+    await checkAnchor(barcode.locator('a'), patron);
+    assert.equal(await page.locator('#request-dialog .polaris-edit-tools a[href*="#patron/"]').count(), 0,
+      'The lower research row does not duplicate patron navigation.');
+    assert.equal(await patronName.locator('.grid-new-suggestion').count(), 1,
+      'The adjacent New suggestion action appears once beside the patron name.');
+    await patronName.locator('a').focus();
+    assert.equal(await patronName.locator('a').evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('Tab');
+    assert.equal(await patronName.locator('.grid-new-suggestion').evaluate(node => node === document.activeElement),
+      true, 'Keyboard navigation reaches the adjacent New suggestion action.');
+    await barcode.locator('a').focus();
+    assert.equal(await barcode.locator('a').evaluate(node => node === document.activeElement), true);
     await scan('title-detail'); await page.keyboard.press('Escape');
     await page.locator('[data-status="suggestion"]').click();
     const unverifiedRow = page.locator('#request-grid tr').filter({ has: page.locator(`a[data-request-id="${unverifiedRequestId}"]`) });
     await unverifiedRow.waitFor(); assert.equal(await unverifiedRow.locator('a[href*="#patron/"]').count(), 0);
+    const lateResearchResponse = page.waitForResponse(response => response.url().includes('/api/asap/staff/research-configuration') &&
+      response.url().includes(`requestId=${unverifiedRequestId}`) && response.request().method() === 'GET');
+    await unverifiedRow.locator('a.grid-open').click();
+    await page.locator('#request-dialog[open]').waitFor();
+    const lateResearch = await (await lateResearchResponse).json();
+    assert.equal(lateResearch.patronId, Number(expectedLatePatronId),
+      'The SQL-backed missing-snapshot fixture resolves through the authorized deterministic provider.');
+    const latePatron = `https://leap.example.test/#patron/${expectedLatePatronId}`;
+    const lateName = page.locator('#request-dialog .detail-grid dd').nth(0);
+    const lateBarcode = page.locator('#request-dialog .detail-grid dd').nth(1);
+    await checkAnchor(lateName.locator('a'), latePatron);
+    await checkAnchor(lateBarcode.locator('a'), latePatron);
+    assert.equal(await page.locator('#request-dialog .polaris-edit-tools a[href*="#patron/"]').count(), 0,
+      'Accepted late configuration adds patron navigation beside its details only.');
+    assert.equal(await lateName.locator('.grid-new-suggestion').count(), 1);
+    await scan('late-patron-details');
+    await page.setViewportSize({ width: 390, height: 844 }); await scan('late-patron-mobile');
+    await page.keyboard.press('Escape'); await page.setViewportSize({ width: 1280, height: 900 });
     await page.locator('[data-view="additional-copies"]').click();
     const copyRow = page.locator('#additional-copy-grid tr').filter({ has: page.locator(`button[data-copy-id="${copyId}"]`) });
     await checkAnchor(copyRow.locator('a[href*="#bib/"]'), bib);

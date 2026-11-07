@@ -1,5 +1,6 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createSessionIdentity } from './session-identity.js';
+import { createClaimsFilter } from './claims-filter.js';
 import { createSessionCoordinator } from './session.js';
 import { createStaffShell } from './shell.js';
 import { createRouter } from './router.js';
@@ -21,6 +22,7 @@ import { disposeConfirmations } from './confirmation.js';
 export function createWorkflowApp() {
   const get = selector => document.querySelector(selector);
   const sessionIdentity = createSessionIdentity(), router = createRouter();
+  const claimsFilter = createClaimsFilter({ sessionIdentity });
   const detailHost = createDetailHost({ root: get('#request-dialog') });
   const shell = createStaffShell({ root: document, sessionIdentity,
     getContext: () => navigation.context(), settingsScope: () => settings.currentScope(), operationsScope: () => operations.currentScope(),
@@ -93,7 +95,7 @@ export function createWorkflowApp() {
     }
   });
 
-  const titleQueue = createTitleQueue({ root: get('#queue-view'), sessionIdentity, announce, polarisLookup,
+  const titleQueue = createTitleQueue({ root: get('#queue-view'), sessionIdentity, claimsFilter, announce, polarisLookup,
     onCatalogCommitted: result => { if (result.additionalCopyRequestId) copyQueue.markStale(); },
     getContext: navigation.context, onOpen: (id, opener, options = {}) => titleDetail.open(id, opener, { history: 'push', ...options }),
     onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) }),
@@ -121,7 +123,7 @@ export function createWorkflowApp() {
     getFocusReturn: (id, opener) => copyQueue.focusReturn(id, opener), refreshQueue: options => copyQueue.refresh(options),
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner)
   });
-  const copyQueue = createCopyQueue({ root: get('#additional-copy-view'), sessionIdentity, announce,
+  const copyQueue = createCopyQueue({ root: get('#additional-copy-view'), sessionIdentity, claimsFilter, announce,
     getContext: navigation.context, onOpen: (id, opener) => copyDetail.open(id, opener, { history: 'push' }),
     onScopeIntent: scope => navigation.changeQueueContext('additional-copies', { scope }),
     onStatusIntent: additionalCopyStatus => navigation.changeQueueContext('additional-copies', { additionalCopyStatus }),
