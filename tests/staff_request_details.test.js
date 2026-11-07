@@ -23,7 +23,7 @@ async function setup(ui, initial = source, options = {}) {
   const identity = createSessionIdentity(); identity.accept(options.actor || actor);
   const host = createDetailHost({ root: ui.get('#request-dialog') });
   let current = initial, pending = null;
-  const calls = [], quick = [], lookups = [], announcements = [];
+  const calls = [], quick = [], lookups = [], announcements = [], emailOperations = [];
   const controller = createTitleDetailController({ host, sessionIdentity: identity,
     polarisLookup: { open: context => lookups.push(context), close() {}, invalidate() {} },
     copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
@@ -32,6 +32,7 @@ async function setup(ui, initial = source, options = {}) {
     onAlign: async () => ({ scope: 'all', commit: () => 1 }), onOpened() {}, onClosed() {},
     getFocusReturn: () => null, refreshQueue: async () => true, queueSequence: () => 1,
     rememberOpened() {}, forgetUnavailable() {}, onReceipt() {}, clearReceipt() {},
+    onOpenEmailOperation: options.onOpenEmailOperation || (intent => { emailOperations.push(intent); return Promise.resolve(true); }),
     onNewSuggestion: (...args) => quick.push(args), request: async (path, init = {}) => {
       calls.push({ path, init });
       if (options.send) { const custom = options.send(path, init); if (custom !== undefined) return custom; }
@@ -43,6 +44,7 @@ async function setup(ui, initial = source, options = {}) {
     } });
   await controller.open(current.id); await settle();
   return { controller, host, identity, calls, quick, lookups, announcements, root: ui.get('#request-dialog'),
+    emailOperations,
     async show(next) { current = next; await controller.open(next.id); await settle(); },
     async start(action, next = current) { current = next; await controller.open(next.id, null, { action }); await settle(); },
     complete(next) { current = next; pending({ committed: true, request: next }); },
@@ -237,6 +239,92 @@ async function setup(ui, initial = source, options = {}) {
       await t.show({ ...source, id: '92', barcode: ' ' });
       stalePlus.click(); assert.equal(t.quick.length, 1, 'retired quick-create callback is fenced');
       assert.equal(t.root.querySelector('.grid-new-suggestion'), null);
+    } finally { t.dispose(); }
+  });
+  await fixture(async ui => {
+    const created = '2026-10-23T12:00:00.1234567Z';
+    const activity = Object.freeze([
+      Object.freeze({ id: '9007199254740993', source: 'email_event', eventType: 'email', created,
+        email: Object.freeze({ operationReference: '9223372036854775807', messageType: 'Patron confirmation',
+          outcome: 'suppressed', outcomeLabel: 'Suppressed; no email sent', reason: '<img src=x onerror=alert(1)> ' + 'R'.repeat(300),
+          intendedRecipient: '<svg onload=alert(2)> patron@example.org', deliveryMode: 'unknown',
+          isRecordedSummary: false, timestampKind: 'suppressed', operationsScope: '2' }) }),
+      Object.freeze({ id: '9007199254740992', source: 'email_event', created: '2026-10-23T12:00:00.1234567Z',
+        email: Object.freeze({ operationReference: '9007199254740993', messageType: 'Staff notification',
+          outcome: 'provider_accepted', outcomeLabel: 'Provider accepted; delivery unconfirmed',
+          reason: null, intendedRecipient: 'staff@example.org', deliveryMode: 'postmark',
+          isRecordedSummary: false, timestampKind: 'sent', operationsScope: '2' }) }),
+      Object.freeze({ id: '9007199254740993', source: 'email_summary', created,
+        email: Object.freeze({ operationReference: '9223372036854775807', messageType: 'Patron confirmation',
+          outcome: 'recorded_sent', outcomeLabel: 'Current recorded summary: sent status; delivery unconfirmed',
+          reason: null, intendedRecipient: null, deliveryMode: 'file', isRecordedSummary: true,
+          timestampKind: 'created', operationsScope: '2' }) }),
+      Object.freeze({ id: '9007199254740993', source: 'request_event', created, eventType: 'created',
+        actorType: 'system', message: 'Saved workflow event' }),
+      Object.freeze({ id: '1', source: 'email_event', created: '2026-10-23T12:00:00.1234568Z',
+        email: Object.freeze({ operationReference: '01', messageType: null, outcome: 'captured', outcomeLabel: null,
+          intendedRecipient: null, deliveryMode: 'future-mode', timestampKind: 'future-time', isRecordedSummary: false,
+          operationsScope: '2' }) }),
+      Object.freeze({ id: 'bad', source: 'email_event', created: 'not a date',
+        email: Object.freeze({ operationReference: '9223372036854775808', messageType: null, outcome: 'suppressed',
+          outcomeLabel: 'Suppressed; no email sent', reason: null, intendedRecipient: null, deliveryMode: 'unknown',
+          isRecordedSummary: false, timestampKind: 'future-time', operationsScope: '2' }) }),
+      Object.freeze({ id: '5', source: 'email_summary', created: 'not a date', email: Object.freeze({}) }),
+      Object.freeze({ id: '2', source: 'request_event', created: 'not a date', eventType: 'unknown', message: 'Missing date' })
+    ]);
+    const t = await setup(ui, { ...source, notes: 'Saved note is not system history.', activity });
+    try {
+      const rows = [...t.root.querySelectorAll('.request-activity li')];
+      assert.deepEqual(rows.map(row => row.dataset.activityId), [
+        'email_event:1', 'email_event:9007199254740993', 'email_event:9007199254740992',
+        'email_summary:9007199254740993', 'request_event:9007199254740993',
+        'email_event:bad', 'email_summary:5', 'request_event:2'
+      ], 'SQL fractional ticks, ordinal source, then exact BigInt IDs define a stable reverse chronology.');
+      assert.equal(rows[1].querySelector('code').textContent, '9223372036854775807');
+      assert.equal(rows[1].querySelectorAll('.request-email-reference-link').length, 1);
+      assert.equal(rows[1].querySelector('.request-email-fields').textContent.includes('<svg onload=alert(2)> patron@example.org'), true);
+      assert.equal(rows[1].querySelectorAll('img, svg').length, 0, 'Malicious API strings remain text.');
+      assert.equal(rows[1].textContent.includes('R'.repeat(300)), true, 'Long recorded reasons remain available and wrap in the rendered content.');
+      assert.equal(rows[1].textContent.includes('<img src=x onerror=alert(1)>'), true, 'A reason is rendered as safe text.');
+      assert.match(rows[0].textContent, /Delivery mode unknown/);
+      assert.match(rows[0].textContent, /Recorded time \(meaning unavailable\)/);
+      assert.match(rows[2].textContent, /Provider accepted; delivery unconfirmed/);
+      assert.doesNotMatch(rows[2].textContent, /Delivered/);
+      assert.match(rows[3].textContent, /File capture; no live email sent/);
+      assert.match(rows[3].textContent, /Recorded summary; earlier email activity may be incomplete/);
+      assert.match(rows[4].textContent, /Saved workflow event/);
+      assert.match(rows[5].textContent, /Email type not recorded/);
+      assert.match(rows[5].textContent, /Recorded time \(meaning unavailable\): Time not recorded/);
+      assert.match(rows[5].textContent, /Delivery mode unknown/);
+      assert.equal(rows[5].querySelector('.request-email-reference-link'), null, 'Out-of-range canonical IDs cannot become an action.');
+      assert.equal(rows[6].querySelector('.request-email-reference-link'), null, 'Missing values never create a reference action.');
+      const notes = t.root.querySelector('.edit-form textarea[maxlength="10000"]');
+      assert.equal(notes.value, 'Saved note is not system history.');
+      assert.equal(activity.length, 8, 'The frozen Activity array is retained.');
+      assert.equal(activity[0].id, '9007199254740993', 'Rendering leaves frozen DTO input unchanged.');
+      rows[1].querySelector('.request-email-reference-link').click(); await settle();
+      assert.equal(t.emailOperations.length, 1);
+      assert.equal(t.emailOperations[0].operationReference, '9223372036854775807');
+      assert.equal(t.emailOperations[0].operationsScope, '2');
+      assert.equal(typeof t.emailOperations[0].isCurrent, 'function');
+      const oldButton = rows[1].querySelector('.request-email-reference-link');
+      await t.show({ ...source, id: '91', notes: 'Saved note is not system history.', activity });
+      oldButton.click(); await settle();
+      assert.equal(t.emailOperations.length, 1, 'A detached previous detail reference cannot invoke navigation.');
+    } finally { t.dispose(); }
+  });
+  for (const [role, organizationId, operationsScope, expectedLinks] of [
+    ['admin', 2, '2', 1], ['admin', 2, '3', 0], ['staff', 2, '2', 0], ['super_admin', 1, '2', 1]
+  ]) await fixture(async ui => {
+    const item = { id: '9223372036854775807', source: 'email_event', created: '2026-10-23T12:00:00Z',
+      email: { operationReference: '9223372036854775807', messageType: 'Patron confirmation', outcomeLabel: 'Suppressed',
+        operationsScope, intendedRecipient: null, deliveryMode: 'unknown', timestampKind: 'suppressed' } };
+    const t = await setup(ui, { ...source, activity: [item] }, { actor: { ...actor, role, organizationId } });
+    try {
+      assert.equal(t.root.querySelectorAll('.request-email-reference-link').length, expectedLinks,
+        'Only authorized administrators receive a canonical exact-reference action.');
+      if (!expectedLinks) assert.equal(t.root.querySelector('.request-email-reference').textContent.includes('9223372036854775807'), true,
+        'Unauthorized viewers keep the plain exact reference.');
     } finally { t.dispose(); }
   });
 

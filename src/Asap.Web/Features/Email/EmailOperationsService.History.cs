@@ -46,9 +46,10 @@ public sealed partial class EmailOperationsService
         ["pre_send_check_pending"] = "Pre-send check pending",
         ["pre_send_cancelled"] = "Pre-send cancelled; send not started",
         ["provider_timeout"] = "Provider timed out; acceptance unconfirmed",
+        ["provider_cancelled"] = "Provider call cancelled; acceptance unconfirmed",
         ["transport_failure"] = "Transport failed; acceptance unconfirmed",
         ["ambiguous_expired_lease"] = "Expired lease; acceptance unconfirmed",
-        ["provider_start_deadline_exceeded"] = "Provider start deadline exceeded; acceptance unconfirmed",
+        ["provider_start_deadline_exceeded"] = "Provider start deadline exceeded; send not started",
         ["test_configuration_changed"] = "Saved test configuration changed",
         ["test_delivery_mode_changed"] = "Test delivery mode changed",
         ["patron_refresh_unavailable"] = "Current patron information unavailable",
@@ -204,7 +205,7 @@ public sealed partial class EmailOperationsService
         return canonical is not null && HistoryDetails.ContainsKey(canonical) ? canonical : null;
     }
 
-    private static string? HistoryDetailLabel(string? error, string? suppression)
+    internal static string? HistoryDetailLabel(string? error, string? suppression)
     {
         var labels = new[] { SafeHistoryCode(error), SafeHistoryCode(suppression) }.Where(code => code is not null)
             .Select(code => HistoryDetails[code!]).Distinct().ToArray();

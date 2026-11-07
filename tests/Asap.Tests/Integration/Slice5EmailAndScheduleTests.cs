@@ -44,7 +44,7 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
-            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @key;", ("@key", key));
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @key); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = @key;", ("@key", key));
         }
     }
 
@@ -152,7 +152,7 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
-            await context.EmailOutbox.Where(item => item.Id == row.Id).ExecuteDeleteAsync();
+            await DeleteOwnedEmailFixtureAsync(context, context.EmailOutbox.Where(item => item.Id == row.Id));
         }
     }
 
@@ -604,7 +604,7 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
-            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [Id] = @id;", ("@id", outboxId));
+            await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [Id] = @id); DELETE FROM [asap].[EmailOutbox] WHERE [Id] = @id;", ("@id", outboxId));
             await ExecuteNonQueryAsync(
                 "UPDATE [asap].[StaffUser] SET [IsActive] = 0 WHERE [Id] = @id;",
                 ("@id", admin.Id));
@@ -657,7 +657,7 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await ExecuteNonQueryAsync(
-                "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;",
+                "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @prefix;",
                 ("@prefix", $"{businessKeyPrefix}:%"));
             await DeactivateCorrectiveStaffAsync(admin.Id);
         }
@@ -771,7 +771,7 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await ExecuteNonQueryAsync(
-                "DELETE FROM [asap].[EmailOutbox] WHERE [Id] IN (@id, @markerId); DBCC CHECKIDENT ('asap.EmailOutbox', RESEED);",
+                "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [Id] IN (@id, @markerId)); DELETE FROM [asap].[EmailOutbox] WHERE [Id] IN (@id, @markerId); DBCC CHECKIDENT ('asap.EmailOutbox', RESEED);",
                 ("@id", largeId), ("@markerId", dispatchedMarkerId));
         }
     }

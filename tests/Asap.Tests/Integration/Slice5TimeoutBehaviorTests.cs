@@ -164,13 +164,14 @@ public sealed partial class PatronJourneyTests
             var timeoutMail = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
                 item.BusinessKey == $"timeout:OutstandingTimeout:{requests["timeout-suggestion"].Id}");
             Assert.AreEqual("pending", timeoutMail.Status);
+            await AssertRequestMailEvidenceAsync(timeoutMail, requests["timeout-suggestion"].Id, "timeout");
             Assert.AreEqual("system.sender@example.org", timeoutMail.FromAddress);
             Assert.AreEqual("Library Sender", timeoutMail.FromName);
         }
         finally
         {
             await ExecuteNonQueryAsync(
-                "DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = CONCAT(N'timeout:OutstandingTimeout:', @a); DELETE FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] IN (@a,@b,@c,@d); DELETE FROM [asap].[TitleRequest] WHERE [Id] IN (@a,@b,@c,@d); DELETE FROM [asap].[AdditionalCopyRequest] WHERE [Id] = @copy;",
+                "DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] = CONCAT(N'timeout:OutstandingTimeout:', @a)); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] = CONCAT(N'timeout:OutstandingTimeout:', @a); DELETE FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] IN (@a,@b,@c,@d); DELETE FROM [asap].[TitleRequest] WHERE [Id] IN (@a,@b,@c,@d); DELETE FROM [asap].[AdditionalCopyRequest] WHERE [Id] = @copy;",
                 ("@a", requestIds[0]), ("@b", requestIds[1]), ("@c", requestIds[2]), ("@d", requestIds[3]), ("@copy", copyId));
             await using var restore = await contextFactory.CreateDbContextAsync();
             var settings = await restore.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);

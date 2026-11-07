@@ -5,6 +5,8 @@ using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Data.SqlClient;
 
 namespace Asap.Web.Features.Email;
 
@@ -399,6 +401,9 @@ public sealed partial class EmailOperationsService(
             return new EmailOperationResult("email_not_retryable");
         }
 
+        var sqlConnection = (SqlConnection)context.Database.GetDbConnection();
+        var sqlTransaction = (SqlTransaction)transaction.GetDbTransaction();
+        var track = await RequestEmailEvidence.PreserveSnapshotAsync(sqlConnection, sqlTransaction, row.Id, cancellationToken);
         row.Status = "pending";
         row.NextAttemptUtc = timeProvider.GetUtcNow().UtcDateTime;
         row.LastErrorCode = null;
@@ -406,6 +411,12 @@ public sealed partial class EmailOperationsService(
         try
         {
             await context.SaveChangesAsync(cancellationToken);
+            if (track)
+            {
+                await RequestEmailEvidence.AppendAsync(sqlConnection, sqlTransaction, row.Id,
+                    $"retry:{Convert.ToHexString(expectedVersion)}", "retry_queued", null, null,
+                    row.NextAttemptUtc!.Value, cancellationToken);
+            }
             await transaction.CommitAsync(cancellationToken);
         }
         catch (DbUpdateConcurrencyException)

@@ -298,6 +298,90 @@ for (const settingsScope of ['system', '2']) {
       assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0, 'navigation never silently saves or resends');
     }));
 }
+test('request email activity uses guarded reference navigation and preserves the saved test recovery scope', () => {
+  const staff = { id: '20', role: 'super_admin', organizationId: 1, tenantId: 'activity-navigation-tenant',
+    authenticationEmail: 'activity-navigation@example.org' };
+  const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+  const reference = '9007199254740993';
+  const scope = '3';
+  const storageKey = `asap.staff.email-test.${encodeURIComponent(actorKey(staff))}.${scope}`;
+  const stored = { storageKey, operationId, id: reference, pending: true, status: 'failed', version: 'AAAAAAAAAAE=' };
+  const activity = [{ id: '9223372036854775807', source: 'email_event', eventType: 'email', actorType: 'system',
+    message: 'Suppressed; no email sent', created: '2026-10-23T12:00:00.1234567Z',
+    email: { operationReference: reference, messageKind: 'confirmation', messageType: 'Patron confirmation',
+      outcome: 'suppressed', outcomeLabel: 'Suppressed; no email sent', reason: 'Recipient domain not allowed',
+      intendedRecipient: 'patron@example.org', deliveryMode: 'unknown', isRecordedSummary: false,
+      timestampKind: 'suppressed', operationsScope: '2' } }];
+  return fixture(`?stage=operations&opSection=email&emailScope=2&emailTestScope=${scope}`, async ui => {
+    require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, () => null);
+    await until(() => !ui.get('#operations-view').hidden && ui.get('#email-test-scope').value === scope,
+      'the saved test context is selected in Operations');
+    const originalRecord = ui.dom.window.sessionStorage.getItem(storageKey);
+    assert.equal(JSON.parse(originalRecord).operationId, operationId);
+    ui.get('[data-view="queue"]').click();
+    await until(() => !ui.get('#queue-view').hidden && ui.get(`#request-grid a[data-request-id="${id}"]`),
+      'the request queue is ready');
+    ui.get(`#request-grid a[data-request-id="${id}"]`).click();
+    await until(() => ui.get('#request-dialog').open, `request detail is open: ${ui.get('#app-status').textContent}`);
+    assert.ok(ui.get(`#request-${id}-activity-tab`), `Activity tab exists after detail load: ${ui.get('#app-status').textContent}`);
+    const activityTab = ui.get(`#request-${id}-activity-tab`);
+    activityTab.click();
+    const link = ui.get(`[aria-label="Open email operation ${reference}"]`);
+    assert.ok(link);
+    const notes = ui.get('.edit-form textarea[maxlength="10000"]');
+    ui.edit('.edit-form textarea[maxlength="10000"]', 'Unsaved request note draft');
+    assert.equal(protectedUnload(ui), true, 'The request Notes field owns a real unsaved draft.');
+    link.focus(); link.click();
+    await until(() => ui.get('#confirmation-dialog .secondary-button'), 'dirty request departure asks for consent');
+    const keepEditing = ui.get('#confirmation-dialog .secondary-button');
+    assert.equal(keepEditing.textContent, 'Keep editing');
+    keepEditing.click(); await settle();
+    assert.equal(ui.get('#request-dialog').open, true);
+    assert.equal(activityTab.getAttribute('aria-selected'), 'true', 'Cancel preserves the selected Activity tab.');
+    assert.equal(notes.value, 'Unsaved request note draft', 'Cancel retains the editable Notes draft.');
+    assert.equal(ui.dom.window.document.activeElement, link, 'Cancel restores focus to the reference action.');
+    assert.equal(ui.get('#operations-view').hidden, true);
+    assert.equal(ui.calls.filter(call => new URL(call.url, 'https://localhost').pathname.endsWith('/email-operations') &&
+      new URL(call.url, 'https://localhost').searchParams.has('reference')).length, 0,
+    'Cancel stops before the exact Operations history read.');
+    assert.equal(ui.dom.window.sessionStorage.getItem(storageKey), originalRecord,
+      'Cancel leaves the saved unresolved recovery record unchanged.');
+
+    ui.allowDiscard(); link.focus(); link.click();
+    await until(() => ui.get('#confirmation-dialog .danger-button'), 'accepted discard awaits the user decision');
+    ui.get('#confirmation-dialog .danger-button').click();
+    await until(() => !ui.get('#operations-view').hidden && ui.dom.window.document.activeElement === ui.get('#email-operations-table'),
+      'accepted discard opens the exact Operations destination and focuses its stable table');
+    assert.equal(ui.get('#request-dialog').open, false, 'The request closes only after accepted departure.');
+    assert.equal(ui.get('#email-view-scope').value, '2');
+    assert.equal(ui.get('#email-test-scope').value, scope, 'Reference navigation preserves Test settings scope.');
+    assert.equal(ui.get('#email-reference-value').textContent, `Showing exact email operation ${reference}.`);
+    const listRead = ui.calls.filter(call => new URL(call.url, 'https://localhost').pathname.endsWith('/email-operations') &&
+      new URL(call.url, 'https://localhost').searchParams.has('reference')).at(-1);
+    assert.equal(new URL(listRead.url, 'https://localhost').searchParams.get('reference'), reference);
+    assert.equal(new URL(listRead.url, 'https://localhost').searchParams.get('scope'), '2');
+    assert.equal(ui.get('#email-operations-table').textContent.includes(reference), true);
+    assert.equal(ui.dom.window.sessionStorage.getItem(storageKey), originalRecord,
+      'The exact history read does not mutate saved test recovery state.');
+    assert.equal(ui.readRequest().notes, 'Saved note <b>text</b>. Email evidence belongs in Activity.',
+      'Accepted discard leaves the persisted Notes value untouched.');
+    assert.doesNotMatch(notes.value, /Suppressed; no email sent|patron@example\.org/,
+      'Request email history never contaminates the editable Notes draft.');
+    assert.equal(ui.calls.filter(call => call.init.method === 'POST').length, 0,
+      'Neither Cancel nor accepted discard saves or sends the request draft.');
+  }, { staff, request: { activity, notes: 'Saved note <b>text</b>. Email evidence belongs in Activity.' },
+    storage: new Map([[storageKey, JSON.stringify(stored)]]), api: ({ pathname, parsed }) => {
+      if (pathname.endsWith('/email-operations/test') && parsed.searchParams.get('operationId') === operationId) {
+        return response(200, { code: 'ok', data: { id: reference, organizationId: Number(scope), status: 'failed',
+          lastErrorCode: 'provider_timeout', deliveryClass: 'operational_test', deliveryMode: 'postmark',
+          version: 'AAAAAAAAAAE=' } });
+      }
+      if (pathname.endsWith('/email-operations')) return response(200, { items: [{ id: reference, organizationId: 2,
+        createdUtc: '2026-10-23T12:00:00.1234567Z', status: 'suppressed', deliveryClass: 'business_event',
+        typeLabel: 'Business event', detailLabel: 'Recipient domain not allowed', canRetry: false,
+        version: 'AAAAAAAAAAE=' }] });
+    } });
+});
 test('email operations navigation guards the original terminal test while Settings rechecks after departure', () =>
   fixture('?stage=settings&settingsScope=system#settings-smtp', async ui => {
     const operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';

@@ -1294,5 +1294,117 @@ async function loadOperationsController(load) {
     assert.equal(posts.length, 0);
     controller.dispose();
   });
-  console.log('Operations controller: canonical command outcomes and exact read-only test recovery passed');
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createOperationsController } = await load('operations-controller');
+    const identity = createSessionIdentity(), owner = identity.accept(actor('request-reference'));
+    const operationReference = '9007199254740993', operationId = '130e5f99-b59c-4e39-9718-bec1e7e5d94d';
+    const recoveryKey = `asap.staff.email-test.${encodeURIComponent(identity.actor().key)}.3`;
+    const recovery = JSON.stringify({ operationId, id: '9007199254740995', pending: true, status: 'pending' });
+    dom.window.sessionStorage.setItem(recoveryKey, recovery);
+    const blockedTest = new Promise(() => {}), calls = [], routes = [], scopeChanges = [];
+    let release;
+    const heldHistory = new Promise(resolve => { release = resolve; });
+    const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+      announce() {}, onScopeChange: () => scopeChanges.push(controller.currentScope()), onReceipt() {}, clearReceipt() {},
+      onRouteChange: route => routes.push(route), request: async (path, init = {}) => {
+        calls.push({ path, init });
+        if (path.includes('/email-operations/test-context') || path.includes('/email-operations/9007199254740995?')) return blockedTest;
+        return heldHistory;
+      } });
+    controller.setStaff(owner);
+    controller.activate({ section: 'email', testScope: '3', runScope: '2', email: {
+      scope: 'system', search: 'old filter', status: 'failed', type: 'operational_test',
+      from: '2026-10-01', through: '2026-10-31', sort: 'oldest', page: 6, reference: '7'
+    } });
+    await settle();
+    const callsBefore = calls.length, scopesBefore = scopeChanges.length;
+    const opening = controller.openEmailReference({ operationReference, operationsScope: '2' });
+    assert.equal(document.activeElement, get('#email-operations-table'), 'accepted reference entry focuses the stable destination before reads settle');
+    assert.deepEqual(controller.currentRoute().email, { search: '', scope: '2', status: '', type: '', from: '', through: '', sort: 'newest', reference: operationReference, page: 1 });
+    assert.equal(controller.currentRoute().testScope, '3'); assert.equal(controller.currentRoute().runScope, '2');
+    assert.equal(controller.currentScope(), '3', 'reference browsing retains the original action readiness scope');
+    assert.equal(scopeChanges.length, scopesBefore);
+    assert.equal(dom.window.sessionStorage.getItem(recoveryKey), recovery, 'reference entry cannot rebind or retire exact test recovery');
+    const onlyRead = calls.slice(callsBefore);
+    assert.equal(onlyRead.length, 1, 'the narrow entry does not require saved-test context, exact recovery, queue, or provider readiness');
+    const query = new URL(onlyRead[0].path, 'https://localhost').searchParams;
+    assert.equal(query.get('reference'), operationReference); assert.equal(query.get('scope'), '2');
+    assert.equal(query.get('page'), '1'); assert.equal(query.get('pageSize'), '25');
+    assert.equal(routes.at(-1).section, 'email');
+    get('#email-search').focus();
+    release(emailHistoryPage({ items: [{ id: operationReference, status: 'suppressed', deliveryClass: 'business_event',
+      suppressionReason: 'recipient_domain_not_allowed' }] }, onlyRead[0].path));
+    assert.equal(await opening, true, 'held unrelated saved-test reads do not block reference history');
+    assert.equal(document.activeElement, get('#email-search'), 'completion respects deliberate user focus movement');
+    assert.equal(get('#email-reference-context').hidden, false);
+    assert.match(get('#email-reference-value').textContent, new RegExp(operationReference));
+    assert.equal(dom.window.sessionStorage.getItem(recoveryKey), recovery);
+    assert.equal(calls.filter(call => call.init.method === 'POST').length, 0);
+    controller.dispose();
+  });
+  for (const role of ['staff', 'admin', 'super_admin']) {
+    await fixture(async ({ load, get }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createOperationsController } = await load('operations-controller');
+      const identity = createSessionIdentity(), owner = identity.accept({ ...actor(`reference-${role}`), role, organizationId: role === 'super_admin' ? 1 : 2 });
+      const calls = [];
+      const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+        announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async path => {
+          calls.push(path);
+          if (path.includes('/test-context')) return new Promise(() => {});
+          return emailHistoryPage({ items: [] }, path);
+        } });
+      controller.setStaff(owner); controller.activate(); await settle();
+      for (const invalid of [
+        null, undefined, [], '9007199254740993',
+        { operationReference: 9007199254740993, operationsScope: '2' },
+        ...['0', '01', '-1', '1e3', '+1', '9223372036854775808'].map(operationReference => ({ operationReference, operationsScope: '2' })),
+        ...[2, '1', 'system', 'all', '02', '2.0', '2147483648'].map(operationsScope => ({ operationReference: '1', operationsScope }))
+      ]) {
+        const before = calls.length, route = controller.currentRoute();
+        assert.equal(await controller.openEmailReference(invalid), false);
+        assert.equal(calls.length, before); assert.deepEqual(controller.currentRoute(), route);
+      }
+      const before = calls.length;
+      assert.equal(await controller.openEmailReference({ operationReference: '9223372036854775807', operationsScope: '2' }), role !== 'staff');
+      assert.equal(calls.length - before, role === 'staff' ? 0 : 1);
+      assert.equal(await controller.openEmailReference({ operationReference: '1', operationsScope: '3' }), role === 'super_admin');
+      controller.deactivate();
+      const inactiveReads = calls.length;
+      assert.equal(await controller.openEmailReference({ operationReference: '1', operationsScope: '2' }), false);
+      assert.equal(calls.length, inactiveReads);
+      controller.dispose();
+    });
+  }
+  for (const retirement of ['query', 'epoch']) {
+    await fixture(async ({ load, get }) => {
+      const { createSessionIdentity } = await load('session-identity');
+      const { createOperationsController } = await load('operations-controller');
+      const identity = createSessionIdentity(), staff = actor('same-reference-identity');
+      let owner = identity.accept(staff), release, oldPath;
+      const held = new Promise(resolve => { release = resolve; });
+      const controller = createOperationsController({ root: get('#operations-view'), sessionIdentity: identity,
+        announce() {}, onScopeChange() {}, onReceipt() {}, clearReceipt() {}, request: async path => {
+          if (path.includes('/test-context')) return new Promise(() => {});
+          if (new URL(path, 'https://localhost').searchParams.get('reference') === '9007199254740993') { oldPath = path; return held; }
+          return emailHistoryPage({ items: [{ id: '9007199254740995', status: 'sent', deliveryClass: 'business_event' }] }, path);
+        } });
+      controller.setStaff(owner); controller.activate();
+      const stale = controller.openEmailReference({ operationReference: '9007199254740993', operationsScope: '2' });
+      if (retirement === 'epoch') {
+        identity.clear(); controller.signedOut(); owner = identity.accept({ ...staff });
+        controller.setStaff(owner); controller.activate();
+      }
+      assert.equal(await controller.openEmailReference({ operationReference: '9007199254740995', operationsScope: '2' }), true);
+      get('#email-search').focus();
+      release(emailHistoryPage({ items: [{ id: '9007199254740993', status: 'sent', deliveryClass: 'business_event' }] }, oldPath));
+      assert.equal(await stale, false);
+      assert.doesNotMatch(get('#email-operations-table').textContent, /9007199254740993/);
+      assert.match(get('#email-operations-table').textContent, /9007199254740995/);
+      assert.equal(document.activeElement, get('#email-search'));
+      controller.dispose();
+    });
+  }
+  console.log('Operations controller: canonical command outcomes, exact recovery and request-reference entry passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

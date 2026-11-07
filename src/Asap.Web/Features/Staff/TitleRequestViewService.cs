@@ -1,6 +1,9 @@
 using System.Globalization;
+using System.Data;
 using System.Text.Json;
+using Asap.Web.Features.Email;
 using Asap.Web.Infrastructure.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace Asap.Web.Features.Staff;
@@ -41,7 +44,16 @@ public sealed record TitleRequestActivity(
     string ActorType,
     string? ActorName,
     string? Message,
-    DateTime Created);
+    DateTime Created)
+{
+    public string Source { get; init; } = "request_event";
+    public RequestEmailActivity? Email { get; init; }
+}
+
+public sealed record RequestEmailActivity(
+    string OperationReference, string? MessageKind, string MessageType, string Outcome,
+    string OutcomeLabel, string? Reason, string? IntendedRecipient, string DeliveryMode,
+    bool IsRecordedSummary, string TimestampKind, string? OperationsScope);
 
 public sealed record RelatedRequestCount(string Status, int LibraryOrgId, string LibraryOrgName, int Count);
 
@@ -126,7 +138,8 @@ public sealed record TitleRequestScopeResult(
     IReadOnlyList<OrganizationChoice> Organizations);
 
 
-public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> contextFactory, TimeProvider timeProvider)
+public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbContext> contextFactory, TimeProvider timeProvider,
+    StaffEligibilityService staffEligibility)
 {
     public async Task<TitleRequestScopeResult?> ListAsync(
         CurrentStaff staff,
@@ -166,6 +179,21 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         CancellationToken cancellationToken,
         LibraryScope? scope = null)
     {
+        try
+        {
+            return await ReadRequestDetailAsync(staff, id, cancellationToken, scope);
+        }
+        catch (SqlException exception) when (cancellationToken.IsCancellationRequested && exception.Errors.Count > 0 &&
+            exception.Errors.Cast<SqlError>().All(error => error.Number == 0 && error.Class == 11 && error.State == 0))
+        {
+            throw new OperationCanceledException("Request activity read was cancelled.", exception, cancellationToken);
+        }
+    }
+
+    private async Task<TitleRequestDto?> ReadRequestDetailAsync(
+        CurrentStaff staff, string id, CancellationToken cancellationToken, LibraryScope? scope)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var requestId = await RequestLinkResolver.ResolveAsync(
             context.TitleRequests.Select(item => item.Id),
@@ -175,9 +203,28 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         {
             return null;
         }
-
+        var requestOrganizationId = await context.TitleRequests.AsNoTracking().Where(item => item.Id == requestId.Value)
+            .Select(item => (int?)item.LibraryOrganizationId).SingleOrDefaultAsync(cancellationToken);
+        if (!requestOrganizationId.HasValue || !CanAccess(staff, requestOrganizationId.Value))
+        {
+            return null;
+        }
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        var lockedIds = new[] { LibraryScope.SystemOrganizationId, staff.OrganizationId, requestOrganizationId.Value }.ToHashSet();
+        if (!await StaffEligibilityService.LockOrganizationsAsync(context, lockedIds, cancellationToken))
+        {
+            return null;
+        }
+        var current = await staffEligibility.RevalidateLockedAsync(context, staff, requestOrganizationId.Value,
+            StaffRoleRequirement.Any, requireActorParticipation: true, lockedIds, cancellationToken);
+        if (current.Outcome != StaffEligibilityOutcome.Allowed || current.Staff!.Role != staff.Role ||
+            current.Staff.OrganizationId != staff.OrganizationId)
+        {
+            return null;
+        }
+        staff = current.Staff;
         var request = await context.TitleRequests.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.Id == requestId.Value, cancellationToken);
+            .SingleOrDefaultAsync(item => item.Id == requestId.Value && item.LibraryOrganizationId == requestOrganizationId.Value, cancellationToken);
         if (request is null || !CanAccess(staff, request.LibraryOrganizationId) ||
             !await context.Organizations.AsNoTracking().AnyAsync(item =>
                 item.Id == request.LibraryOrganizationId && item.Id > LibraryScope.SystemOrganizationId &&
@@ -203,7 +250,9 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
         var relatedCandidates = await context.TitleRequests.AsNoTracking()
             .Where(item => relatedOrganizationId == null || item.LibraryOrganizationId == relatedOrganizationId)
             .ToListAsync(cancellationToken);
-        return (await BuildDtosAsync(context, [request], relatedCandidates, staff, includeActivity: true, cancellationToken)).Single();
+        var result = (await BuildDtosAsync(context, [request], relatedCandidates, staff, includeActivity: true, cancellationToken)).Single();
+        await transaction.CommitAsync(cancellationToken);
+        return result;
     }
 
     public async Task<IReadOnlyList<RejectionTemplateChoice>?> GetRejectionTemplatesAsync(
@@ -274,6 +323,9 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
             .ToListAsync(cancellationToken);
         var eventGroups = events.GroupBy(item => item.TitleRequestId)
             .ToDictionary(item => item.Key, item => item.ToList());
+        var emailActivity = includeActivity
+            ? await LoadEmailActivityAsync(context, requests.Single(), staff, cancellationToken)
+            : [];
         var tagRows = await (
                 from link in context.TitleRequestWorkflowTags.AsNoTracking()
                 join tag in context.WorkflowTags.AsNoTracking() on link.WorkflowTagId equals tag.Id
@@ -411,7 +463,9 @@ public sealed class TitleRequestViewService(IDbContextFactory<AsapDbContext> con
                     item.ActorType,
                     item.ActorName,
                     item.Message,
-                    AsUtc(item.CreatedUtc))).ToArray() : [])
+                    AsUtc(item.CreatedUtc))).Concat(emailActivity)
+                    .OrderByDescending(item => item.Created).ThenBy(item => item.Source, StringComparer.Ordinal)
+                    .ThenByDescending(item => long.Parse(item.Id, CultureInfo.InvariantCulture)).ToArray() : [])
             {
                 CustomFieldsValid = customFieldsValid,
                 Research = research with { PatronId = request.PatronIdSnapshot is > 0 ? request.PatronIdSnapshot : null },

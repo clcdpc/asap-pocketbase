@@ -591,6 +591,26 @@ export function createOperationsController({ root, sessionIdentity, announce, on
   listen(dom.refreshOperations, 'click', () => loadOperations());
   return {
     setStaff, setLibraries, currentRoute, currentScope: () => state.readinessScope,
+    async openEmailReference(input) {
+      const operationReference = input?.operationReference, operationsScope = input?.operationsScope;
+      const owner = sessionIdentity.preferences();
+      if (disposed || !active || !owner || !sessionIdentity.isCurrent(owner) ||
+          !['admin', 'super_admin'].includes(owner.role) || !isCanonicalPositiveInt64Id(operationReference) ||
+          typeof operationsScope !== 'string' || !/^[1-9]\d{0,9}$/.test(operationsScope) ||
+          Number(operationsScope) <= 1 || Number(operationsScope) > 2147483647 ||
+          owner.role !== 'super_admin' && operationsScope !== String(owner.organizationId)) return false;
+      // A request reference owns only history presentation. Saved test scope,
+      // exact recovery and provider readiness retain their existing owners.
+      emailHistory.setRoute({ scope: operationsScope, reference: operationReference });
+      selectSection('email', { write: false }); routeChanged({ replace: true });
+      const captured = JSON.stringify(emailHistory.route());
+      // Focus the accepted destination now. Completion cannot reclaim focus
+      // after the user moves elsewhere during a delayed history read.
+      dom.emailOperationsTable.focus();
+      const loaded = await emailHistory.refresh();
+      return loaded && !disposed && active && state.section === 'email' && sessionIdentity.isCurrent(owner) &&
+        captured === JSON.stringify(emailHistory.route());
+    },
     async openEmailScope(organizationId) {
       const owner = sessionIdentity.preferences();
       if (!active || !owner || !Number.isInteger(organizationId) || organizationId < 1 || organizationId > 2147483647) return false;

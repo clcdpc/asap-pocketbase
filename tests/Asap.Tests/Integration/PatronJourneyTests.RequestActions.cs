@@ -441,7 +441,7 @@ public sealed partial class PatronJourneyTests
                 var rejectionKey = $"rejection:{id}:%";
                 var reminderKey = $"purchase-reminder:{id}:%";
                 await context.Database.ExecuteSqlInterpolatedAsync(
-                    $"DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE {rejectionKey} OR [BusinessKey] LIKE {reminderKey}");
+                    $"DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE {rejectionKey} OR [BusinessKey] LIKE {reminderKey}); DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE {rejectionKey} OR [BusinessKey] LIKE {reminderKey}");
                 await context.Database.ExecuteSqlInterpolatedAsync(
                     $"DELETE FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] = {id}");
                 await context.Database.ExecuteSqlInterpolatedAsync(
