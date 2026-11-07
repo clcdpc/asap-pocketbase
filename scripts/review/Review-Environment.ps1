@@ -93,9 +93,12 @@ function Invoke-ReviewNative {
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    # WSLC session commands require a valid stdin handle even when noninteractive.
+    $start.RedirectStandardInput = $true
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
     $process = [System.Diagnostics.Process]::Start($start)
     try {
+        $process.StandardInput.Close()
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
         $waitClock = [System.Diagnostics.Stopwatch]::StartNew()
@@ -188,4 +191,47 @@ function Remove-ReviewBuildContext {
     $root = [System.IO.Path]::GetFullPath($BuildRoot) + [System.IO.Path]::DirectorySeparatorChar
     if (-not $absolute.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw 'Build cleanup path is outside the review build directory.' }
     if (Test-Path -LiteralPath $absolute) { Remove-Item -LiteralPath $absolute -Recurse -Force }
+}
+
+function Remove-ReviewImage {
+    param([Parameter(Mandatory)][ValidatePattern('^asap-acceptance:[a-f0-9]{40}-[a-f0-9]{16}-[a-f0-9]{32}$')][string]$Image)
+    try {
+        # Remove only this invocation's tag. Never force removal of an image still
+        # referenced by a container, or prune other images, parents or build cache.
+        $null = Invoke-ReviewNative wslc @('image', 'remove', '--no-prune', $Image) -Capture
+    }
+    catch {
+        # An interrupted/failed build may never have published its tag. A failed
+        # inspect alone cannot distinguish absence from an unavailable runtime.
+        $remaining = Invoke-ReviewNative wslc @('image', 'list', '--filter', "reference=$Image", '--quiet') -Capture
+        if (-not [string]::IsNullOrWhiteSpace($remaining.Output)) { throw "Image still exists: $Image" }
+    }
+}
+
+function Invoke-ReviewCacheCleanup {
+    # This is engine-wide unused build cache, not just acceptance cache. Never
+    # prune images/volumes or remove cache files directly. BuildKit protects
+    # in-use records if external work starts after these best-effort idle checks.
+    $running = Invoke-ReviewNative wslc @('list', '--quiet') -Capture
+    if (-not [string]::IsNullOrWhiteSpace($running.Output)) {
+        return @{ status = 'SKIPPED'; detail = 'Other containers are running; build cache was left untouched.' }
+    }
+    $usage = Invoke-ReviewNative wslc @('system', 'session', 'run', 'docker', 'system', 'df', '--format', 'json') -Capture
+    $rows = @($usage.Output -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_ | ConvertFrom-Json })
+    $cache = @($rows | Where-Object Type -eq 'Build Cache')
+    $active = 0
+    if ($cache.Count -ne 1 -or -not [int]::TryParse([string]$cache[0].Active, [ref]$active) -or $active -lt 0) {
+        throw 'Cannot establish whether WSLC build cache is idle; no cache was pruned.'
+    }
+    if ($active -gt 0) {
+        return @{ status = 'SKIPPED'; detail = 'Build cache is in use; no cache was pruned.' }
+    }
+    # Recheck after the potentially slower disk-usage query. This is not a claim
+    # of global exclusion: unrelated WSLC clients do not participate in a lock.
+    $running = Invoke-ReviewNative wslc @('list', '--quiet') -Capture
+    if (-not [string]::IsNullOrWhiteSpace($running.Output)) {
+        return @{ status = 'SKIPPED'; detail = 'A container started during the idle check; no cache was pruned.' }
+    }
+    $pruned = Invoke-ReviewNative wslc @('system', 'session', 'run', 'docker', 'builder', 'prune', '--builder', 'default', '--all', '--force') -Capture -TimeoutSeconds 300
+    return @{ status = 'PASS'; detail = $pruned.Output }
 }

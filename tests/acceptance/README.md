@@ -70,11 +70,12 @@ scenarios NOT RUN (exit 2). Normal runs need no endpoint/record/scope permission
 
 Run from a tooling checkout containing the selected suite, with PowerShell 7, Git and working Microsoft
 WSLC (WSL 2.9.3+). The command resolves one immutable application commit and
-captures one tooling version/digest, then builds or reuses one image for all
+captures one tooling version/digest, then builds one invocation-owned image for all
 selected suites. It executes exactly the selected suites once each, sequentially
 in caller order, with a fresh disposable container, SQL database and synthetic
 fixtures for every suite. Each runs headed Chromium/Playwright on Xvfb, exports
-its own evidence and removes its container before the next suite starts.
+its own evidence and removes its container before the next suite starts. The
+invocation removes its image after the final container teardown.
 It needs no application configuration, Entra sign-in or human browser interaction.
 See [prerequisites and image design](../../dev/review/README.md).
 
@@ -221,7 +222,8 @@ coverage; the suite reports those limits. Human visual/screen-reader acceptance
 remains open under #398.
 
 `-Commit <revision>` replaces PR selection; omitting both selectors resolves
-`HEAD`. `-Rebuild` forces one shared image refresh, including for multiple suites.
+`HEAD`. Normal builds reuse cached layers while assigning a unique image tag per
+invocation. `-Rebuild` bypasses that layer cache once, including for multiple suites.
 Reports record independent application and tooling SHAs, suite, mode, scenario
 status and actual container exit code. A build/startup blocker leaves the tested
 application SHA empty until runtime verification succeeds.
@@ -423,6 +425,31 @@ logs explain the blocker. For a started suite, inspect `report.md`, `results.jso
 `container.log`, `diagnostics/` and scenario failure traces beside the screenshots.
 Per-suite failures/blockers continue to later suites when cleanup succeeds.
 Unconfirmed container cleanup stops later starts and prints a recovery command.
+Final teardown removes only this invocation's image tag without `--force` or any
+global prune. Concurrent invocations have distinct tags even for identical source.
+Success, functional failure, startup failure and interruption all attempt image
+cleanup; a failed build confirms that its tag was removed or never created.
+Unconfirmed image cleanup makes the invocation BLOCKED (exit 2), preserves the
+suite results and evidence, and prints an exact recovery command. Its outcome is
+recorded in the aggregate invocation JSON's `imageCleanup` object and shared log.
+After owned teardown, the launcher checks for running containers and active
+BuildKit records, rechecks containers, then prunes unused cache from WSLC's
+default builder. This intentionally includes unused cache from other projects
+in that builder; subsequent builds may be slower. Images, volumes, other
+builders and historical acceptance tags are not pruned. Referenced image layers
+remain shared. BuildKit's in-use protections apply if external work starts after
+the best-effort checks; the launcher does not stop that work or delete cache files.
+Busy cleanup is SKIPPED until a later invocation. Uncertain activity or failed
+pruning is BLOCKED (exit 2), without changing suite results. Aggregate JSON/logs
+retain the separate `cacheCleanup` result. Unconfirmed image/container cleanup
+also skips shared-cache pruning.
+
+Cache pruning frees space inside the WSLC filesystem for reuse. It does not
+guarantee a smaller Windows VHDX. WSLC 3.0.3 uses a non-sparse disk with online
+discard; `.wslconfig` sparse settings do not apply to it. Compaction requires
+detached/read-only storage and appropriate privileges, not merely zero running
+containers. No automatic elevation, shared-session termination, WSL shutdown,
+disk compaction or historical-image deletion is performed.
 
 Optionally open the newest default run directory in File Explorer:
 
@@ -479,7 +506,8 @@ npm test
 ```
 
 Plumbing tests check native multi-suite binding, complete selection validation,
-single shared resolution/build (including forced rebuild), sequential fresh
+single shared resolution/build (including forced rebuild), invocation-owned image
+removal, concurrent isolation, idle/busy/failed cache cleanup, failed/interrupted builds, sequential fresh
 containers, mixed outcomes, pipeline interruption, atomic timestamp collisions,
 local-offset metadata, default/read-only/legacy modes, revision selection, tooling snapshots, reports, mutation
 guards, TLS trust, normal cookie transport, HostingStartup loading, native zoom
@@ -490,8 +518,9 @@ deterministic catalog, checks 100%/150%/200%, mobile and short-height layouts,
 long labels, list scrolling, resize/scroll and footer-size changes. It also
 proves the intersection assertion rejects the original obscured layout.
 
-After building an image, run real failure/cleanup checks with its image tag and
-application SHA (both appear in the build log):
+For an independently built diagnostic image, run real failure/cleanup checks
+with its image tag and application SHA. Ordinary launcher invocations remove
+their image at completion, so their finished tags cannot be used for this command:
 
 ```powershell
 pwsh ./tests/acceptance/runtime.test.ps1 -Image <acceptance-image> -ApplicationSha <application-sha>

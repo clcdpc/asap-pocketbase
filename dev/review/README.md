@@ -5,11 +5,12 @@
 ```
 
 Run directly from PowerShell 7 in a current local tooling checkout. The command
-resolves the application once, builds or reuses one acceptance image, then runs
+resolves the application once, builds one invocation-owned acceptance image, then runs
 exactly the requested suites once each in caller order. Each suite starts its own
 disposable container and fresh SQL Server 2022 database, authenticates a synthetic
 staff user locally, and runs Chromium/Playwright automatically. Containers are
-removed between suites; SQL state is never shared. No configuration file or
+removed between suites; SQL state is never shared. The image is removed after
+the invocation's final container teardown. No configuration file or
 browser interaction is needed.
 
 ## Prerequisites
@@ -58,8 +59,10 @@ tooling checkout. `-Commit` selects a Git commit; the two selectors are exclusiv
 Omitting both selectors tests resolved `HEAD`. The default suite is `smoke`;
 no smoke or extra repetitions are added to an explicit selection. Add `smoke`
 explicitly when useful, for example `-Suite smoke,s1,d1,q1`. `-Rebuild` forces
-one shared build with `--no-cache`, rather than one build per suite. Cached image
-identity still includes the application SHA, tooling SHA, dirty state and digest.
+one shared build with `--no-cache`, rather than one build per suite. Normal builds
+reuse BuildKit layers, not a retained finished-image tag. Each tag includes the
+application SHA, tooling digest and a unique invocation ID so concurrent runs
+cannot remove each other's image. Full tooling SHA/dirty state remain in metadata.
 
 All suites are validated against `tests/acceptance/suites/registry.json` in the
 local checkout before resolution or execution. Empty, unsafe, duplicate
@@ -103,9 +106,42 @@ are also copied into suites that start. A failed shared prerequisite/build
 marks all unstarted suites NOT RUN and prints its diagnostic path without
 inventing suite execution evidence. Ordinary suite failures/blockers continue
 to the next suite; an unconfirmed container cleanup stops later starts.
-The launcher removes the container after success, failure or interruption.
-A forced termination of the launcher process itself
-may require `wslc remove --force <printed-container-name>`.
+The launcher removes each container after success, failure or interruption, then
+removes only its own image tag after all suite teardown, including failed or
+interrupted builds. Image removal is never forced. Cleanup failures make the
+invocation BLOCKED (exit 2), retain suite outcomes and evidence, and print the exact
+recovery command. `invocation-<id>.json` records `imageCleanup` separately from
+suite results. A forced termination of the launcher process itself may require
+`wslc remove --force <printed-container-name>` followed by
+`wslc image remove --no-prune <printed-image-tag>`.
+
+After owned image/container teardown, the launcher also removes unused build
+cache from WSLC's default builder when no containers are running and Docker
+reports no active build-cache records. It checks containers again immediately
+before invoking `docker builder prune --builder default --all --force` through
+`wslc system session run`. This includes unused cache from other projects in that
+same builder, so their next builds may be slower. It never prunes images, volumes,
+other builders or containers. Shared image layers remain while referenced.
+
+The idle checks are best effort, not a global lock. If unrelated work begins
+after the checks, BuildKit protects its in-use records; no build is stopped and
+cache files are never deleted directly. Busy cleanup is SKIPPED until a later
+invocation. Unknown activity, runtime errors and failed pruning are reported as
+BLOCKED (exit 2), preserving the actual suite results. The aggregate JSON and
+shared log record `cacheCleanup` separately. Unconfirmed owned resource cleanup
+skips cache pruning as well. Normal layers can be reused within an invocation;
+successful idle cleanup deliberately removes their inter-invocation build cache.
+
+Freeing guest space allows the existing VHDX to reuse it, but is not a promise of
+immediate physical shrink. WSLC 3.0.3 creates a non-sparse storage VHDX and mounts
+its ext4 filesystem with discard; `.wslconfig` sparse settings do not apply to
+WSLC. Physical compaction requires a detached or read-only disk and appropriate
+Windows privileges. No running containers alone does not prove the disk is idle:
+builds and guest commands can still use it. The launcher never shuts down WSL,
+terminates a shared session, elevates itself or compacts a VHDX. Historical
+acceptance images remain separate from build cache and are not removed.
+See [WSLC settings](https://learn.microsoft.com/en-us/windows/wsl/wsl-container-settings)
+and [Windows compaction requirements](https://learn.microsoft.com/en-us/powershell/module/hyper-v/optimize-vhd).
 
 Default artifacts survive worktree deletion. Historical runs remain until you
 explicitly delete them; earlier artifacts under `.artifacts/acceptance/` in
@@ -149,8 +185,9 @@ The final SQL Server 2022 CU27 Ubuntu 22.04 image contains ASP.NET Core 10.0.13,
 Node 24, the locked npm dependencies and matching Playwright/Chromium binaries.
 It contains no SDK, real configuration, credentials or initialized database.
 Dependency/browser layers remain reusable when application or tooling changes.
-Image tags include application SHA, tooling SHA and a tooling content digest;
-working changes cannot silently reuse an older image.
+Image tags include application SHA, tooling content digest and invocation ID;
+working changes cannot silently reuse an older image. Referenced image layers
+remain shared; unused default-builder cache is pruned only after the idle checks.
 
 The Bash entrypoint generates local secrets and configuration, starts SQL on
 localhost, waits for an authenticated connection, runs the existing initializer,
