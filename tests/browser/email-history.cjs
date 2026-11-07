@@ -11,10 +11,14 @@ async function main() {
   assert.ok(adminEmail, 'Usage: email-history.cjs origin artifacts library other-library staff tenant email admin-id admin-tenant email');
   assert.equal(new URL(origin).origin, origin);
   await fs.mkdir(artifacts, { recursive: true });
+  const expected = JSON.parse(await fs.readFile(path.join(artifacts, 'history-expectations.json'), 'utf8'));
+  for (const field of ['allCount', 'systemCount', 'systemBusinessEventCount']) {
+    assert.ok(Number.isSafeInteger(expected[field]) && expected[field] > 0, `Independent SQL expectation: ${field}`);
+  }
   const browser = await chromium.launch({ headless: true, ...(process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH
     ? { executablePath: process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH } : {}) });
   const axeSource = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
-  const report = { externalRequests: 0, pageErrors: [], writes: 0, emailReads: [], states: [], focus: [], races: {} };
+  const report = { externalRequests: 0, pageErrors: [], writes: 0, emailReads: [], states: [], focus: [], races: {}, expectedCounts: expected };
   const contexts = [];
   const pendingGateReleases = new Set();
   const listResponse = response => response.request().method() === 'GET' &&
@@ -281,7 +285,19 @@ async function main() {
     assert.ok(read.data.items.every(item => item.status === 'failed' && item.deliveryClass === 'business_event'));
     read = await readAfter(page, () => page.locator('#email-clear').click(), url =>
       url.searchParams.get('scope') === 'all' && !url.searchParams.has('status') && !url.searchParams.has('type'));
-    assert.equal(read.data.count, 596, 'Clear filters restores the authorized all-libraries-and-system scope.');
+    assert.equal(read.data.count, expected.allCount, 'Clear filters restores every authorized library and System row, including unrelated baseline history.');
+    const baseline = await page.evaluate(async rows => Promise.all(rows.map(async row => {
+      const response = await fetch(`/api/asap/staff/email-operations?scope=all&reference=${encodeURIComponent(row.reference)}`);
+      return { status: response.status, body: await response.json() };
+    })), expected.baseline);
+    for (let index = 0; index < expected.baseline.length; index++) {
+      const row = expected.baseline[index], actual = baseline[index];
+      assert.equal(actual.status, 200);
+      assert.equal(actual.body.count, row.count, 'Authorized aggregate includes unrelated library/System rows and excludes branch rows.');
+      assert.deepEqual(actual.body.items.map(item => ({ reference: item.id, organizationId: item.organizationId })),
+        row.count ? [{ reference: row.reference, organizationId: row.organizationId }] : []);
+    }
+    report.races.unrelatedBaselineScopeVerified = true;
     assert.equal(await page.locator('#email-status').inputValue(), '');
     assert.equal(await page.locator('#email-type').inputValue(), '');
     assert.equal(await page.locator('#email-sort').inputValue(), 'newest');
@@ -289,14 +305,14 @@ async function main() {
 
     read = await readAfter(page, () => page.locator('#email-view-scope').selectOption('system'),
       url => url.searchParams.get('scope') === 'system');
-    assert.equal(read.data.count, 8);
+    assert.equal(read.data.count, expected.systemCount);
     assert.ok(read.data.items.every(item => item.organizationId === 1));
     read = await readAfter(page, () => page.locator('#email-view-scope').selectOption(library),
       url => url.searchParams.get('scope') === library);
     assert.equal(read.data.count, 528);
     read = await readAfter(page, () => page.locator('#email-view-scope').selectOption('all'),
       url => url.searchParams.get('scope') === 'all');
-    assert.equal(read.data.count, 596);
+    assert.equal(read.data.count, expected.allCount);
     await page.locator('#email-test-scope').selectOption('1');
     assert.equal(await page.locator('#email-test-scope').inputValue(), '1');
     await readAfter(page, () => page.locator('#email-view-scope').selectOption('system'), url => url.searchParams.get('scope') === 'system');
@@ -331,7 +347,7 @@ async function main() {
 
     read = await readAfter(page, () => page.locator('#email-clear').click(),
       url => url.searchParams.get('scope') === 'all' && !url.searchParams.has('search'));
-    assert.equal(read.data.count, 596);
+    assert.equal(read.data.count, expected.allCount);
     read = await readAfter(page, () => page.locator('#email-view-scope').selectOption(library), url => url.searchParams.get('scope') === library);
     read = await readAfter(page, () => page.locator('#email-search').fill('9007199254741993'),
       url => url.searchParams.get('search') === '9007199254741993');
@@ -364,7 +380,7 @@ async function main() {
     assert.ok(read.data.items.every(item => item.createdUtc >= '2026-11-01T04:00:00.000Z' && item.createdUtc < '2026-11-02T05:00:00.000Z'));
 
     read = await readAfter(page, () => page.locator('#email-clear').click(), url => url.searchParams.get('scope') === 'all');
-    assert.equal(read.data.count, 596);
+    assert.equal(read.data.count, expected.allCount);
     let began;
     await readAfter(page, () => page.locator('#email-view-scope').selectOption(library), url =>
       url.searchParams.get('scope') === library && url.searchParams.get('page') === '1');
@@ -444,11 +460,11 @@ async function main() {
     await page.locator('#email-view-scope').selectOption('system');
     const systemResponse = await systemRead;
     const systemData = await systemResponse.json();
-    assert.equal(systemData.count, 3);
+    assert.equal(systemData.count, expected.systemBusinessEventCount);
     delayedScope.release();
     await page.waitForTimeout(80);
     assert.equal(await page.locator('#email-view-scope').inputValue(), 'system');
-    assert.equal(await page.locator('#email-count').textContent(), '3 matching operations',
+    assert.equal(await page.locator('#email-count').textContent(), `${expected.systemBusinessEventCount.toLocaleString()} matching operations`,
       'A delayed real library response cannot overwrite the newer System filter.');
     assert.ok((await page.locator('#email-operations-table tbody tr').allTextContents()).every(text => !text.includes(library)));
     await page.unroute('**/api/asap/staff/email-operations?*');

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -81,31 +82,68 @@ public sealed partial class PatronJourneyTests
             : Path.GetFullPath(configuredArtifacts);
         Directory.CreateDirectory(artifacts);
         TestContext.WriteLine($"Email history browser evidence: {artifacts}");
+        var baselineKeys = new[] { "i459-browser-unrelated:system", "i459-browser-unrelated:library", "i459-browser-unrelated:branch" };
 
         async Task<string> SnapshotAsync()
         {
-            var snapshots = new List<object>();
-            foreach (var scope in new[] { 1, EmailHistoryLibrary, EmailHistoryOtherLibrary })
-            {
-                var rows = await ReadEmailHistoryAsync(scope);
-                snapshots.Add(new
-                {
-                    Scope = scope,
-                    Rows = rows.Select(row => new
-                    {
-                        row.Id,
-                        row.Status,
-                        row.AttemptCount,
-                        Version = Convert.ToBase64String(row.RowVersion)
-                    }).ToArray()
-                });
-            }
-            return JsonSerializer.Serialize(snapshots);
+            await using var context = await contexts.CreateDbContextAsync();
+            var rows = await context.EmailOutbox.AsNoTracking().OrderBy(row => row.Id)
+                .Select(row => new { row.Id, row.OrganizationId, row.Status, row.AttemptCount, row.RowVersion }).ToArrayAsync();
+            return JsonSerializer.Serialize(rows);
+        }
+
+        async Task<(long AllCount, long SystemCount, long SystemBusinessEventCount)> CountHistoryAsync()
+        {
+            // This independent SQL oracle includes prior tests' legitimate rows;
+            // neither the HTTP response nor the feature's seed defines the total.
+            await using var connection = new SqlConnection(databaseConnectionString);
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT COUNT_BIG(*),
+                    COUNT_BIG(CASE WHEN email.[OrganizationId] = 1 THEN 1 END),
+                    COUNT_BIG(CASE WHEN email.[OrganizationId] = 1 AND email.[DeliveryClass] = N'business_event' THEN 1 END)
+                FROM [asap].[EmailOutbox] AS email
+                INNER JOIN [asap].[Organization] AS organization ON organization.[Id] = email.[OrganizationId]
+                WHERE organization.[Id] = 1 OR organization.[OrganizationCodeId] = 2;
+                """;
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2));
         }
 
         try
         {
+            var originalCounts = await CountHistoryAsync();
+            var unrelated = new[] { 1, 2, EmailHistoryOtherLibrary + 1 }.Select((scope, index) => new EmailOutbox
+            {
+                OrganizationId = scope, BusinessKey = baselineKeys[index], DeliveryClass = "business_event", Status = "sent",
+                ToAddress = "unrelated-history@example.org", FromAddress = "sender@example.org",
+                Subject = "Unrelated history baseline", BodyText = "Retained read-only browser witness.",
+                AttemptCount = 1, AttemptDeliveryMode = "file", ProviderMessageId = $"file:{baselineKeys[index]}",
+                CreatedUtc = new DateTime(2028, 1, 1, 12, 0, 0, DateTimeKind.Utc),
+                SentUtc = new DateTime(2028, 1, 1, 12, 0, 1, DateTimeKind.Utc)
+            }).ToArray();
+            await using (var seed = await contexts.CreateDbContextAsync())
+            {
+                Assert.AreEqual(2, (await seed.Organizations.SingleAsync(row => row.Id == 2)).OrganizationCodeId);
+                Assert.AreEqual(3, (await seed.Organizations.SingleAsync(row => row.Id == EmailHistoryOtherLibrary + 1)).OrganizationCodeId);
+                Assert.IsFalse(await seed.EmailOutbox.AnyAsync(row => baselineKeys.Contains(row.BusinessKey!)));
+                seed.EmailOutbox.AddRange(unrelated);
+                await seed.SaveChangesAsync();
+            }
+            var expected = await CountHistoryAsync();
+            Assert.AreEqual(originalCounts.AllCount + 2, expected.AllCount, "All history includes System and other libraries, excluding branch records.");
+            Assert.AreEqual(originalCounts.SystemCount + 1, expected.SystemCount);
+            Assert.AreEqual(originalCounts.SystemBusinessEventCount + 1, expected.SystemBusinessEventCount);
+            await File.WriteAllTextAsync(Path.Combine(artifacts, "history-expectations.json"), JsonSerializer.Serialize(new
+            {
+                allCount = expected.AllCount, systemCount = expected.SystemCount, systemBusinessEventCount = expected.SystemBusinessEventCount,
+                baseline = unrelated.Select(row => new { reference = row.Id.ToString(CultureInfo.InvariantCulture),
+                    organizationId = row.OrganizationId, count = row.OrganizationId == EmailHistoryOtherLibrary + 1 ? 0 : 1 }).ToArray()
+            }));
             Assert.IsGreaterThan(500, (await ReadEmailHistoryAsync(EmailHistoryLibrary)).Length);
+            Assert.HasCount(60, await ReadEmailHistoryAsync(EmailHistoryOtherLibrary));
             var before = await SnapshotAsync();
             var (exitCode, stdout, stderr) = await RunBrowserScriptAsync(root, "email-history.cjs",
                 client.BaseAddress!.GetLeftPart(UriPartial.Authority), artifacts,
@@ -141,6 +179,7 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(races.GetProperty("delayedScopeResponseRetired").GetBoolean());
             Assert.IsTrue(races.GetProperty("delayedIdentityResponseRetired").GetBoolean());
             Assert.IsTrue(races.GetProperty("directScopeDenied").GetBoolean());
+            Assert.IsTrue(races.GetProperty("unrelatedBaselineScopeVerified").GetBoolean());
             Assert.AreEqual(2, result.GetProperty("nativeZoom").GetProperty("zoom").GetInt32());
             var nativeCapture = result.GetProperty("states").EnumerateArray()
                 .Single(item => item.GetProperty("name").GetString() == "email-history-native-200").GetProperty("capture");
@@ -153,6 +192,10 @@ public sealed partial class PatronJourneyTests
         finally
         {
             await DeactivateCorrectiveStaffAsync(libraryAdminRecord.Id);
+            await using (var cleanup = await contexts.CreateDbContextAsync())
+            {
+                await cleanup.EmailOutbox.Where(row => baselineKeys.Contains(row.BusinessKey!)).ExecuteDeleteAsync();
+            }
             await CleanupEmailHistoryAsync();
         }
     }

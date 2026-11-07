@@ -117,6 +117,7 @@ public sealed partial class PatronJourneyTests
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "browser-results.json")));
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());
+            Assert.AreEqual(0, report.RootElement.GetProperty("writes").GetInt32());
             Assert.AreEqual(4, report.RootElement.GetProperty("states").GetArrayLength());
             var after = await ReadOperationsBoundaryStateAsync(scope);
             Assert.AreEqual(before.Snapshot, after.Snapshot, "Local rendering, scope changes and reloads never write timestamps or cursor state.");
