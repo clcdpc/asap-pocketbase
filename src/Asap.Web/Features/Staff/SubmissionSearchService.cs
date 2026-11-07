@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -87,13 +88,14 @@ public sealed partial class SubmissionSearchService(IDbContextFactory<AsapDbCont
         foreach (var token in query.Split(' '))
         {
             var pattern = "%" + EscapeLike(token) + "%";
+            var hasNativeId = long.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out var nativeId) && nativeId > 0;
             rows = rows.Where(item =>
                 EF.Functions.Like(EF.Functions.Collate(item.Title, SearchCollation), pattern, "~") ||
                 EF.Functions.Like(EF.Functions.Collate(item.Author, SearchCollation), pattern, "~") ||
                 EF.Functions.Like(EF.Functions.Collate(item.Patron, SearchCollation), pattern, "~") ||
                 EF.Functions.Like(EF.Functions.Collate(item.Barcode, SearchCollation), pattern, "~") ||
                 EF.Functions.Like(EF.Functions.Collate(item.Identifier, SearchCollation), pattern, "~") ||
-                EF.Functions.Like(item.Id, pattern, "~") || EF.Functions.Like(item.Bib, pattern, "~"));
+                hasNativeId && item.NativeId == nativeId || EF.Functions.Like(item.Bib, pattern, "~"));
         }
         var counts = await rows.GroupBy(item => new { item.Type, item.Status })
             .Select(group => new { group.Key.Type, group.Key.Status, Count = group.Count() }).ToListAsync(cancellationToken);
@@ -108,8 +110,9 @@ public sealed partial class SubmissionSearchService(IDbContextFactory<AsapDbCont
         }
         var page = Math.Min(input.Page, Math.Max(1, (filteredTotal + input.PageSize - 1) / input.PageSize));
         var prefix = EscapeLike(query) + "%";
+        var exactNativeId = long.TryParse(query, NumberStyles.None, CultureInfo.InvariantCulture, out var queryId) && queryId > 0;
         var items = await rows.OrderBy(item =>
-                EF.Functions.Collate(item.Barcode, SearchCollation) == query || item.Id == query ||
+                EF.Functions.Collate(item.Barcode, SearchCollation) == query || exactNativeId && item.NativeId == queryId ||
                 EF.Functions.Collate(item.Identifier, SearchCollation) == query || item.Bib == query ? 0 :
                 EF.Functions.Collate(item.Title, SearchCollation) == query || EF.Functions.Collate(item.Author, SearchCollation) == query ||
                 EF.Functions.Collate(item.Patron, SearchCollation) == query ? 1 :

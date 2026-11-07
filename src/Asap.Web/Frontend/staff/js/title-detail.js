@@ -116,12 +116,13 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     const owner = sessionIdentity.preferences();
     if (disposed || !owner) return null;
     const load = reads.begin('detail-target'), ticket = ++targetGeneration;
-    const live = () => !disposed && !load.signal.aborted && ticket === targetGeneration && sessionIdentity.isCurrent(owner);
+    const signal = options.signal ? window.AbortSignal.any([load.signal, options.signal]) : load.signal;
+    const live = () => !disposed && !signal.aborted && ticket === targetGeneration && sessionIdentity.isCurrent(owner);
     try {
       const scope = options.scope ?? (owner.role === 'super_admin' && (options.align || options.fromRecent) ? 'all' : getScope());
-      const request = await send(detailPath(id, scope, owner), { signal: load.signal });
+      const request = await send(detailPath(id, scope, owner), { signal });
       if (!live()) return null;
-      const configuration = await configurationFor(request.libraryOrgId, load.signal, owner);
+      const configuration = await configurationFor(request.libraryOrgId, signal, owner);
       const ready = () => live() && configurations.get(String(request.libraryOrgId))?.value === configuration;
       return ready() ? { request, configuration, scope, owner, isCurrent: ready } : null;
     } finally { reads.finish('detail-target', load.token); }

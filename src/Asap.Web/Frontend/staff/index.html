@@ -19,6 +19,7 @@
     </a>
     <div id="session-actions" class="session-actions" hidden>
       <span id="staff-identity"></span>
+      <button id="search-asap" class="secondary-button header-search" type="button" aria-haspopup="dialog" aria-controls="search-dialog" title="Search ASAP (Ctrl or Command + K)">Search ASAP <kbd>⌘/Ctrl K</kbd></button>
       <button id="profile-button" class="icon-button header-profile" type="button" data-view="profile"
               aria-controls="profile-view" aria-label="Profile" title="Profile">
         <i class="fa fa-user" aria-hidden="true"></i>
@@ -66,6 +67,20 @@
         </button>
       </nav>
 
+      <section id="search-view" class="submission-search" aria-labelledby="search-title" hidden>
+        <h1 id="search-title" tabindex="-1">Search ASAP results</h1>
+        <div class="search-controls" data-search="controls"></div>
+        <div class="search-filters" data-search="filters"></div>
+        <p data-search="summary" role="status" aria-live="polite"></p>
+        <button type="button" data-search="retry" hidden>Retry search</button>
+        <div class="search-results-list" data-search="list"></div>
+        <div class="search-pagination">
+          <button type="button" data-search="previous">Previous results</button>
+          <span data-search="page"></span>
+          <button type="button" data-search="next">Next results</button>
+        </div>
+      </section>
+
       <section id="queue-view" aria-labelledby="queue-title">
         <div class="section-heading">
           <div>
@@ -95,9 +110,9 @@
 
         <div class="queue-filters" aria-label="Request filters">
           <label class="search-field">
-            <span class="sr-only">Search requests</span>
+            <span class="sr-only">Filter current Requests tab</span>
             <i class="fa fa-search" aria-hidden="true"></i>
-            <input id="request-search" type="search" placeholder="Search title, patron, barcode, or identifier">
+            <input id="request-search" type="search" placeholder="Filter current tab">
           </label>
           <label class="compact-field">
             <span>Claims</span>
@@ -154,7 +169,7 @@
           <label class="search-field">
             <span class="sr-only">Search additional-copy tasks</span>
             <i class="fa fa-search" aria-hidden="true"></i>
-            <input id="additional-copy-search" type="search" placeholder="Search title, BIB, author, or identifier">
+            <input id="additional-copy-search" type="search" placeholder="Filter current tab" aria-label="Filter current Additional copies tab">
           </label>
           <label class="compact-field">
             <span>Claims</span>
@@ -780,6 +795,18 @@
     </div>
   </main>
 
+  <dialog id="search-dialog" class="submission-search" aria-labelledby="search-dialog-title">
+    <div class="search-dialog-shell">
+      <header class="dialog-header"><h2 id="search-dialog-title">Search ASAP</h2><button type="button" data-search="close" aria-label="Close Search ASAP">Close</button></header>
+      <div class="search-controls" data-search="controls"></div>
+      <p class="search-guidance">Across authorized title requests and additional copies. Use ↑/↓ and Enter to open a result.</p>
+      <p class="search-summary" data-search="summary" role="status" aria-live="polite"></p>
+      <button class="search-retry" type="button" data-search="retry" hidden>Retry search</button>
+      <div id="search-suggestions" class="search-suggestions" data-search="list"></div>
+      <footer class="search-footer"><button type="button" data-search="all" hidden>View all results</button></footer>
+    </div>
+  </dialog>
+
   <dialog id="request-dialog" aria-labelledby="request-dialog-title">
     <div class="dialog-shell">
       <header class="dialog-header">
@@ -788,6 +815,7 @@
           <h2 id="request-dialog-title">Request</h2>
           <p id="request-dialog-status" class="status-badge request-header-status" role="status" hidden></p>
         </div>
+        <button id="detail-search-asap" class="secondary-button" type="button" aria-haspopup="dialog">Search ASAP</button>
         <button id="close-request" class="icon-button" type="button" title="Close details" aria-label="Close request details">
           <i class="fa fa-times" aria-hidden="true"></i>
         </button>

@@ -17,7 +17,7 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     private const int SearchLibrary = 46701, OtherSearchLibrary = 46702, InactiveSearchLibrary = 46703;
-    private const long SearchBigId = 9_007_199_254_741_467;
+    private const long SearchBigId = 9_223_372_036_854_774_467;
     private static readonly string[] SearchStages = ["suggestion", "outstanding_purchase", "pending_hold", "hold_placed", "closed"];
 
     [TestMethod]
@@ -66,6 +66,8 @@ public sealed partial class PatronJourneyTests
             var exact = await SearchAsync(client, id, "all");
             Assert.AreEqual(2, exact.Total);
             CollectionAssert.AreEqual(new[] { "copy:" + id, "title:" + id }, exact.Items.Select(item => item.Type + ":" + item.Id).ToArray());
+            Assert.AreEqual(0, (await SearchAsync(client, id + "000", "all")).Total,
+                "An overlong numeric token must not be truncated to an existing bigint identity by SQL parameter mapping.");
             foreach (var term in new[] { "EXACT-BARCODE", "EXACT-IDENTIFIER", "467999" })
             {
                 var match = await SearchAsync(client, term, "all");
@@ -84,12 +86,14 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task SubmissionSearchHttpRejectsInvalidInputAndRechecksActiveIdentityLibraryAndDetails()
+    [DataRow(StaffRole.Staff)]
+    [DataRow(StaffRole.Admin)]
+    public async Task SubmissionSearchHttpRejectsInvalidInputAndRechecksActiveIdentityLibraryAndDetails(string role)
     {
         using var superClient = factory!.CreateClient();
         var super = await ReadConfiguredSuperAdminAsync();
         await SeedSubmissionSearchAsync();
-        var row = await CreateCorrectiveStaffAsync(super, StaffRole.Staff, SearchLibrary);
+        var row = await CreateCorrectiveStaffAsync(super, role, SearchLibrary);
         var ordinary = await ReadCorrectiveStaffAsync(row);
         using var client = factory.CreateClient();
         AddTestingStaffHeaders(client, ordinary.Id, ordinary.EntraTenantId, ordinary.AuthenticationEmail);
@@ -133,9 +137,13 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.NotFound, (await client.GetAsync($"/api/asap/staff/additional-copies/{copy.Id}")).StatusCode);
             await ExecuteNonQueryAsync("UPDATE [asap].[StaffUser] SET [IsActive]=0 WHERE [Id]=@id;", ("@id", ordinary.Id));
             Assert.IsTrue((await client.PostAsJsonAsync("/api/asap/staff/search", new { query = "needle" })).StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized);
+            Assert.IsTrue((await client.GetAsync($"/api/asap/staff/additional-copies/{copy.Id}")).StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized);
             await ExecuteNonQueryAsync("UPDATE [asap].[Organization] SET [IsActive]=0 WHERE [Id]=@id;", ("@id", SearchLibrary));
             Assert.AreEqual(1, (await SearchAsync(superClient, "needle", "all")).Total);
             Assert.AreEqual(HttpStatusCode.NotFound, (await superClient.GetAsync($"/api/asap/staff/additional-copies/{copy.Id}?scope=all")).StatusCode);
+            await ExecuteNonQueryAsync("UPDATE [asap].[StaffUser] SET [IsActive]=1 WHERE [Id]=@id; UPDATE [asap].[Organization] SET [IsActive]=0 WHERE [Id]=@other;", ("@id", ordinary.Id), ("@other", OtherSearchLibrary));
+            Assert.AreEqual(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync("/api/asap/staff/search", new { query = "needle" })).StatusCode);
+            Assert.AreEqual(0, (await SearchAsync(superClient, "needle", "all")).Total);
         }
         finally { await DeactivateCorrectiveStaffAsync(ordinary.Id); await ClearSubmissionSearchAsync(); }
     }
