@@ -1095,8 +1095,8 @@ export function createSettingsController({
     const needsAttention = dirty || state.conflict || state.awaitingReload || state.outcomeUncertain || state.saving;
     dom.saveBar.classList.toggle('attention', needsAttention);
     dom.save.disabled = !settingsDirty || state.conflict || state.awaitingReload || state.saving || (isSystem() && !state.organizationsReady);
-    dom.saveLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
-    dom.clearLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
+    dom.saveLogo.disabled = state.conflict || state.awaitingReload || Boolean(state.pendingMutation);
+    dom.clearLogo.disabled = state.conflict || state.awaitingReload || Boolean(state.pendingMutation);
     dom.discard.hidden = !dirty;
     dom.saveTitle.textContent = state.outcomeUncertain ? 'Outcome uncertain; reload needed'
       : state.conflict ? 'Conflict; edits retained'
@@ -1113,7 +1113,7 @@ export function createSettingsController({
       ? settingsDirty ? 'Changes are local until you save this settings context.' : 'Save changes in each staff editor, or cancel the edits.'
       : 'Everything in this settings context is saved.';
     dom.reset.hidden = isSystem();
-    dom.reset.disabled = state.awaitingReload || Boolean(state.pendingMutation);
+    dom.reset.disabled = state.conflict || state.awaitingReload || Boolean(state.pendingMutation);
     for (const row of staffRows.values()) row.sync();
     emailTest.sync();
   }
@@ -2516,7 +2516,7 @@ export function createSettingsController({
   }
 
   async function resetSettings() {
-    if (isSystem() || !state.data || state.awaitingReload || state.pendingMutation) return;
+    if (isSystem() || !state.data || state.conflict || state.awaitingReload || state.pendingMutation) return;
     if (!await confirmSettings('Reset inherited overrides?',
       `${isDirty() ? 'Discard unsaved settings changes and reset' : 'Reset'} this library's inherited overrides to the current system values? Library-owned custom fields, formats, rejection templates, auto-claim rules and their history are preserved.`,
       'Reset inherited overrides', 'danger')) return;
@@ -2564,7 +2564,7 @@ export function createSettingsController({
   }
 
   async function saveLogo(clear = false) {
-    if (!state.data || state.awaitingReload || state.pendingMutation) return;
+    if (!state.data || state.conflict || state.awaitingReload || state.pendingMutation) return;
     const withoutLogo = rows => rows.filter(([id]) => id !== 'branding-logo');
     const file = dom.logo.files?.[0];
     const hasOtherDraft = state.baselineOwnership !== ownershipSnapshot() ||
@@ -2625,6 +2625,9 @@ export function createSettingsController({
         dom.brandingStatus.textContent = 'Image change outcome is uncertain. Reload effective branding before retrying.';
         markUnconfirmedMutation(dom.brandingStatus.textContent);
         return;
+      }
+      if (error.status === 409 && error.response?.code === 'stale_version') {
+        state.conflict = true;
       }
       if (error.status !== 401 && !isAbortError(error)) {
         dom.brandingStatus.textContent = `${error.message || 'Logo could not be saved.'} The image preview is still unsaved.`;

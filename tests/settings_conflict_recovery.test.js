@@ -51,6 +51,8 @@ fixture(async ({ dom, load, get }) => {
   assert.equal(controller.isDirty(), true);
   assert.equal(get('#settings-save-title').textContent, 'Conflict; edits retained');
   assert.equal(get('#settings-save').disabled, true);
+  assert.equal(get('#settings-reset').disabled, true);
+  assert.equal(get('#save-branding-logo').disabled, true);
   submit(); await flush(); assert.equal(posts, 1);
   require('./helpers/confirmation.cjs').answerConfirmations(dom.window, () => false);
   get('#settings-refresh').click();
