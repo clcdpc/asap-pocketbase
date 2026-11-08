@@ -11,6 +11,8 @@ import { createEmailTestController } from './email-test.js';
 import { confirmAction, controlSnapshot } from './confirmation.js';
 import { byDisplayLabel } from './display-order.js';
 import { inheritanceStatus } from './settings-inheritance.js';
+import { clean, object, property, meaningful } from './settings-values.js';
+import { isLibraryOrganization, validateOrganizationCatalog } from './settings-organization-catalog.js';
 
 const WORKFLOW_FIELDS = [
   ['suggestionLimit', 'suggestion-limit', 'number'],
@@ -114,26 +116,6 @@ function node(tag, attributes = {}, children = []) {
   return value;
 }
 
-function clone(value) {
-  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
-}
-
-function object(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-}
-
-function property(value, key) {
-  const source = object(value);
-  if (Object.prototype.hasOwnProperty.call(source, key)) return source[key];
-  const pascal = key.charAt(0).toUpperCase() + key.slice(1);
-  return source[pascal];
-}
-
-function meaningful(value) {
-  return value !== null && value !== undefined &&
-    (typeof value !== 'string' || value.trim() !== '');
-}
-
 function isNonemptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -145,12 +127,6 @@ function isNonnegativeInt32(value) {
 function isCanonicalPositiveInt64Id(value) {
   return typeof value === 'string' && /^[1-9]\d*$/.test(value) &&
     (value.length < 19 || value.length === 19 && value <= '9223372036854775807');
-}
-
-function clean(value) {
-  if (value === null || value === undefined) return null;
-  const result = String(value).trim();
-  return result || null;
 }
 
 function stringValue(value) {
@@ -231,27 +207,6 @@ function templateEffectiveRows(data, organizationId) {
       overridden: Boolean(override)
     };
   }).concat(library.filter(row => row.isCustom));
-}
-
-function formatRulesFromEffective(formats) {
-  const result = {};
-  for (const format of Array.isArray(formats) ? formats : []) {
-    const rule = {
-      messageBehavior: format.messageBehavior,
-      message: format.message,
-      title: format.title,
-      author: format.author,
-      identifier: format.identifier,
-      publication: format.publication
-    };
-    if (format.customFields && typeof format.customFields === 'object') rule.customFields = format.customFields;
-    result[format.code] = rule;
-  }
-  return result;
-}
-
-export function mergeSettingsValues(system, override, fallback = {}) {
-  return mergeConfigured(system, override, fallback);
 }
 
 export function createSettingsController({
@@ -947,62 +902,6 @@ export function createSettingsController({
     return isSystem() ? 1 : Number(state.scope);
   }
 
-  function isLibraryOrganization(organization) {
-    return Number(organization?.id) > 1 && Number(organization?.organizationCodeId) === 2;
-  }
-
-  function validateOrganizationCatalog(response, scope, settingsData) {
-    const values = response?.data ?? response;
-    if (!Array.isArray(values) || values.length === 0) {
-      throw new Error('The organization list is incomplete. Reload settings before saving.');
-    }
-    const ids = new Set();
-    const rows = [];
-    for (const value of values) {
-      if (!value || typeof value !== 'object' || Array.isArray(value) ||
-          !Number.isSafeInteger(value.id) || value.id < 1 || ids.has(value.id) ||
-          typeof value.name !== 'string' || !value.name.trim() ||
-          !Object.prototype.hasOwnProperty.call(value, 'organizationCodeId') ||
-          value.organizationCodeId !== null && !Number.isSafeInteger(value.organizationCodeId) ||
-          !Object.prototype.hasOwnProperty.call(value, 'parentOrganizationId') ||
-          value.parentOrganizationId !== null && !Number.isSafeInteger(value.parentOrganizationId) ||
-          typeof value.isActive !== 'boolean' || typeof value.version !== 'string' || !value.version.trim()) {
-        throw new Error('The organization list is malformed or incomplete. Reload settings before saving.');
-      }
-      ids.add(value.id);
-      rows.push(value);
-    }
-
-    if (state.staff?.role === 'super_admin') {
-      if (!ids.has(1)) {
-        throw new Error('The organization list is missing the system organization. Reload settings before saving.');
-      }
-      const systemSettings = property(property(settingsData, 'stored'), 'systemSettings');
-      const expectedEnabled = property(systemSettings, 'enabledLibraryOrgIds');
-      const expectedLibraries = property(systemSettings, 'libraryOrgIds');
-      if (!Array.isArray(expectedEnabled) || expectedEnabled.some(id => !Number.isSafeInteger(id) || id <= 1) ||
-          new Set(expectedEnabled).size !== expectedEnabled.length ||
-          !Array.isArray(expectedLibraries) || expectedLibraries.some(id => !Number.isSafeInteger(id) || id <= 1) ||
-          new Set(expectedLibraries).size !== expectedLibraries.length) {
-        throw new Error('The saved participation snapshot is incomplete. Reload settings before saving.');
-      }
-      const libraryRows = rows.filter(isLibraryOrganization).map(item => item.id).sort((first, second) => first - second);
-      const expectedLibraryRows = [...expectedLibraries].sort((first, second) => first - second);
-      if (JSON.stringify(libraryRows) !== JSON.stringify(expectedLibraryRows)) {
-        throw new Error('The organization list is missing library rows. Reload settings before saving.');
-      }
-      const activeRows = rows.filter(item => isLibraryOrganization(item) && item.isActive)
-        .map(item => item.id).sort((first, second) => first - second);
-      const expectedRows = [...expectedEnabled].sort((first, second) => first - second);
-      if (JSON.stringify(activeRows) !== JSON.stringify(expectedRows)) {
-        throw new Error('The organization list is missing active libraries. Reload settings before saving.');
-      }
-    } else if (scope !== 'system' && !ids.has(Number(scope))) {
-      throw new Error('The organization list is missing the selected library. Reload settings before saving.');
-    }
-
-    return rows;
-  }
 
   function acceptOrganizationCatalog(rows) {
     state.organizations = rows;
@@ -2050,7 +1949,7 @@ export function createSettingsController({
       const data = settingsResponse?.data && settingsResponse?.version === undefined
         ? settingsResponse.data
         : settingsResponse;
-      const organizations = validateOrganizationCatalog(organizationsResponse, context.scope, data);
+      const organizations = validateOrganizationCatalog(organizationsResponse, context.scope, data, state.staff?.role === 'super_admin');
       acceptOrganizationCatalog(organizations);
       populateScopeOptions();
       const patronCodeChoices = patronCodesResponse?.data ?? patronCodesResponse;
@@ -2924,7 +2823,7 @@ export function createSettingsController({
       ]);
       if (!current()) return null;
       const data = response?.data && response.version === undefined ? response.data : response;
-      const organizations = validateOrganizationCatalog(organizationsResponse, scope, data);
+      const organizations = validateOrganizationCatalog(organizationsResponse, scope, data, state.staff?.role === 'super_admin');
       return { isCurrent: current, accept() {
         const staffReview = scope === state.scope && state.awaitingReloadMutation?.slot === 'administration-staff-mutation';
         cancelSettingsOperations(); releaseLogoDraft(); copyGeneration++;
