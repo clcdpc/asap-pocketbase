@@ -1834,7 +1834,6 @@ export function createSettingsController({
     dom.logo.value = '';
     dom.discardLogoDraft.hidden = true;
     state.data = data;
-    state.conflict = false;
     state.scalarIntents.clear(); state.templateIntents.clear(); state.scalarDisplays.clear();
     state.scope = String(data.orgId || state.scope);
     const stored = object(data.stored);
@@ -1964,6 +1963,7 @@ export function createSettingsController({
       if (!staffReview) {
         state.awaitingReload = false; state.awaitingReloadMutation = null; state.outcomeUncertain = false; state.unconfirmedMutation = null;
       }
+      state.conflict = false;
       populate(data || {});
       onRefreshed(context.owner, { kind: 'settings', scope: context.scope,
         changed: !staffReview && review?.outcome === 'uncertain',
@@ -2839,6 +2839,7 @@ export function createSettingsController({
         state.staffUsers = []; state.staffAccessLoaded = false; state.lastStaffCleanup = null;
         populateScopeOptions();
         const choices = codesResponse?.data ?? codesResponse;
+        state.conflict = false;
         populate({ ...data, patronCodeChoices: Array.isArray(choices) ? choices : [],
           patronCodeChoicesUnavailable: !Array.isArray(choices) });
         renderStaffUsers(); dom.form.hidden = false; dom.form.inert = state.awaitingReload; dom.refresh.disabled = false;
@@ -3158,6 +3159,11 @@ export function createSettingsController({
     }
   }
 
+  function isReady() {
+    return Boolean(state.data && String(state.data.orgId) === String(state.scope) && state.organizationsReady &&
+      !state.conflict && !state.awaitingReload && !state.loading);
+  }
+
   async function activate(panel = state.activePanel) {
     if (disposed || !state.staff || state.staff.role === 'staff') return;
     state.visible = true;
@@ -3166,7 +3172,8 @@ export function createSettingsController({
     const staffReview = state.awaitingReloadMutation || state.unconfirmedMutation;
     if (staffReview?.slot === 'administration-staff-mutation' && state.data && String(state.data.orgId) === String(state.scope)) {
       await loadStaffAccess(staffReview.preserves?.length > 0 ? { preserve: true } : { discard: true });
-    } else if (state.awaitingReload || !state.data || String(state.data.orgId) !== String(state.scope)) await load();
+    } else if (state.awaitingReload || !state.data || String(state.data.orgId) !== String(state.scope) ||
+        !state.loading && !isDirty() && !isReady()) await load();
     else configureScopedFields();
   }
 
@@ -3182,17 +3189,22 @@ export function createSettingsController({
     dom.logo.value = '';
     dom.discardLogoDraft.hidden = true;
     renderBrandingPreview();
-    updateDirtyState();
     copyGeneration += 1;
     reads.begin('administration-settings').abort();
+    // Retire the read's loading ownership here; its late finally is no longer
+    // current. Keep the invalidated catalog unready until a fresh read accepts it.
+    state.loading = false;
+    dom.refresh.disabled = false;
     reads.begin('administration-staff-access').abort();
     reads.begin('administration-patron-codes').abort();
+    updateDirtyState();
     return true;
   }
 
   function discardDraft() {
     if (disposed) return false;
     if (state.pendingMutation || state.outcomeUncertain) return false;
+    // Cached values discard edits, but cannot resolve a known stale version.
     if (state.data) populate(state.data);
     return true;
   }
@@ -3218,7 +3230,7 @@ export function createSettingsController({
         : 'Wait for the settings change to finish before navigating away.',
       confirmMessage: 'Discard unsaved settings changes and navigate away?' }),
     currentScope: () => state.scope,
-    isReady: () => Boolean(state.data && String(state.data.orgId) === String(state.scope) && !state.awaitingReload),
+    isReady,
     currentPanel: () => state.activePanel
   };
 }
