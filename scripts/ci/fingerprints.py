@@ -19,6 +19,11 @@ SUITES = ("dotnet", "browser", "frontend")
 SQL_TAG = "mcr.microsoft.com/mssql/server:2022-latest"
 CONFIG = ROOT / "scripts/ci/test-reuse.json"
 SOURCE_ALGORITHM = "suite-inputs-v1"
+EXECUTORS = {
+    "frontend": {"id": "build-test-package", "name": "Frontend, CI checks and package"},
+    "dotnet": {"id": "dotnet-qualification", "name": "Non-browser .NET/SQL qualification"},
+    "browser": {"id": "browser-qualification", "name": "Browser/SQL qualification"},
+}
 
 
 def canonical(value):
@@ -38,9 +43,11 @@ def command(arguments, root=ROOT):
 
 def configuration():
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    if (type(config["schema"]) is not int or config["schema"] != 5
+    if (type(config["schema"]) is not int or config["schema"] != 6
             or not 1 <= config["lifetime_days"] <= 14 or not config["environment_epoch"]):
         raise ValueError("Invalid evidence lifetime/environment epoch")
+    if config.get("executors") != EXECUTORS or "job" in config:
+        raise ValueError("Every required suite must have its fixed owning execution job")
     if not isinstance(config.get("source_inputs"), list) or not config["source_inputs"]:
         raise ValueError("Missing source input policy")
     for rule in config["source_inputs"]:
@@ -82,7 +89,7 @@ def full_ci_execution_contract(workflow):
     """Bind every test executor, reporting gate and deployment authorization edit."""
     workflow = workflow.replace("\r\n", "\n")
     if not all(len(re.findall(r"(?m)^  " + name + r":[ \\t]*$", workflow)) == 1
-               for name in ("build-test-package", "validation")):
+               for name in (*(owner["id"] for owner in EXECUTORS.values()), "validation")):
         raise ValueError("Missing or ambiguous required execution jobs")
     return digest(workflow)
 

@@ -131,13 +131,20 @@ Keep compact deterministic fixtures and focused current-behavior regression
 checks. A test count must represent current discovered tests; removed files
 must not be counted as coverage.
 
-Full CI uses one clc-linux runner and one Release solution build. Execute fresh
-frontend, non-browser .NET/SQL and browser suites sequentially. Share only the
-job-owned SQL Server 2022 instance; preserve independently owned test databases,
-suite output directories and evidence reuse. Always verify all three suites.
+Full CI uses three concurrent standard GitHub-hosted Ubuntu 24.04 jobs after trust/current-head
+preflight: frontend/CI safety/package, non-browser .NET/SQL, and browser/SQL.
+Each independently builds the exact event SHA in Release with pinned configuration;
+compiled outputs need not be byte-identical or transferred. The frontend job owns
+the deployment ZIP. Each native job owns its SQL Server 2022 instance, ephemeral
+credentials, dynamic loopback port, test databases, diagnostics and unconditional
+cleanup. Keep fixture/test commands serial within each worker. Verify each fixed
+job's assigned suite, and require all three verified suites plus package validation
+at the hosted gate. Preserve independent evidence reuse and final revalidation;
+reused native suites need neither SQL startup nor Chromium installation.
 Build, test and package remains the reporting-only required full-validation
-check; draft validation cannot substitute for it. Keep runner resources and
-deployment authorization unchanged. See `scripts/ci/test-selection.md`.
+check; draft validation on Ubuntu 24.04 cannot substitute for it. Preserve the
+hosted environment epoch and runner provenance checks. Keep DEVWEB/IIS deployment
+on its existing local runner with unchanged authorization. See `scripts/ci/test-selection.md`.
 
 Acceptance tooling is owned by the local checkout, independently of the selected
 application PR. Validate all suites locally, pin one application SHA/tooling

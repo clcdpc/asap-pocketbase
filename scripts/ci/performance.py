@@ -364,6 +364,7 @@ class LinuxMetrics:
                 "memory": key_values(self.read(self.proc / "meminfo", "memory counters")),
                 "vm": key_values(self.read(self.proc / "vmstat", "VM counters")),
                 "pressure": {name: pressure_counters(self.read(self.proc / "pressure" / name, name + " pressure")) for name in ("cpu", "memory", "io")},
+                "filesystems": {"root": self.filesystem(Path("/")), "workspace": self.filesystem(self.workspace)},
                 "disks": disk_counters(self.read(self.proc / "diskstats", "disk counters")),
                 "cgroups": self.read_cgroups(), "processes": processes}
         if any(key not in result["cpu"] for key in CPU_FIELDS):
@@ -390,6 +391,7 @@ class LinuxMetrics:
                 "cpu": {**cpu_percentages(previous.get("cpu", {}), current["cpu"]),
                         "load_1_5_15": [numeric(value) for value in current["load"]]},
                 "memory": memory,
+                "filesystems": current["filesystems"],
                 "pressure": {name: pressure_interval(previous.get("pressure", {}).get(name, {}), values, seconds) for name, values in current["pressure"].items()},
                 "disks": {name: disk_interval(previous.get("disks", {}).get(name, {}), current["disks"][name], seconds) for name in self.devices["names"] if name in current["disks"]},
                 "cgroups": [cgroup_interval(next((old for old in previous.get("cgroups", []) if old["level"] == value["level"]), {}), value, seconds) for value in current["cgroups"]],
@@ -586,6 +588,10 @@ def summary(rows, duration, exit_code, unavailable, interrupted=None):
                                 ("Guest swap used (MiB)", ("memory", "swap_used_bytes"), 1024**2)):
         lines.append(f"| {label} | {average_peak(host, keys, scale)} |")
     swap_in, swap_out, major = (total(host, "memory", key) for key in ("swap_in_bytes", "swap_out_bytes", "major_faults"))
+    for name in ("root", "workspace"):
+        free = [at(row, "filesystems", name, "free_bytes") for row in host
+                if at(row, "filesystems", name, "free_bytes") is not None]
+        lines.append(f"| {name.capitalize()} minimum sampled disk free (GiB) | {fmt(min(free) / 1024**3 if free else None)} |")
     lines += ["", f"Swap in/out: {fmt(swap_in / 1024**2 if swap_in is not None else None)} / {fmt(swap_out / 1024**2 if swap_out is not None else None)} MiB; major faults: {fmt(major)}.", ""]
     for device in sorted({key for row in host for key in row.get("disks", {})}):
         disk_rows = [{"interval_seconds": row.get("interval_seconds", 0), **row["disks"][device]} for row in host if device in row.get("disks", {})]

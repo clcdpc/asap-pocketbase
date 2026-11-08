@@ -191,15 +191,15 @@ class Validator:
         require(self.workflow["path"] == config["workflow"] and integer(self.workflow["id"]),
                 "Unexpected workflow identity")
 
-    def context(self, run, attempt):
+    def context(self, run, attempt, suite):
         config = self.config
         run_id, latest = run["id"], run["run_attempt"]
         require(integer(run_id) and integer(attempt) and integer(latest)
                 and attempt <= latest <= attempt + 10, "Invalid or excessive originating attempts")
-        job_name = config["job"]
+        job_name = config["executors"][suite]["name"]
         require(run["workflow_id"] == self.workflow["id"] and run["path"] == config["workflow"],
                 "Wrong originating workflow")
-        key = run_id, attempt, latest
+        key = run_id, attempt, latest, suite
         if key in self.contexts:
             return self.contexts[key]
         for repository in (run["repository"], run["head_repository"]):
@@ -214,29 +214,21 @@ class Validator:
                 and original["run_attempt"] == attempt and original["id"] == run_id,
                 "Unsuccessful or mismatched originating attempt")
         jobs = list(self.api.pages(f"/actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs"))
-        matching = [job for job in jobs if job["name"] == job_name]
-        require(len(matching) == 1 and successful(matching[0]), "Required job was not successful")
-        gates = [job for job in jobs if job["name"] == "Build, test and package"]
-        require(len(gates) == 1 and successful(gates[0]) and gates[0]["run_id"] == run_id
-                and gates[0]["head_sha"] == run["head_sha"], "Required reporting gate was not successful")
-        # A deployment-only retry increments run_attempt without rerunning Full
-        # CI. Preserve its original qualification, but never ignore a subsequent
-        # failed executor/gate. Inspect every intervening attempt within bounds.
+        self.qualification(jobs, run)
+        # Deployment-only retries preserve the complete original qualification.
+        # Never ignore a later incomplete or failed worker/reporting gate.
         for later in range(attempt + 1, latest + 1):
             later_jobs = list(self.api.pages(f"/actions/runs/{run_id}/attempts/{later}/jobs", "jobs"))
-            relevant = [job for job in later_jobs if job["name"] in (job_name, "Build, test and package")]
             deployment_only = bool(later_jobs) and all(job["name"] == "Deploy exact artifact to test IIS"
                                                      for job in later_jobs)
-            later_gates = [job for job in later_jobs if job["name"] == "Build, test and package"]
-            require(deployment_only or (len(later_gates) == 1 and successful(later_gates[0])),
-                    "Later attempt has no completed qualification or scheduled deployment-only retry")
+            if not deployment_only:
+                self.qualification(later_jobs, run)
             require(all(job["run_id"] == run_id and job["head_sha"] == run["head_sha"] for job in later_jobs),
                     "Later attempt job identity changed")
-            require(all(successful(job) and job["run_id"] == run_id and job["head_sha"] == run["head_sha"]
-                        for job in relevant), "A later qualification attempt did not succeed")
-        job = matching[0]
+        job = next(job for job in jobs if job["name"] == job_name)
         require(job["run_id"] == run_id and job["head_sha"] == run["head_sha"]
                 and job["runner_group_name"] == config["runner_group"]
+                and job["runner_group_id"] == config["runner_group_id"]
                 and sorted(job["labels"]) == sorted(config["runner_labels"]), "Wrong job/runner identity")
         logs = self.api.request(f"/actions/jobs/{job['id']}/logs", limit=64 * 1024 * 1024).decode("utf-8-sig")
         # This is actions/checkout's own Git output, before any repository test command.
@@ -267,6 +259,19 @@ class Validator:
         context = {"run": run, "attempt": attempt, "job": job, "commit": commit, "tree": tree, "entries": entries}
         self.contexts[key] = context
         return context
+
+    def qualification(self, jobs, run):
+        # Suite artifacts alone never establish a completed originating qualification.
+        for name in [*(owner["name"] for owner in self.config["executors"].values()), "Build, test and package"]:
+            matching = [job for job in jobs if job["name"] == name]
+            require(len(matching) == 1 and successful(matching[0])
+                    and matching[0]["run_id"] == run["id"] and matching[0]["head_sha"] == run["head_sha"],
+                    "Required originating qualification job was missing or unsuccessful")
+        package = next(job for job in jobs if job["name"] == self.config["executors"]["frontend"]["name"])
+        for name in ("Verify publish artifacts", "Create exact test-IIS deployment ZIP",
+                     "Validate test-IIS package without host mutation", "Upload exact test-IIS deployment artifact"):
+            steps = [step for step in package["steps"] if step["name"] == name]
+            require(len(steps) == 1 and successful(steps[0]), "Original package qualification was incomplete")
 
     def execution_contract(self, context):
         entries = [e for e in context["entries"] if e[0] == self.config["workflow"]
@@ -315,9 +320,9 @@ class Validator:
         # Reject a different input key before fetching potentially large job logs
         # and Git trees. This is only a filter; every HIT still proves provenance.
         require(manifest["fingerprint"] == current["fingerprint"], "Different effective test inputs")
-        context = self.context(run, manifest["run_attempt"])
+        context = self.context(run, manifest["run_attempt"], suite)
         require(manifest["repository"] == config["repository"] and manifest["repository_id"] == config["repository_id"]
-                and manifest["workflow"] == config["workflow"] and manifest["job"] == config["job"]
+                and manifest["workflow"] == config["workflow"] and manifest["job"] == config["executors"][suite]["name"]
                 and manifest["run_id"] == run["id"] and manifest["run_attempt"] == context["attempt"]
                 and manifest["source_commit"] == context["commit"] and manifest["source_tree"] == context["tree"],
                 "Forged or incomplete manifest provenance")
@@ -355,14 +360,15 @@ class Validator:
 
 def validate_executor(env=None):
     env = os.environ if env is None else env
-    require(env.get("GITHUB_JOB") == "build-test-package",
-            "Only the full executor can qualify the mandatory suite population")
+    suites = [suite for suite, owner in fp.EXECUTORS.items() if owner["id"] == env.get("GITHUB_JOB")]
+    require(len(suites) == 1, "Only a fixed owning job can qualify its assigned suite")
+    return suites[0]
 
 
-def lookup(api, config, current, forced=False):
+def lookup(api, config, current, forced=False, suites=fp.SUITES):
     decisions = {suite: {"reuse": False, "reason": "Forced full CI" if forced else "No matching successful original evidence"}
-                 for suite in fp.SUITES}
-    for suite in fp.SUITES:
+                 for suite in suites}
+    for suite in suites:
         if current["suites"][suite]["unavailable"]:
             decisions[suite]["reason"] = current["suites"][suite]["unavailable"]
     if forced:
@@ -370,7 +376,7 @@ def lookup(api, config, current, forced=False):
     try:
         validator = Validator(api, config, current)
         runs = {}
-        for suite in fp.SUITES:
+        for suite in suites:
             if current["suites"][suite]["unavailable"]:
                 continue
             # Content-addressed names let the API search all retained matching
@@ -397,7 +403,7 @@ def lookup(api, config, current, forced=False):
                 except Exception as error:
                     decisions[suite]["reason"] = "Unverifiable evidence: " + failure_reason(error)
     except Exception as error:
-        for suite in fp.SUITES:
+        for suite in suites:
             decisions[suite] = {"reuse": False, "reason": "GitHub lookup unavailable: " + failure_reason(error)}
     return decisions
 
@@ -420,33 +426,35 @@ def api_client(config):
 
 def plan(directory=DIRECTORY):
     config = fp.configuration()
+    owned = validate_executor()
+    suites = (owned,)
     (directory / "current.json").unlink(missing_ok=True)
     current = None
-    decisions = {s: {"reuse": False, "reason": "Fingerprint unavailable; execute normal tests"} for s in fp.SUITES}
+    decisions = {s: {"reuse": False, "reason": "Fingerprint unavailable; execute normal tests"} for s in suites}
     try:
         current = fp.calculate(os.environ["GITHUB_SHA"], config)
         write_json(directory / "current.json", current)
         if forced_full():
-            decisions = lookup(None, config, current, True)
+            decisions = lookup(None, config, current, True, suites)
             if os.environ.get("ASAP_FORCE_FULL_CI") != "true":
                 reason = test_selection.load()["decision"]["reason"]
                 for decision in decisions.values():
                     decision["reason"] = "Selection requires fresh execution: " + reason
         else:
-            decisions = lookup(api_client(config), config, current)
+            decisions = lookup(api_client(config), config, current, suites=suites)
     except Exception as error:
         # Deliberately omit exception messages: subprocess/API errors can contain sensitive data.
         print(f"::notice::Test reuse unavailable ({type(error).__name__}); normal tests required.")
     write_json(directory / "plan.json", {"run_id": os.environ["GITHUB_RUN_ID"],
-               "attempt": os.environ["GITHUB_RUN_ATTEMPT"], "decisions": decisions})
-    outputs = {s: str(decisions[s]["reuse"]).lower() for s in fp.SUITES}
+               "attempt": os.environ["GITHUB_RUN_ATTEMPT"], "job": os.environ["GITHUB_JOB"], "decisions": decisions})
+    outputs = {s: str(decisions[s]["reuse"]).lower() for s in suites}
     if current:
-        outputs.update({s + "_fingerprint": current["suites"][s]["fingerprint"] for s in fp.SUITES})
+        outputs.update({s + "_fingerprint": current["suites"][s]["fingerprint"] for s in suites})
     outputs["schema"] = config["schema"]
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         for key, value in outputs.items():
             output.write(f"{key}={value}\n")
-    for suite in fp.SUITES:
+    for suite in suites:
         print(f"{LABELS[suite]}: {'HIT' if decisions[suite]['reuse'] else 'MISS'} — {decisions[suite]['reason']}")
 
 
@@ -458,7 +466,7 @@ def record(config, current, suite, results, directory=DIRECTORY):
     manifest = {
         "schema": config["schema"], "kind": "executed", "outcome": "passed", "suite": suite,
         "repository": config["repository"], "repository_id": config["repository_id"],
-        "workflow": config["workflow"], "job": config["job"],
+        "workflow": config["workflow"], "job": config["executors"][suite]["name"],
         "run_id": int(os.environ["GITHUB_RUN_ID"]), "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
         "source_commit": current["commit"], "source_tree": current["tree"],
         "source_algorithm": fp.SOURCE_ALGORITHM,
@@ -506,6 +514,7 @@ def summary(rows, current):
 
 def verify(directory=DIRECTORY):
     config = fp.configuration()
+    owned = validate_executor()
     try:
         current = json.loads((directory / "current.json").read_bytes())
     except (OSError, ValueError):
@@ -544,7 +553,7 @@ def verify(directory=DIRECTORY):
         pass
     rows, failures = {}, []
     validator = None
-    for suite in fp.SUITES:
+    for suite in (owned,):
         decision = (planned or {}).get("decisions", {}).get(suite, {"reuse": False, "reason": "No reuse plan"})
         rows[suite] = {"status": "FAILED", "reason": decision["reason"]}
         try:
@@ -553,7 +562,8 @@ def verify(directory=DIRECTORY):
             if decision["reuse"]:
                 require(outcome == "skipped" and current is not None and not forced_full(), "Invalid skipped/reused result")
                 require(planned["run_id"] == os.environ["GITHUB_RUN_ID"]
-                        and planned["attempt"] == os.environ["GITHUB_RUN_ATTEMPT"], "Reuse plan is from another execution")
+                        and planned["attempt"] == os.environ["GITHUB_RUN_ATTEMPT"]
+                        and planned["job"] == os.environ["GITHUB_JOB"], "Reuse plan is from another execution")
                 # Re-fetch immutable evidence at the gate; a plan's JSON claim cannot authorize success.
                 if validator is None:
                     validator = Validator(api_client(config), config, current)
@@ -580,6 +590,8 @@ def verify(directory=DIRECTORY):
             output.write(report)
     write_json(directory / "verification.json", rows)
     require(not failures, "Required suites lack verified success: " + ", ".join(failures))
+    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+        output.write(f"verified_{owned}=true\n")
 
 
 def main():
