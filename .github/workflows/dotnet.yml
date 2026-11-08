@@ -76,7 +76,7 @@ jobs:
             core.setOutput('mode', pr.draft ? 'draft' : 'full');
 
   build-test-package:
-    name: Full CI execution
+    name: Frontend, CI checks and package
     needs: validation-policy
     if: ${{ needs.validation-policy.outputs.mode == 'full' }}
     permissions:
@@ -84,12 +84,14 @@ jobs:
       actions: read
       pull-requests: read
     runs-on: clc-linux
-    # One runner/build/SQL instance; frontend, non-browser and browser run sequentially.
+    # Independent builds qualify the same event SHA; this worker owns the package.
     timeout-minutes: 120
     env:
       ASAP_FORCE_FULL_CI: ${{ inputs.force_full_ci || false }}
       ASAP_DEPLOY_TEST_IIS: ${{ inputs.deploy_test_iis || false }}
     outputs:
+      verified_frontend: ${{ steps.verify.outputs.verified_frontend }}
+      package_validated: ${{ steps.validate-package.outcome == 'success' && steps.deployment-artifact.outcome == 'success' }}
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
       deployment_label: ${{ steps.identity.outputs.deployment_label }}
       commit: ${{ steps.identity.outputs.commit }}
@@ -157,82 +159,6 @@ jobs:
           ASAP_CI_PERFORMANCE_OUTPUT: .artifacts/frontend-performance
         run: bash scripts/ci/run-with-performance.sh npm test -- --ci-remaining
 
-      - name: Generate ephemeral SQL test credentials
-        id: sql
-        if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          sql_image="$(python3 -B scripts/ci/reuse.py sql-image)"
-          echo "image=$sql_image" >> "$GITHUB_OUTPUT"
-          echo "ASAP_CI_SQL_IMAGE=$sql_image" >> "$GITHUB_ENV"
-          sql_password="Asap$(openssl rand -hex 32)Aa1!"
-          echo "::add-mask::$sql_password"
-          echo "ASAP_TEST_SQL_SA_PASSWORD=$sql_password" >> "$GITHUB_ENV"
-          echo "ASAP_CI_SQL_CONTAINER=asap-sql-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(openssl rand -hex 8)" >> "$GITHUB_ENV"
-
-      - name: Start SQL Server 2022
-        if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
-        shell: bash
-        env:
-          SQL_IMAGE: ${{ steps.sql.outputs.image }}
-        run: |
-          set -euo pipefail
-          MSSQL_SA_PASSWORD="$ASAP_TEST_SQL_SA_PASSWORD" \
-            docker run --detach --name "$ASAP_CI_SQL_CONTAINER" \
-            --publish 127.0.0.1::1433 \
-            --env ACCEPT_EULA=Y \
-            --env MSSQL_SA_PASSWORD \
-            "$SQL_IMAGE"
-          sql_address="$(docker port "$ASAP_CI_SQL_CONTAINER" 1433/tcp)"
-          sql_port="${sql_address##*:}"
-          [[ "$sql_port" =~ ^[0-9]+$ ]]
-          echo "ASAP_TEST_SQL_CONNECTION_STRING=Server=localhost,$sql_port;Database=master;User ID=sa;Password=$ASAP_TEST_SQL_SA_PASSWORD;Encrypt=True;TrustServerCertificate=True" >> "$GITHUB_ENV"
-
-      - name: Wait for SQL Server
-        if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}
-        shell: bash
-        run: |
-          for attempt in {1..30}; do
-            if printf '%s\n' "$ASAP_TEST_SQL_SA_PASSWORD" | docker exec --interactive "$ASAP_CI_SQL_CONTAINER" /bin/sh -c 'IFS= read -r SQLCMDPASSWORD || exit 1; export SQLCMDPASSWORD; exec /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -l 2 -t 3 -Q "SELECT 1"' >/dev/null 2>&1; then
-              exit 0
-            fi
-            sleep 2
-          done
-          exit 1
-
-      - name: Run .NET and real SQL tests (non-browser partition)
-        id: dotnet
-        if: ${{ steps.reuse.outputs.dotnet != 'true' }}
-        env:
-          ASAP_CI_FIXTURE_TIMINGS: ${{ github.workspace }}/.artifacts/ci-performance/fixture-timings.jsonl
-          ASAP_CI_PERFORMANCE_OUTPUT: .artifacts/ci-performance
-        run: bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run
-
-      - name: Install browser acceptance dependencies
-        if: ${{ steps.reuse.outputs.browser != 'true' }}
-        run: npx playwright install --with-deps chromium
-
-      - name: Run browser accessibility tests
-        id: browser
-        if: ${{ steps.reuse.outputs.browser != 'true' }}
-        env:
-          ASAP_CI_FIXTURE_TIMINGS: ${{ github.workspace }}/.artifacts/browser-performance/fixture-timings.jsonl
-          ASAP_CI_PERFORMANCE_OUTPUT: .artifacts/browser-performance
-          ASAP_CI_BROWSER_RESULTS: ${{ github.workspace }}/.artifacts/browser-performance/test-results.trx
-          ASAP_CI_TEST_SELECTION: ${{ github.workspace }}/.artifacts/test-selection/selection.json
-        run: bash scripts/ci/run-with-performance.sh npm run test:browser
-
-      - name: Summarize .NET/SQL diagnostic evidence
-        if: ${{ always() && steps.dotnet.outcome != 'skipped' && steps.dotnet.outcome != '' }}
-        continue-on-error: true
-        run: python3 -B scripts/ci/diagnostic_report.py
-
-      - name: Summarize browser diagnostic evidence
-        if: ${{ always() && steps.browser.outcome != 'skipped' && steps.browser.outcome != '' }}
-        continue-on-error: true
-        run: python3 -B scripts/ci/diagnostic_report.py --output .artifacts/browser-performance
-
       - name: Upload frontend performance telemetry
         if: ${{ always() }}
         continue-on-error: true
@@ -243,45 +169,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Upload .NET/SQL performance telemetry
-        if: ${{ always() }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-performance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/ci-performance/
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Upload browser performance telemetry
-        if: ${{ always() }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: browser-performance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/browser-performance/
-          if-no-files-found: ignore
-          retention-days: 7
-
       - name: Verify required test suites
         id: verify
         if: ${{ always() }}
         env:
           GH_TOKEN: ${{ github.token }}
-          DOTNET_OUTCOME: ${{ steps.dotnet.outcome }}
-          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
           FRONTEND_OUTCOME: ${{ steps.frontend.outcome }}
         run: python3 -B scripts/ci/reuse.py verify
-
-      - name: Upload original dotnet execution evidence
-        if: ${{ steps.verify.outcome == 'success' && steps.dotnet.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-dotnet-${{ steps.reuse.outputs.dotnet_fingerprint }}
-          overwrite: true
-          path: .artifacts/test-reuse/evidence/dotnet/
-          if-no-files-found: ignore
-          retention-days: 14
 
       - name: Upload original frontend execution evidence
         if: ${{ steps.verify.outcome == 'success' && steps.frontend.outcome == 'success' }}
@@ -293,21 +187,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Upload original browser execution evidence
-        if: ${{ steps.verify.outcome == 'success' && steps.browser.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-browser-${{ steps.reuse.outputs.browser_fingerprint }}
-          overwrite: true
-          path: .artifacts/test-reuse/evidence/browser/
-          if-no-files-found: ignore
-          retention-days: 14
-
       - name: Upload test verification decisions
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: asap-test-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          name: asap-test-verification-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/test-reuse/frontend-results.json
             .artifacts/test-reuse/verification.json
@@ -317,15 +201,6 @@ jobs:
             .artifacts/test-selection/catalog.json
           if-no-files-found: ignore
           retention-days: 14
-
-      - name: Upload browser diagnostics on failure
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: browser-diagnostics-${{ github.sha }}
-          path: .artifacts/browser
-          if-no-files-found: ignore
-          retention-days: 7
 
       - name: Verify publish artifacts
         shell: pwsh
@@ -473,6 +348,7 @@ jobs:
           Write-Host "Created $zipPath ($zipHash)"
 
       - name: Validate test-IIS package without host mutation
+        id: validate-package
         shell: pwsh
         env:
           EXPECTED_DEPLOYMENT_LABEL: ${{ steps.identity.outputs.deployment_label }}
@@ -497,6 +373,7 @@ jobs:
           }
 
       - name: Upload exact test-IIS deployment artifact
+        id: deployment-artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.identity.outputs.artifact_name }}
@@ -506,6 +383,166 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+
+  dotnet-qualification:
+    name: Non-browser .NET/SQL qualification
+    needs: validation-policy
+    if: ${{ needs.validation-policy.outputs.mode == 'full' }}
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    runs-on: clc-linux
+    # Independent build and SQL instance; test commands remain serial within this job.
+    timeout-minutes: 120
+    env:
+      ASAP_FORCE_FULL_CI: ${{ inputs.force_full_ci || false }}
+      ASAP_DEPLOY_TEST_IIS: ${{ inputs.deploy_test_iis || false }}
+    outputs:
+      verified_dotnet: ${{ steps.verify.outputs.verified_dotnet }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify exact test source
+        run: python3 -B scripts/ci/reuse.py checkout
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/*.sqlproj
+            Directory.Packages.props
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Restore and build
+        run: dotnet build Asap.sln --configuration Release
+
+      - name: Resolve required test population
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/selection.py prepare
+
+      # Lookup runs after runner allocation/build, so a queued run sees completed predecessors.
+      - name: Find reusable test executions
+        id: reuse
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/reuse.py plan
+
+      - name: Generate ephemeral SQL test credentials
+        id: sql
+        if: ${{ steps.reuse.outputs.dotnet != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sql_image="$(python3 -B scripts/ci/reuse.py sql-image)"
+          echo "image=$sql_image" >> "$GITHUB_OUTPUT"
+          echo "ASAP_CI_SQL_IMAGE=$sql_image" >> "$GITHUB_ENV"
+          sql_password="Asap$(openssl rand -hex 32)Aa1!"
+          echo "::add-mask::$sql_password"
+          echo "ASAP_TEST_SQL_SA_PASSWORD=$sql_password" >> "$GITHUB_ENV"
+          echo "ASAP_CI_SQL_CONTAINER=asap-sql-$GITHUB_JOB-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(openssl rand -hex 8)" >> "$GITHUB_ENV"
+
+      - name: Start SQL Server 2022
+        if: ${{ steps.reuse.outputs.dotnet != 'true' }}
+        shell: bash
+        env:
+          SQL_IMAGE: ${{ steps.sql.outputs.image }}
+        run: |
+          set -euo pipefail
+          MSSQL_SA_PASSWORD="$ASAP_TEST_SQL_SA_PASSWORD" \
+            docker run --detach --name "$ASAP_CI_SQL_CONTAINER" \
+            --publish 127.0.0.1::1433 \
+            --env ACCEPT_EULA=Y \
+            --env MSSQL_SA_PASSWORD \
+            "$SQL_IMAGE"
+          sql_address="$(docker port "$ASAP_CI_SQL_CONTAINER" 1433/tcp)"
+          sql_port="${sql_address##*:}"
+          [[ "$sql_port" =~ ^[0-9]+$ ]]
+          echo "ASAP_TEST_SQL_CONNECTION_STRING=Server=localhost,$sql_port;Database=master;User ID=sa;Password=$ASAP_TEST_SQL_SA_PASSWORD;Encrypt=True;TrustServerCertificate=True" >> "$GITHUB_ENV"
+
+      - name: Wait for SQL Server
+        if: ${{ steps.reuse.outputs.dotnet != 'true' }}
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if printf '%s\n' "$ASAP_TEST_SQL_SA_PASSWORD" | docker exec --interactive "$ASAP_CI_SQL_CONTAINER" /bin/sh -c 'IFS= read -r SQLCMDPASSWORD || exit 1; export SQLCMDPASSWORD; exec /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -l 2 -t 3 -Q "SELECT 1"' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Run .NET and real SQL tests (non-browser partition)
+        id: dotnet
+        if: ${{ steps.reuse.outputs.dotnet != 'true' }}
+        env:
+          ASAP_CI_FIXTURE_TIMINGS: ${{ github.workspace }}/.artifacts/ci-performance/fixture-timings.jsonl
+          ASAP_CI_PERFORMANCE_OUTPUT: .artifacts/ci-performance
+        run: bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run
+
+      - name: Summarize .NET/SQL diagnostic evidence
+        if: ${{ always() && steps.dotnet.outcome != 'skipped' && steps.dotnet.outcome != '' }}
+        continue-on-error: true
+        run: python3 -B scripts/ci/diagnostic_report.py
+
+      - name: Upload .NET/SQL performance telemetry
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/ci-performance/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Verify required test suites
+        id: verify
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOTNET_OUTCOME: ${{ steps.dotnet.outcome }}
+        run: python3 -B scripts/ci/reuse.py verify
+
+      - name: Upload original dotnet execution evidence
+        if: ${{ steps.verify.outcome == 'success' && steps.dotnet.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-dotnet-${{ steps.reuse.outputs.dotnet_fingerprint }}
+          overwrite: true
+          path: .artifacts/test-reuse/evidence/dotnet/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload test verification decisions
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-verification-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/test-reuse/frontend-results.json
+            .artifacts/test-reuse/verification.json
+            .artifacts/test-reuse/plan.json
+            .artifacts/test-reuse/current.json
+            .artifacts/test-selection/selection.json
+            .artifacts/test-selection/catalog.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Remove SQL Server test container
         if: ${{ always() }}
         shell: bash
@@ -513,6 +550,191 @@ jobs:
           if [ -n "${ASAP_CI_SQL_CONTAINER:-}" ]; then
             docker rm --force "$ASAP_CI_SQL_CONTAINER" >/dev/null 2>&1 || true
           fi
+
+
+
+  browser-qualification:
+    name: Browser/SQL qualification
+    needs: validation-policy
+    if: ${{ needs.validation-policy.outputs.mode == 'full' }}
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    runs-on: clc-linux
+    # Independent build and SQL instance; test commands remain serial within this job.
+    timeout-minutes: 120
+    env:
+      ASAP_FORCE_FULL_CI: ${{ inputs.force_full_ci || false }}
+      ASAP_DEPLOY_TEST_IIS: ${{ inputs.deploy_test_iis || false }}
+    outputs:
+      verified_browser: ${{ steps.verify.outputs.verified_browser }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify exact test source
+        run: python3 -B scripts/ci/reuse.py checkout
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/*.sqlproj
+            Directory.Packages.props
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Restore and build
+        run: dotnet build Asap.sln --configuration Release
+
+      - name: Resolve required test population
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/selection.py prepare
+
+      # Lookup runs after runner allocation/build, so a queued run sees completed predecessors.
+      - name: Find reusable test executions
+        id: reuse
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/reuse.py plan
+
+      - name: Generate ephemeral SQL test credentials
+        id: sql
+        if: ${{ steps.reuse.outputs.browser != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sql_image="$(python3 -B scripts/ci/reuse.py sql-image)"
+          echo "image=$sql_image" >> "$GITHUB_OUTPUT"
+          echo "ASAP_CI_SQL_IMAGE=$sql_image" >> "$GITHUB_ENV"
+          sql_password="Asap$(openssl rand -hex 32)Aa1!"
+          echo "::add-mask::$sql_password"
+          echo "ASAP_TEST_SQL_SA_PASSWORD=$sql_password" >> "$GITHUB_ENV"
+          echo "ASAP_CI_SQL_CONTAINER=asap-sql-$GITHUB_JOB-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(openssl rand -hex 8)" >> "$GITHUB_ENV"
+
+      - name: Start SQL Server 2022
+        if: ${{ steps.reuse.outputs.browser != 'true' }}
+        shell: bash
+        env:
+          SQL_IMAGE: ${{ steps.sql.outputs.image }}
+        run: |
+          set -euo pipefail
+          MSSQL_SA_PASSWORD="$ASAP_TEST_SQL_SA_PASSWORD" \
+            docker run --detach --name "$ASAP_CI_SQL_CONTAINER" \
+            --publish 127.0.0.1::1433 \
+            --env ACCEPT_EULA=Y \
+            --env MSSQL_SA_PASSWORD \
+            "$SQL_IMAGE"
+          sql_address="$(docker port "$ASAP_CI_SQL_CONTAINER" 1433/tcp)"
+          sql_port="${sql_address##*:}"
+          [[ "$sql_port" =~ ^[0-9]+$ ]]
+          echo "ASAP_TEST_SQL_CONNECTION_STRING=Server=localhost,$sql_port;Database=master;User ID=sa;Password=$ASAP_TEST_SQL_SA_PASSWORD;Encrypt=True;TrustServerCertificate=True" >> "$GITHUB_ENV"
+
+      - name: Wait for SQL Server
+        if: ${{ steps.reuse.outputs.browser != 'true' }}
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if printf '%s\n' "$ASAP_TEST_SQL_SA_PASSWORD" | docker exec --interactive "$ASAP_CI_SQL_CONTAINER" /bin/sh -c 'IFS= read -r SQLCMDPASSWORD || exit 1; export SQLCMDPASSWORD; exec /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -l 2 -t 3 -Q "SELECT 1"' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Install browser acceptance dependencies
+        if: ${{ steps.reuse.outputs.browser != 'true' }}
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser accessibility tests
+        id: browser
+        if: ${{ steps.reuse.outputs.browser != 'true' }}
+        env:
+          ASAP_CI_FIXTURE_TIMINGS: ${{ github.workspace }}/.artifacts/browser-performance/fixture-timings.jsonl
+          ASAP_CI_PERFORMANCE_OUTPUT: .artifacts/browser-performance
+          ASAP_CI_BROWSER_RESULTS: ${{ github.workspace }}/.artifacts/browser-performance/test-results.trx
+          ASAP_CI_TEST_SELECTION: ${{ github.workspace }}/.artifacts/test-selection/selection.json
+        run: bash scripts/ci/run-with-performance.sh npm run test:browser
+
+      - name: Summarize browser diagnostic evidence
+        if: ${{ always() && steps.browser.outcome != 'skipped' && steps.browser.outcome != '' }}
+        continue-on-error: true
+        run: python3 -B scripts/ci/diagnostic_report.py --output .artifacts/browser-performance
+
+      - name: Upload browser performance telemetry
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/browser-performance/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Verify required test suites
+        id: verify
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
+        run: python3 -B scripts/ci/reuse.py verify
+
+      - name: Upload original browser execution evidence
+        if: ${{ steps.verify.outcome == 'success' && steps.browser.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-evidence-v${{ steps.reuse.outputs.schema }}-browser-${{ steps.reuse.outputs.browser_fingerprint }}
+          overwrite: true
+          path: .artifacts/test-reuse/evidence/browser/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload test verification decisions
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asap-test-verification-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/test-reuse/frontend-results.json
+            .artifacts/test-reuse/verification.json
+            .artifacts/test-reuse/plan.json
+            .artifacts/test-reuse/current.json
+            .artifacts/test-selection/selection.json
+            .artifacts/test-selection/catalog.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload browser diagnostics on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-diagnostics-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/browser
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove SQL Server test container
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [ -n "${ASAP_CI_SQL_CONTAINER:-}" ]; then
+            docker rm --force "$ASAP_CI_SQL_CONTAINER" >/dev/null 2>&1 || true
+          fi
+
 
 
   draft-validation:
@@ -567,7 +789,7 @@ jobs:
   validation:
     # Draft success must not emit the required full-validation check name.
     name: ${{ needs.validation-policy.outputs.mode == 'draft' && 'Draft CI result' || 'Build, test and package' }}
-    needs: [validation-policy, build-test-package, draft-validation]
+    needs: [validation-policy, build-test-package, dotnet-qualification, browser-qualification, draft-validation]
     if: ${{ always() }}
     permissions:
       contents: read
@@ -583,6 +805,12 @@ jobs:
           CI_POLICY_RESULT: ${{ needs.validation-policy.result }}
           CI_VALIDATION_MODE: ${{ needs.validation-policy.outputs.mode }}
           CI_FULL_RESULT: ${{ needs.build-test-package.result }}
+          CI_DOTNET_RESULT: ${{ needs.dotnet-qualification.result }}
+          CI_BROWSER_RESULT: ${{ needs.browser-qualification.result }}
+          CI_FRONTEND_VERIFIED: ${{ needs.build-test-package.outputs.verified_frontend }}
+          CI_DOTNET_VERIFIED: ${{ needs.dotnet-qualification.outputs.verified_dotnet }}
+          CI_BROWSER_VERIFIED: ${{ needs.browser-qualification.outputs.verified_browser }}
+          CI_PACKAGE_VALIDATED: ${{ needs.build-test-package.outputs.package_validated }}
           CI_DRAFT_RESULT: ${{ needs.draft-validation.result }}
         run: |
           if [ "$CI_POLICY_RESULT" != 'success' ]; then
@@ -597,7 +825,9 @@ jobs:
               fi
               ;;
             full)
-              if [ "$CI_FULL_RESULT" != 'success' ]; then
+              if [ "$CI_FULL_RESULT" != 'success' ] || [ "$CI_DOTNET_RESULT" != 'success' ] || [ "$CI_BROWSER_RESULT" != 'success' ] ||
+                 [ "$CI_FRONTEND_VERIFIED" != 'true' ] || [ "$CI_DOTNET_VERIFIED" != 'true' ] || [ "$CI_BROWSER_VERIFIED" != 'true' ] ||
+                 [ "$CI_PACKAGE_VALIDATED" != 'true' ]; then
                 echo '::error::Full CI must complete successfully; skipped, failed or cancelled execution cannot satisfy this check.'
                 exit 1
               fi

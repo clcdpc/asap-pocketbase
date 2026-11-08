@@ -178,7 +178,7 @@ class SqlLifecycleTests(unittest.TestCase):
     def test_workflow_bootstrap_forwards_password_without_secret_arguments(self):
         workflow = Path(__file__).resolve().parents[2] / ".github/workflows/dotnet.yml"
         text = workflow.read_text()
-        def command(name, style):
+        def command(text, name, style):
             match = re.search(r"      - name: " + re.escape(name)
                 + r"\n((?:        [^\n]*\n)*?)        run: " + re.escape(style)
                 + r"\n(.*?)(?=\n      - |\n  [a-zA-Z][\w-]*:|\Z)", text, re.S)
@@ -201,10 +201,13 @@ class SqlLifecycleTests(unittest.TestCase):
             env = dict(os.environ, PATH=str(root), ASAP_TEST_SQL_SA_PASSWORD=SECRET,
                        ASAP_CI_SQL_CONTAINER="asap-sql-bootstrap-fixture", GITHUB_ENV=str(root / "github-env"),
                        SQL_IMAGE="mcr.microsoft.com/mssql/server@sha256:" + "1" * 64)
-            for name, style in (("Start SQL Server 2022", "|"), ("Wait for SQL Server", "|"), ("Remove SQL Server test container", "|")):
-                result = subprocess.run(["/bin/bash", "-c", command(name, style)], env=env, capture_output=True, text=True, timeout=4)
-                self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(calls.read_text(), "run\nport\nexec\nrm\n")
+            for job in ("dotnet-qualification", "browser-qualification"):
+                owned = re.split(r"\n  [a-zA-Z][\w-]*:", text.split(f"  {job}:\n", 1)[1], maxsplit=1)[0]
+                env["ASAP_CI_SQL_CONTAINER"] = "asap-sql-" + job + "-fixture"
+                for name, style in (("Start SQL Server 2022", "|"), ("Wait for SQL Server", "|"), ("Remove SQL Server test container", "|")):
+                    result = subprocess.run(["/bin/bash", "-c", command(owned, name, style)], env=env, capture_output=True, text=True, timeout=4)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(calls.read_text(), "run\nport\nexec\nrm\n" * 2)
             self.assertIn("Server=localhost,15432;", (root / "github-env").read_text())
 
     @unittest.skipUnless(sys.platform == "linux", "Linux executable Docker fixture")

@@ -22,32 +22,37 @@ mandatory; counts are derived from current discovery.
 
 ## Execution and required gate
 
-Hosted validation-policy resolves current trusted PR state before runner
-allocation. Draft PRs run bounded configuration/unit contracts and the complete
-frontend suite. Ready PRs, main pushes and manual qualification use one Full CI
-execution job on one ephemeral clc-linux runner, retaining 2 vCPUs, existing VM
-memory and the 120-minute timeout. Hosted policy/reporting jobs use no clc-linux
-slot. No infrastructure, runner labels, acquisition or scaling settings change.
+Hosted validation-policy resolves current trusted PR state before local repository
+execution. Draft PRs retain bounded configuration/unit contracts and the complete
+frontend suite, under their distinct Draft CI result.
 
-The executor checks out the exact event SHA, sets up tools, builds Release once,
-checks current safety contracts and discovers the complete population. It plans
-reuse independently for all three suites, then runs fresh frontend, non-browser
-.NET/SQL and browser tests in that order, with no overlapping test commands.
-When either native suite needs execution, the job creates one ephemeral SQL
-password, starts one digest-resolved SQL Server 2022 container and waits once.
-The container name is unique to the run/attempt and binds a dynamic loopback
-port. Test databases remain independently owned; their fixture lifecycle is
-unchanged. An always-run cleanup removes only the owned container. Existing
-process-group cancellation stops testhost/Chromium descendants before teardown.
+Full qualification makes exactly three clc-linux jobs eligible concurrently:
+Frontend, CI checks and package; Non-browser .NET/SQL qualification; and
+Browser/SQL qualification. Each checks out and verifies the exact event SHA,
+uses repository-pinned setup, independently builds Release and discovers the
+complete native population and its disjoint partitions. Tests and package
+qualify the same source commit; compiled outputs need not be byte-identical or
+transferred. No shared-build prerequisite or aggregation worker is used. Existing
+runner resources, labels and 120-minute limits remain unchanged.
 
-One mandatory verifier checks every suite and publishes only original successful
-evidence. The reporting-only Build, test and package gate requires the execution
-job to succeed. Missing, failed, cancelled or skipped full execution fails the
-gate. Draft CI result remains distinct. Publication reuses the current build
-with --no-build/--no-restore; asset validation, DACPAC/ZIP identity and digest
-checks and ValidateOnly remain mandatory even on complete evidence reuse.
-Test-IIS activation still requires existing explicit authorization and successful
-final qualification. There is no aggregation test job or additional runner.
+Fixed owning job IDs determine each suite's advisory plan and final verification.
+Each worker verifies only its own actual execution or revalidated original.
+Fresh native jobs each own a SQL Server 2022 instance, ephemeral credentials,
+unique job/run/attempt/random container name, dynamic loopback port, independent
+fixture databases and always-run owned cleanup. Fixture/test commands remain
+serial within a worker; process-group cancellation/teardown is unchanged.
+A reused native suite starts no SQL; reused browser execution installs no
+Chromium. Superseded PR runs still cancel. Workers depend only on hosted policy,
+so one failure does not cancel already-started peers.
+
+The frontend job runs mandatory workflow/reuse safety contracts and owns publish,
+frontend/DACPAC/content validation, deployment ZIP/manifest/digest production,
+ValidateOnly and upload. Packaging can finish before native qualification.
+The reporting-only hosted Build, test and package gate requires successful
+policy, all three successful workers, explicit verified outputs for every suite,
+and successful package validation/upload. Missing, failed, cancelled or
+unexpectedly skipped work fails. Deployment still requires the complete gate
+and existing event/environment/current-main authorization.
 
 Browser and frontend source changes invalidate their evidence. The directory/file
 input policy in test-reuse.json assigns authored frontend JS/CSS and Node/browser
@@ -74,7 +79,7 @@ runs share the same fingerprint/evidence contract. Tag refs (including annotated
 tags) must peel to the exact tested commit; release and deployment metadata must
 agree with it. Verified empty diffs still require the complete population.
 
-Evidence schema 5 rejects prior populations and the two-job contract. It binds suite, exact
+Evidence schema 6 rejects prior populations and the single-/two-job contracts. It binds suite, exact
 identities, complete classification, source/resolved dependencies, originating
 run/attempt/job, checkout logs, Git blob/tree identity, artifact digest, age and
 successful original steps. Lookup queries artifacts by their exact suite
@@ -110,8 +115,9 @@ Non-browser TRX, fixture spans and telemetry stay in .artifacts/ci-performance;
 browser writes its own test-results.trx, spans and telemetry directly to
 .artifacts/browser-performance. Frontend telemetry uses
 .artifacts/frontend-performance and receipts use .artifacts/test-reuse.
-Discovery catalogs use .artifacts/test-selection; the single plan, current
-fingerprints and complete verification manifest use .artifacts/test-reuse.
+Each worker's discovery catalogs use .artifacts/test-selection; its own plan,
+current fingerprints and assigned-suite verification use .artifacts/test-reuse.
+Uploaded decision names include job/run/attempt to prevent collisions.
 No TRX copying or combined fixture timeline is needed. The existing
 ci-performance, browser-performance and frontend-performance artifact names
 retain seven-day retention; verification/original evidence retains 14 days.
@@ -122,6 +128,9 @@ runner queueing/startup separately from test-command wall time. See
 [the implementation and validation record](../../docs/implementation/ci-simplification.md).
 
 ## Sequential-runner qualification record
+
+Historical November 2 observations below describe the superseded topology.
+They are not receipts for issue #488 or a controlled speedup comparison.
 
 The intended trade-off is runner availability: one occupied clc-linux slot
 instead of two, with the same 2-vCPU VM resources. PR #422's parallel reference
@@ -176,6 +185,7 @@ A separate closure review examined the completed implementation:
 Exact-commit cold and evidence-reuse Actions receipts, per-stage timings,
 observed CPU/memory, runner-slot accounting and final closure findings are
 maintained in [PR #427](https://github.com/clcdpc/asap-pocketbase/pull/427).
-That measured record distinguishes runner allocation from execution and the
-parallel reference from the sequential run. The PR remains open for review and
-must not be merged by this task.
+That historical record distinguishes runner allocation from execution and the
+parallel reference from the sequential run. Current issue #488 qualification
+requires fresh and fully reused receipts on the final reviewed effective inputs;
+it does not authorize a merge or deployment.

@@ -7,9 +7,13 @@ full gate, PR cancellation groups, fingerprints, trust boundaries and forced
 full CI. Performance collection below still wraps every fresh .NET/SQL
 execution; reused runs link to original test timing instead of inventing samples.
 
-Full qualification occupies one clc-linux runner. Frontend, non-browser .NET/SQL
-and browser commands run sequentially against one Release build. Native suites
-share one job-owned SQL container while retaining independent test databases.
+Full qualification occupies three concurrent clc-linux workers after hosted
+preflight, with independent Release builds of the exact same event SHA.
+Frontend/CI safety/package, non-browser .NET/SQL and browser/SQL each own their
+assigned qualification; the hosted required gate checks every suite and package.
+Each native worker owns its SQL container and independent test databases,
+ephemeral credentials, loopback port and unconditional cleanup. Commands remain
+serial within each worker; reused native suites prepare no SQL/Chromium runtime.
 Evidence reuse remains independent for all three suites. The 2-vCPU VM, memory,
 runner configuration and 120-minute timeout remain unchanged.
 
@@ -44,7 +48,7 @@ The ignored `.artifacts/ci-performance/` directory contains the non-browser
 evidence below. Browser writes the same filenames to
 `.artifacts/browser-performance/`, including its own TRX and fixture spans;
 frontend telemetry uses `.artifacts/frontend-performance/`. The workflow sets
-`ASAP_CI_PERFORMANCE_OUTPUT` for each command, so sequential execution cannot
+`ASAP_CI_PERFORMANCE_OUTPUT` for each command, so execution cannot
 overwrite another suite's samples or summaries.
 
 - `environment.json`: UTC start, validated GitHub run/attempt/SHA, runner type,

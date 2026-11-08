@@ -1,8 +1,8 @@
 # Reuse of current test evidence
 
 See [test selection and qualification](test-selection.md) for the current DAG
-and dependency audit. Schema 5 is the only supported evidence schema; earlier
-populations and the former two-executor workflow cannot qualify current tests.
+and dependency audit. Schema 6 is the only supported evidence schema; earlier
+populations and former single-/two-executor workflows cannot qualify current tests.
 
 Reuse is per suite (dotnet, browser, frontend), never a reduced passing count.
 An original qualification must belong to the trusted repository/workflow,
@@ -25,7 +25,7 @@ On rerun, upload-artifact overwrites only the same name within that run; the
 manifest and API still bind the original run attempt. A deployment-only retry
 preserves that successful qualification. Every later attempt (at most ten) is
 checked for failed qualification. A retry must show an explicitly scheduled
-deployment-only job or a successful reporting gate; empty or still-active
+deployment-only job or all successful workers plus the reporting gate; empty or still-active
 qualification cannot pass. Missing evidence fails closed. Evidence age
 uses the job-bound execution timestamp, not the run's original creation date.
 
@@ -54,22 +54,38 @@ browser packages. These dependencies are prepared only for fresh execution.
 The final verifier re-reads resolved NuGet and Playwright identities and ambient
 extension guards after lookup.
 
-Full CI execution plans and verifies dotnet, browser and frontend independently
-in one job on one clc-linux runner. The verifier always evaluates all three
-suites; no executor-scope setting can narrow that population. Each original
-manifest names Full CI execution and must independently match its own successful
-test step and evidence-upload step. A skipped step needs verified original
-evidence for that suite. Missing or failed execution cannot be hidden by another
-suite's success. The reporting-only Build, test and package gate requires the
-consolidated executor to succeed; draft validation retains its distinct result.
+Three clc-linux execution jobs independently build the same exact event SHA.
+Frontend/CI checks/package, non-browser .NET/SQL and browser/SQL become eligible
+concurrently after hosted preflight. Separate builds are accepted; compiled bytes
+need not be identical or transferred. Fixed job IDs in the validated executor
+map determine suite ownership; an ambient suite-scope flag cannot narrow the
+overall requirement. Each worker discovers the complete disjoint population,
+plans only its assigned suite and verifies its actual result or re-fetches the
+original evidence after a planned skip.
 
-The current Release solution is built once. Fresh tests run sequentially:
-frontend, non-browser .NET/SQL, then browser. One SQL Server 2022 container is
-started only if dotnet or browser needs execution. It has one ephemeral password,
-a unique job-owned name and a dynamic loopback port; the suites retain their
-independently owned databases and cleanup. Both native suites can reuse evidence
-without starting SQL or installing Chromium. Full reuse still runs current-source
-build, safety checks, native discovery, evidence revalidation and packaging.
+Each manifest names its owning job and must match that job's successful test,
+verification and evidence-upload steps and independently verified checkout.
+Every originating qualification must also contain all three successful workers,
+the successful package publish/ZIP/ValidateOnly/upload steps and the successful
+Build, test and package reporting gate. A successful partial worker never
+qualifies the entire run. Non-deployment later attempts must independently show
+all three successful workers and the reporting gate; a deployment-only retry
+preserves the original qualification. Worker decisions/verification artifacts
+include job, run and attempt; original lookup names retain suite/fingerprint
+identity. Reused results never become new original evidence.
+
+Each native job starts its own digest-resolved SQL Server 2022 container only
+when its suite executes fresh, with ephemeral credentials, a unique
+job/run/attempt/random name and a dynamic loopback port. Each retains serial
+fixture/test-command execution and owned database/process/container cleanup.
+Browser installs Chromium only for fresh browser execution. Full reuse still
+runs all current-source builds, mandatory safety checks, complete native
+discovery, final evidence revalidation and current-commit packaging.
+The hosted reporting gate requires all three job successes, each suite's explicit
+verification output and validated/uploaded packaging. Missing, failed, cancelled
+or unexpectedly skipped workers or verification fail; draft reporting stays
+distinct. Package creation may finish before native tests; deployment still
+requires the complete gate and existing authorization.
 
 Current-commit build, publication, frontend verification, DACPAC/package content,
 manifest/digest checks and ValidateOnly always execute. Only explicit force-full
@@ -116,7 +132,7 @@ There is no global README/Markdown/text exclusion: packaged vendor license files
 and runtime/test fixtures remain inputs, regardless of their extension.
 
 Historical receipts and superseded selection designs remain in Git history.
-Current sequential-runner measurements and review findings are recorded in
+Historical sequential-runner measurements and review findings are recorded in
 [test-selection.md](test-selection.md#sequential-runner-qualification-record).
 The preceding population/dependency audit remains in
 [ci-simplification.md](../../docs/implementation/ci-simplification.md).

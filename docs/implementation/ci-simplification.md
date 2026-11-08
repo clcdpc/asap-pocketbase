@@ -59,24 +59,32 @@ scripts/review/Invoke-AsapReview.ps1. It remains independent of ordinary CI test
 
 ## Execution and evidence
 
-Full CI execution owns frontend, non-browser .NET/SQL and browser qualification,
-followed by current-commit publish/package/ValidateOnly checks. Hosted trust and
-current-head preflight still precedes allocation. One ephemeral clc-linux runner
-checks out the exact workflow SHA and builds the Release solution once. Fresh
-frontend, non-browser and browser commands run sequentially. Both native suites
-use one SQL Server 2022 container, one ephemeral password and independent
-fixture-owned databases. SQL starts only if either native suite lacks reusable
-evidence. Its unique name/dynamic loopback port and final cleanup belong to the
-job. The hosted Build, test and package reporting gate requires this full job's
-success. Draft CI result stays distinct. No extra aggregation runner is used.
+Full CI uses three concurrent clc-linux workers after hosted trust/current-head
+preflight: frontend/CI safety/package, non-browser .NET/SQL and browser/SQL.
+Each independently checks out and builds the exact event SHA in Release with
+pinned configuration. Separate compiled outputs are accepted; they need not
+be byte-identical or transferred. The frontend job owns current-commit
+publish/package/ValidateOnly. Each native job owns its SQL Server 2022 container,
+ephemeral password, dynamic loopback port, serial fixture/test commands,
+independent databases, diagnostics and unconditional owned cleanup. SQL and
+Chromium preparation occur only when the assigned suite needs fresh execution.
+The hosted Build, test and package reporting gate requires all three successful
+workers, explicit verified coverage of every suite and package validation/upload.
+Draft CI result stays distinct. No shared build or extra aggregation runner is used.
 
-Evidence schema 4 rejects the former population and two-job architecture. The
-single executor always verifies all three suites independently and binds evidence to exact source dependencies, native
-identities, environment, original run/job/attempt, immutable artifact digest,
-lifetime and the complete executor/reporting/deployment workflow contract.
-Evidence is re-fetched and independently validated at the gate. Only successful
-original executions produce reusable manifests. Force-full, tag and authorized
-deployment qualification require fresh execution.
+Evidence schema 6 rejects the old population and single-/two-job topologies.
+Fixed job IDs determine suite ownership; no ambient scope can narrow the complete
+required population. Every worker discovers and verifies the disjoint native
+catalog, then verifies only its assigned actual execution or revalidated original.
+Each manifest binds its owning job, successful test/verification/upload steps,
+independent checkout, run/attempt, source/dependencies/selection, artifact digest
+and lifetime. All originating workers, package steps and the required reporting
+gate must succeed. Later incomplete/failed qualification rejects reuse; independent
+deployment failure and supported deployment-only retries preserve qualification.
+Only successful original executions produce reusable manifests. Explicit
+force-full and invalid/missing metadata require fresh execution; trusted PR,
+manual, tag and authorized deployment events can reuse matching inputs.
+The complete executor/reporting/deployment workflow remains fingerprinted.
 
 Backend fingerprints exclude only the exact audited first-party JS/CSS paths
 listed in scripts/ci/test-reuse.json. Browser/frontend still invalidate on those

@@ -1,9 +1,13 @@
 {
-  "schema": 5,
+  "schema": 6,
   "repository": "clcdpc/asap-pocketbase",
   "repository_id": 1221758626,
   "workflow": ".github/workflows/dotnet.yml",
-  "job": "Full CI execution",
+  "executors": {
+    "frontend": {"id": "build-test-package", "name": "Frontend, CI checks and package"},
+    "dotnet": {"id": "dotnet-qualification", "name": "Non-browser .NET/SQL qualification"},
+    "browser": {"id": "browser-qualification", "name": "Browser/SQL qualification"}
+  },
   "runner_labels": [
     "clc-linux"
   ],
