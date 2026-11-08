@@ -3530,9 +3530,12 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.locator('#branding-status').filter({ hasText: /image preview is still unsaved/ }).waitFor();
     assert.equal(await page.locator('#settings-form').evaluate(form => form.inert), false);
     await page.unroute('**/api/asap/staff/settings/logo?orgId=2', delayedLogo);
-    await decideConfirmation(page, () => page.locator('#clear-branding-logo').click(), dialog => dialog.dismiss());
+    assert.equal(await page.locator('#clear-branding-logo').isDisabled(), true,
+      'A conflicting Settings version cannot clear the saved logo before explicit resolution');
+    assert.equal(await page.locator('#save-branding-logo').isDisabled(), true);
+    assert.equal(await page.locator('#settings-save-title').textContent(), 'Conflict; edits retained');
     assert.match(await page.locator('#branding-logo').inputValue(), /preview\.gif$/,
-      'Declining clear must retain the unsaved image selection');
+      'A logo conflict must retain the unsaved image selection');
     await decideConfirmation(page, () => page.locator('#settings-switch-system').click(), dialog => dialog.dismiss());
     assert.equal(await page.locator('#settings-scope').inputValue(), '2');
     assert.match(await page.locator('#branding-preview-source').textContent(), /Unsaved image preview/);
