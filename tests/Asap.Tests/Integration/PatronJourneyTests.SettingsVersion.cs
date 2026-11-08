@@ -77,6 +77,8 @@ public sealed partial class PatronJourneyTests
         var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var setup = await contexts.CreateDbContextAsync();
         var original = await setup.Organizations.AsNoTracking().SingleAsync(item => item.Id == 2);
+        var originalWorkflowUpdatedUtc = await setup.WorkflowSettings.Where(item => item.OrganizationId == 1)
+            .Select(item => item.UpdatedUtc).SingleAsync();
         var provider = new ConflictingOrganizationReferenceProvider([
             new(2, original.DisplayName, original.Abbreviation, original.OrganizationCodeId, original.ParentOrganizationId)
         ]);
@@ -128,10 +130,12 @@ public sealed partial class PatronJourneyTests
                 SET [DisplayName] = @name, [Abbreviation] = @abbreviation, [OrganizationCodeId] = @code,
                     [ParentOrganizationId] = @parent, [IsActive] = @active, [LastSyncedUtc] = @synced
                 WHERE [Id] = 2;
+                UPDATE [asap].[WorkflowSettings] SET [UpdatedUtc] = @workflowUpdatedUtc WHERE [OrganizationId] = 1;
                 DELETE FROM [asap].[AdministrativeAudit] WHERE [Id] > @auditBefore;
                 """, ("@name", original.DisplayName), ("@abbreviation", (object?)original.Abbreviation ?? DBNull.Value),
                 ("@code", (object?)original.OrganizationCodeId ?? DBNull.Value), ("@parent", (object?)original.ParentOrganizationId ?? DBNull.Value),
-                ("@active", original.IsActive), ("@synced", (object?)original.LastSyncedUtc ?? DBNull.Value), ("@auditBefore", auditBefore));
+                ("@active", original.IsActive), ("@synced", (object?)original.LastSyncedUtc ?? DBNull.Value),
+                ("@workflowUpdatedUtc", originalWorkflowUpdatedUtc), ("@auditBefore", auditBefore));
         }
 
         async Task<string> VersionAsync()

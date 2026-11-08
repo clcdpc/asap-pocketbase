@@ -5,6 +5,13 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
 
+// An unresolved controller promise must fail the test, rather than letting Node
+// exit successfully before the race assertions have run.
+const completionDeadline = setTimeout(() => {
+  console.error('Settings mutation race assertions did not complete within 60 seconds.');
+  process.exit(1);
+}, 60000);
+
 function response(status, body) {
   return {
     ok: status >= 200 && status < 300,
@@ -12,6 +19,14 @@ function response(status, body) {
     statusText: status === 409 ? 'Conflict' : 'OK',
     json: async () => body
   };
+}
+
+function organizationCatalogResponse() {
+  return response(200, { data: [
+    { id: 1, name: 'System', organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'o1' },
+    { id: 2, name: 'Library Two', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'o2' },
+    { id: 3, name: 'Library Three', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'o3' }
+  ] });
 }
 
 function settingsData(organizationId, version, prefix) {
@@ -58,6 +73,7 @@ function settingsData(organizationId, version, prefix) {
       providers: [],
       formats: [],
       customFields: [],
+      formatRules: [],
       templates: [],
       autoClaimRules: [],
       branding: { hasLogo: false, altText: null }
@@ -345,7 +361,8 @@ async function flush() {
         }
         document.getElementById(mutation.startsWith('logo') ? 'save-branding-logo' : 'clear-branding-logo').click();
       }
-      for (let attempt = 0; attempt < 10 && document.getElementById('settings-form').inert; attempt++) {
+      for (let attempt = 0; attempt < 30 &&
+          (mutationRequests === 0 || document.getElementById('settings-form').inert); attempt++) {
         await flush();
       }
       assert.strictEqual(mutationRequests, 1, `${mutation} should submit once`);
@@ -504,7 +521,7 @@ async function flush() {
           data.orgId = 'system';
           return response(200, data);
         }
-        if (requestUrl.endsWith('/organizations')) return response(200, []);
+        if (requestUrl.endsWith('/organizations')) return organizationCatalogResponse();
         if (requestUrl.includes('/patron-codes?')) return response(200, { data: [] });
         throw new Error(`Unexpected request: ${requestUrl}`);
       };
@@ -545,7 +562,7 @@ async function flush() {
           data.orgId = 'system';
           return response(200, data);
         }
-        if (url.endsWith('/organizations')) return response(200, []);
+        if (url.endsWith('/organizations')) return organizationCatalogResponse();
         if (url.includes('/patron-codes?')) return response(200, { data: [] });
         throw new Error(`Unexpected request: ${url}`);
       };
@@ -572,6 +589,7 @@ async function flush() {
     }
     console.log('Settings scope races and two canonical authentication-evidence replacement cases passed');
   } finally {
+    clearTimeout(completionDeadline);
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 })().catch(error => {

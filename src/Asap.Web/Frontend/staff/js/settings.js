@@ -834,6 +834,9 @@ export function createSettingsController({
   function holdSettingsMutation(operation) {
     cancelPolarisTest();
     reads.begin('administration-settings').abort();
+    // This mutation supersedes the settings read. Its retired finally block
+    // cannot clear current loading state, including when the mutation is rejected.
+    state.loading = false;
     reads.begin('administration-staff-access').abort();
     reads.begin('administration-patron-codes').abort();
     placeholders.clear();
