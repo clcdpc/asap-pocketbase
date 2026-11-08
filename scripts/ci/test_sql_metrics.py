@@ -195,11 +195,18 @@ class SqlLifecycleTests(unittest.TestCase):
                 f"if sys.argv[1]=='run': assert os.environ['MSSQL_SA_PASSWORD']=={SECRET!r}; assert 'MSSQL_SA_PASSWORD' in sys.argv; assert sys.argv[-1]==os.environ['SQL_IMAGE']\n"
                 f"elif sys.argv[1]=='exec': assert sys.stdin.read()=={SECRET!r}+'\\n'; assert '-P' not in sys.argv[-1]\n"
                 "elif sys.argv[1]=='port': print('127.0.0.1:15432')\n"
-                "assert os.environ['ASAP_CI_SQL_CONTAINER'] in sys.argv\n"
+                f"elif sys.argv[1]=='info': assert sys.argv[2:]==['--format','{{{{.DockerRootDir}}}}']; print({str(root)!r})\n"
+                "if sys.argv[1]!='info': assert os.environ['ASAP_CI_SQL_CONTAINER'] in sys.argv\n"
                 f"with Path({str(calls)!r}).open('a') as stream: stream.write(sys.argv[1]+'\\n')\n", encoding="utf-8")
             docker.chmod(0o755)
+            sudo = root / "sudo"
+            sudo.write_text(f"#!{sys.executable}\nimport os,sys\n"
+                f"assert sys.argv[1:]==['df','--block-size=1','/',os.environ['GITHUB_WORKSPACE'],{str(root)!r}]\n",
+                encoding="utf-8")
+            sudo.chmod(0o755)
             env = dict(os.environ, PATH=str(root), ASAP_TEST_SQL_SA_PASSWORD=SECRET,
                        ASAP_CI_SQL_CONTAINER="asap-sql-bootstrap-fixture", GITHUB_ENV=str(root / "github-env"),
+                       GITHUB_WORKSPACE=str(root),
                        SQL_IMAGE="mcr.microsoft.com/mssql/server@sha256:" + "1" * 64)
             for job in ("dotnet-qualification", "browser-qualification"):
                 owned = re.split(r"\n  [a-zA-Z][\w-]*:", text.split(f"  {job}:\n", 1)[1], maxsplit=1)[0]
@@ -207,7 +214,7 @@ class SqlLifecycleTests(unittest.TestCase):
                 for name, style in (("Start SQL Server 2022", "|"), ("Wait for SQL Server", "|"), ("Remove SQL Server test container", "|")):
                     result = subprocess.run(["/bin/bash", "-c", command(owned, name, style)], env=env, capture_output=True, text=True, timeout=4)
                     self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(calls.read_text(), "run\nport\nexec\nrm\n" * 2)
+            self.assertEqual(calls.read_text(), "run\ninfo\nport\nexec\nrm\n" * 2)
             self.assertIn("Server=localhost,15432;", (root / "github-env").read_text())
 
     @unittest.skipUnless(sys.platform == "linux", "Linux executable Docker fixture")
