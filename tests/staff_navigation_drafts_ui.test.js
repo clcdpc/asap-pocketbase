@@ -257,6 +257,136 @@ async function fixture(route, journey, options = {}) {
 
 const cases = [];
 const test = (name, body) => cases.push({ name, body });
+for (const scope of ['system', '2']) {
+  test(`Settings navigation recovery: ${scope} conflict discard requires a current version`, () =>
+    fixture(`?stage=settings&settingsScope=${scope}#settings-patron`, async ui => {
+      const submit = () => ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+      const reads = () => ui.calls.filter(call => call.url.includes('/settings?')).length;
+      const versions = [];
+      let rejectReload = true, releaseRecovery, saved = false;
+      ui.setApi(({ pathname, init }) => {
+        if (!pathname.endsWith('/settings')) return;
+        if (init.method === 'POST') {
+          versions.push(JSON.parse(init.body).version);
+          if (versions.length === 1) return response(409, { code: 'stale_version' });
+          saved = true;
+          return response(200, { code: 'saved', data: { orgId: scope, version: 'current-v3' } });
+        }
+        if (rejectReload) return response(503, { message: 'Current settings unavailable' });
+        if (saved) return response(200, { ...settingsSnapshot(scope), version: 'current-v3' });
+        return new Promise(resolve => { releaseRecovery = resolve; });
+      });
+      const exactDraft = 'Keep my exact\n  conflicting draft';
+      ui.edit('#patron-login-note', exactDraft); submit();
+      await until(() => ui.get('#settings-save-title').textContent === 'Conflict; edits retained', 'save rejects the stale version');
+      const initialReads = reads();
+      ui.get('#settings-refresh').click(); await settle();
+      assert.equal(reads(), initialReads, 'cancelled reload does not fetch or replace the draft');
+      ui.get('[data-view="profile"]').click(); await settle();
+      assert.equal(ui.get('#settings-view').hidden, false, 'cancelled departure retains Settings');
+      assert.equal(ui.get('#patron-login-note').value, exactDraft);
+      assert.equal(ui.get('#settings-version').value, 'settings-v1');
+      assert.equal(ui.get('#settings-save').disabled, true);
+
+      ui.allowDiscard(); ui.get('#settings-refresh').click();
+      await until(() => /Current settings unavailable/.test(ui.get('#settings-message').textContent), 'failed explicit reload is reported');
+      assert.equal(ui.get('#patron-login-note').value, exactDraft, 'failed reload preserves the authorized source until a replacement succeeds');
+      assert.equal(ui.get('#settings-save-title').textContent, 'Conflict; edits retained');
+      submit(); await settle(); assert.deepEqual(versions, ['settings-v1']);
+
+      ui.get('[data-view="profile"]').click();
+      await until(() => !ui.get('#profile-view').hidden, 'confirmed discard navigates to Profile');
+      assert.equal(ui.get('#patron-login-note').value, 'Saved login note');
+      assert.match(ui.get('#settings-save-title').textContent, /Conflict/, 'cached discard does not resolve the known conflict');
+      assert.equal(ui.get('#save-branding-logo').disabled, true, 'version-dependent mutations remain unavailable');
+      ui.edit('#patron-login-note', 'Attempt to reuse the rejected version'); submit(); await settle();
+      assert.equal(ui.get('#settings-save').disabled, true);
+      assert.deepEqual(versions, ['settings-v1'], 'a new edit cannot submit the rejected version after cached discard');
+      ui.edit('#patron-login-note', 'Saved login note');
+      const beforeReturn = reads();
+      ui.get('[data-view="settings"]').click();
+      await until(() => reads() > beforeReturn, 'same-scope return requests current Settings');
+      await settle();
+      assert.equal(ui.get('#profile-view').hidden, false, 'failed recovery keeps the accepted navigation context');
+      assert.equal(ui.get('#settings-version').value, 'settings-v1');
+      assert.match(ui.get('#settings-save-title').textContent, /Conflict/);
+
+      rejectReload = false; ui.get('[data-view="settings"]').click();
+      await until(() => releaseRecovery, 'replacement snapshot is pending');
+      assert.equal(ui.get('#profile-view').hidden, false);
+      assert.equal(ui.get('#settings-version').value, 'settings-v1', 'rejected version is retained until authoritative acceptance');
+      assert.deepEqual(versions, ['settings-v1'], 'the rejected version cannot be resubmitted before recovery');
+      releaseRecovery(response(200, { ...settingsSnapshot(scope), version: 'current-v2' }));
+      await until(() => !ui.get('#settings-view').hidden && ui.get('#settings-version').value === 'current-v2', 'current snapshot is accepted');
+      ui.edit('#patron-login-note', 'New edit on the current version');
+      assert.equal(ui.get('#settings-save').disabled, false);
+      submit();
+      await until(() => ui.get('#settings-message').textContent === 'Settings saved.', 'save succeeds after recovery');
+      assert.deepEqual(versions, ['settings-v1', 'current-v2']);
+      assert.equal(ui.get('#settings-version').value, 'current-v3');
+    }));
+
+  for (const late of ['before replacement', 'during newer refresh']) {
+    test(`Settings navigation recovery: ${scope} interrupted refresh with late completion ${late}`, () =>
+      fixture(`?stage=settings&settingsScope=${scope}#settings-patron`, async ui => {
+        const pending = [], versions = [];
+        let saved = false;
+        ui.setApi(({ pathname, init }) => {
+          if (!pathname.endsWith('/settings')) return;
+          if (init.method === 'POST') {
+            versions.push(JSON.parse(init.body).version); saved = true;
+            return response(200, { code: 'saved', data: { orgId: scope, version: 'saved-v5' } });
+          }
+          if (saved) return response(200, { ...settingsSnapshot(scope), version: 'saved-v5' });
+          return new Promise(resolve => pending.push({ signal: init.signal, resolve }));
+        });
+        ui.get('#settings-refresh').click(); await until(() => pending.length === 1, 'refresh is pending');
+        assert.equal(ui.get('#settings-refresh').disabled, true);
+        ui.get('[data-view="profile"]').click();
+        await until(() => !ui.get('#profile-view').hidden, 'departure interrupts the refresh');
+        assert.equal(pending[0].signal.aborted, true);
+        ui.get('[data-view="settings"]').click();
+        await until(() => pending.length === 2, 'same-scope return starts an authoritative replacement read');
+        const completeRetired = async () => {
+          // Deliberately ignore abort, as a transport may complete after retirement.
+          pending[0].resolve(response(200, { ...settingsSnapshot(scope), version: 'retired-version' }));
+          await settle();
+        };
+        if (late === 'before replacement') {
+          await completeRetired();
+          assert.equal(ui.get('#profile-view').hidden, false, 'retired completion cannot activate Settings');
+        }
+        pending[1].resolve(response(200, { ...settingsSnapshot(scope), version: 'recovered-v2' }));
+        await until(() => !ui.get('#settings-view').hidden && ui.get('#settings-version').value === 'recovered-v2', 'replacement read recovers Settings');
+        assert.equal(ui.get('#settings-refresh').disabled, false);
+        ui.edit('#patron-login-note', 'Discard after interrupted refresh');
+        assert.equal(ui.get('#settings-save').disabled, false, 'validated organization catalog enables Save normally');
+        assert.equal(ui.get('#settings-discard').hidden, false);
+        ui.allowDiscard(); ui.get('#settings-discard').click();
+        await until(() => pending.length === 3, 'Discard can confirm and reload after recovery');
+        assert.equal(ui.get('#settings-refresh').disabled, true);
+        if (late === 'during newer refresh') {
+          await completeRetired();
+          assert.equal(ui.get('#settings-version').value, 'recovered-v2');
+          assert.equal(ui.get('#patron-login-note').value, 'Discard after interrupted refresh');
+          assert.equal(ui.get('#settings-refresh').disabled, true, 'retired finally cannot release the newer read');
+        }
+        pending[2].resolve(response(200, { ...settingsSnapshot(scope), version: 'recovered-v3' }));
+        await until(() => ui.get('#settings-discard').hidden && !ui.get('#settings-refresh').disabled, 'Discard accepts current values and clears loading');
+        assert.equal(ui.get('#settings-version').value, 'recovered-v3');
+        ui.get('#settings-refresh').click(); await until(() => pending.length === 4, 'Refresh is reusable');
+        pending[3].resolve(response(200, { ...settingsSnapshot(scope), version: 'recovered-v4' }));
+        await until(() => !ui.get('#settings-refresh').disabled, 'repeated Refresh completes');
+        ui.edit('#patron-login-note', 'Save after interrupted refresh');
+        assert.equal(ui.get('#settings-save').disabled, false);
+        ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
+        await until(() => ui.get('#settings-message').textContent === 'Settings saved.', 'Save succeeds after interrupted refresh');
+        assert.deepEqual(versions, ['recovered-v4']);
+        assert.equal(ui.get('#settings-version').value, 'saved-v5');
+      }));
+  }
+}
+
 for (const settingsScope of ['system', '2']) {
   test(`email operations navigation protects drafts and recovers the original ${settingsScope} test identity`, () =>
     fixture(`?stage=settings&settingsScope=${settingsScope}#settings-smtp`, async ui => {
