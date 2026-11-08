@@ -63,6 +63,9 @@ async function openStaffPage(page, fixture) {
   assert.deepEqual(tagFocus, { active: true, visible: true }, 'Tag remains reachable with visible keyboard focus.');
   await page.keyboard.press('Home');
   assert.equal(await page.locator('#tag-filter').inputValue(), 'all', 'Tag accepts a native keyboard selection.');
+  // Keyboard filter changes replace Grid.js rows asynchronously. Acquire the
+  // completed Closed rows/actions before any resize-only or native-zoom baseline.
+  await selectStage(page, 'closed');
 }
 
 async function selectStage(page, stage) {
