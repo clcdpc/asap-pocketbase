@@ -356,6 +356,7 @@ export function createSettingsController({
     pendingDeletedFormats: [],
     savedRejectionTemplateId: '',
     awaitingReload: false,
+    conflict: false,
     awaitingReloadMutation: null,
     outcomeUncertain: false,
     unconfirmedMutation: null,
@@ -1192,16 +1193,19 @@ export function createSettingsController({
     }
     const dirty = isDirty();
     const settingsDirty = hasSettingsDraft();
-    const needsAttention = dirty || state.awaitingReload || state.outcomeUncertain || state.saving;
+    const needsAttention = dirty || state.conflict || state.awaitingReload || state.outcomeUncertain || state.saving;
     dom.saveBar.classList.toggle('attention', needsAttention);
-    dom.save.disabled = !settingsDirty || state.awaitingReload || state.saving || (isSystem() && !state.organizationsReady);
+    dom.save.disabled = !settingsDirty || state.conflict || state.awaitingReload || state.saving || (isSystem() && !state.organizationsReady);
     dom.saveLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
     dom.clearLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
     dom.discard.hidden = !dirty;
     dom.saveTitle.textContent = state.outcomeUncertain ? 'Outcome uncertain; reload needed'
+      : state.conflict ? 'Conflict; edits retained'
       : state.awaitingReload ? 'Saved; reload needed' : dirty ? 'Unsaved changes' : 'No changes';
     dom.saveDetail.textContent = state.outcomeUncertain
       ? 'The request may have committed. Reload current settings before retrying.'
+      : state.conflict
+      ? 'Copy any edits you need to keep, then discard changes and reload current settings before saving again.'
       : state.awaitingReload
       ? 'The save committed. Reload current settings before editing again.'
       : isSystem() && !state.organizationsReady
@@ -1928,6 +1932,7 @@ export function createSettingsController({
     dom.logo.value = '';
     dom.discardLogoDraft.hidden = true;
     state.data = data;
+    state.conflict = false;
     state.scalarIntents.clear(); state.templateIntents.clear(); state.scalarDisplays.clear();
     state.scope = String(data.orgId || state.scope);
     const stored = object(data.stored);
@@ -2486,7 +2491,7 @@ export function createSettingsController({
 
   async function saveSettings(event) {
     event?.preventDefault();
-    if (!state.data || !isDirty() || state.awaitingReload || state.saving || state.pendingMutation) return;
+    if (!state.data || !isDirty() || state.conflict || state.awaitingReload || state.saving || state.pendingMutation) return;
     if (isSystem() && !state.organizationsReady) {
       notify('The organization list is unavailable or incomplete. Reload settings before saving.', 'error');
       return;
@@ -2593,13 +2598,11 @@ export function createSettingsController({
       }
       if (error.status === 409) {
         const stale = error.response?.code === 'stale_version';
-        if (stale || error.response?.code === 'template_referenced') {
-          await load({ silent: true, owner: mutation });
-          if (isSettingsOperationCurrent(mutation)) {
-            notify(stale
-              ? 'These settings changed elsewhere. Review the refreshed values before saving again.'
-              : 'This rejection template is used by auto-rejection. Change and save that workflow setting before deleting it.', 'error');
-          }
+        if (stale) {
+          state.conflict = true;
+          notify('These settings changed elsewhere. Your edits are retained. Copy any edits you need to keep, then discard changes and reload before saving again.', 'error');
+        } else if (error.response?.code === 'template_referenced') {
+          notify('This rejection template is used by auto-rejection. Your edits are retained. Review the workflow setting before deleting it.', 'error');
         } else {
           notify(error.message || 'The settings could not be saved.', 'error');
         }
@@ -2652,10 +2655,8 @@ export function createSettingsController({
         return;
       }
       if (error.status === 409) {
-        await load({ silent: true, owner: mutation });
-        if (isSettingsOperationCurrent(mutation)) {
-          notify(error.message || 'The settings changed elsewhere. Review the refreshed values.', 'error');
-        }
+        state.conflict = true;
+        notify('These settings changed elsewhere. Your edits are retained. Copy any edits you need to keep, then discard changes and reload before resetting.', 'error');
       } else if (error.status !== 401) notify(error.message || 'The inherited overrides could not be reset.', 'error');
     } finally {
       finishSettingsMutation(mutation);
@@ -3000,7 +3001,7 @@ export function createSettingsController({
     if (replaced) {
       cancelSettingsOperations();
       pendingCommonAuthorsFocus = false;
-      state.pendingMutation = null; state.saving = false; state.outcomeUncertain = false; state.awaitingReload = false; state.awaitingReloadMutation = null; state.unconfirmedMutation = null;
+      state.pendingMutation = null; state.saving = false; state.conflict = false; state.outcomeUncertain = false; state.awaitingReload = false; state.awaitingReloadMutation = null; state.unconfirmedMutation = null;
       dom.form.inert = false; dom.form.removeAttribute('aria-busy');
       releaseLogoDraft();
       copyGeneration += 1;

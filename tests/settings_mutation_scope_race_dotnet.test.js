@@ -213,8 +213,29 @@ async function flush() {
       }
       assert.strictEqual(document.getElementById('settings-form').inert, false);
       assert.strictEqual(scope.value, '2');
-      assert.ok(settingsRequests.length > requestsBeforeRelease,
-        'the owning library must refresh after the save or conflict result');
+      if (outcome === 'success') {
+        assert.ok(settingsRequests.length > requestsBeforeRelease, 'a successful save refreshes current values');
+      } else {
+        assert.strictEqual(settingsRequests.length, requestsBeforeRelease, 'a conflict must not reload over the draft');
+        assert.strictEqual(libraryTwoDraft.value, 'Draft for library two');
+        assert.strictEqual(document.getElementById('settings-version').value, '2-version', 'no silent rebase');
+        assert.strictEqual(controller.isDirty(), true);
+        assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Conflict; edits retained');
+        assert.strictEqual(document.getElementById('settings-save').disabled, true);
+        document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+        await flush();
+        assert.strictEqual(saveRequestCount, 1, 'conflicted drafts cannot be resubmitted');
+        require('./helpers/confirmation.cjs').answerConfirmations(window, () => false);
+        document.getElementById('settings-refresh').click();
+        await flush();
+        assert.strictEqual(libraryTwoDraft.value, 'Draft for library two', 'cancelled reload retains edits');
+        assert.strictEqual(settingsRequests.length, requestsBeforeRelease);
+        require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
+        document.getElementById('settings-refresh').click();
+        for (let attempt = 0; attempt < 12 && controller.isDirty(); attempt++) await flush();
+        assert.strictEqual(controller.isDirty(), false, 'explicit discard and reload resolves the conflict');
+        assert.strictEqual(document.getElementById('settings-save-title').textContent, 'No changes');
+      }
 
       const announcementsBeforeSwitch = announcements.length;
       scope.value = '3';

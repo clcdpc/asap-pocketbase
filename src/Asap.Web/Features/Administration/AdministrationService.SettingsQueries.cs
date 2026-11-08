@@ -745,10 +745,14 @@ public sealed partial class AdministrationService
             }
         }
 
-        await AddVersionsAsync(
-            context.Organizations.AsNoTracking()
-                .Where(item => organizationId == LibraryScope.SystemOrganizationId || item.Id == 1 || item.Id == organizationId).OrderBy(item => item.Id),
-            item => item.RowVersion);
+        // Sync telemetry advances rowversion even when configuration is unchanged. Include
+        // membership, scope and authority values explicitly, excluding only LastSyncedUtc.
+        parts.Add(JsonSerializer.Serialize(await context.Organizations.AsNoTracking()
+            .Where(item => organizationId == LibraryScope.SystemOrganizationId || item.Id == 1 || item.Id == organizationId)
+            .OrderBy(item => item.Id)
+            .Select(item => new { item.Id, item.DisplayName, item.Abbreviation, item.OrganizationCodeId,
+                item.ParentOrganizationId, item.IsActive })
+            .ToListAsync(cancellationToken)));
         await AddVersionsAsync(context.SystemSettings.AsNoTracking().OrderBy(item => item.OrganizationId), item => item.RowVersion);
         await AddVersionsAsync(context.PolarisSettings.AsNoTracking().OrderBy(item => item.OrganizationId), item => item.RowVersion);
         await AddVersionsAsync(context.WorkflowSettings.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId), item => item.RowVersion);
