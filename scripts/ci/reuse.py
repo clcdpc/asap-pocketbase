@@ -228,6 +228,7 @@ class Validator:
         job = next(job for job in jobs if job["name"] == job_name)
         require(job["run_id"] == run_id and job["head_sha"] == run["head_sha"]
                 and job["runner_group_name"] == config["runner_group"]
+                and job["runner_group_id"] == config["runner_group_id"]
                 and sorted(job["labels"]) == sorted(config["runner_labels"]), "Wrong job/runner identity")
         logs = self.api.request(f"/actions/jobs/{job['id']}/logs", limit=64 * 1024 * 1024).decode("utf-8-sig")
         # This is actions/checkout's own Git output, before any repository test command.

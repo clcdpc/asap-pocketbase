@@ -7,15 +7,18 @@ full gate, PR cancellation groups, fingerprints, trust boundaries and forced
 full CI. Performance collection below still wraps every fresh .NET/SQL
 execution; reused runs link to original test timing instead of inventing samples.
 
-Full qualification occupies three concurrent clc-linux workers after hosted
+Full qualification occupies three concurrent standard GitHub-hosted Ubuntu 24.04 workers after
 preflight, with independent Release builds of the exact same event SHA.
 Frontend/CI safety/package, non-browser .NET/SQL and browser/SQL each own their
 assigned qualification; the hosted required gate checks every suite and package.
 Each native worker owns its SQL container and independent test databases,
 ephemeral credentials, loopback port and unconditional cleanup. Commands remain
 serial within each worker; reused native suites prepare no SQL/Chromium runtime.
-Evidence reuse remains independent for all three suites. The 2-vCPU VM, memory,
-runner configuration and 120-minute timeout remain unchanged.
+Evidence reuse remains independent for all three suites. Draft validation also
+uses Ubuntu 24.04; DEVWEB/IIS deployment retains its existing local runner.
+Full-worker 120-minute limits and serial commands remain unchanged. GitHub's public
+standard tier advertises 4 vCPUs, 16 GB RAM and 14 GB SSD; capacity logs and actual
+CPU/memory/disk samples establish observed headroom rather than assuming it fits.
 
 The non-browser test step runs
 `bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run`.
@@ -55,13 +58,15 @@ overwrite another suite's samples or summaries.
   OS/kernel/architecture, CPU model/logical count/affinity, guest RAM,
   classified virtualization indicators, root/workspace filesystem type, block
   device and space, visible cgroup limits, Docker version and selected SQL limits.
-- `samples.jsonl`: flushed host samples at startup, about every 15 seconds and
+- `samples.jsonl`: flushed host samples, including root/workspace disk free, at startup, about every 15 seconds and
   shutdown; separate SQL observations about every 60 seconds. Timestamps are UTC;
   interval/rate calculations use the monotonic clock. A final partial line can be
   ignored. Missing values are absent or null, never fabricated as zero activity.
 - `summary.md`: measured command duration and status, interval-weighted averages
   and sampled peaks, operation-weighted disk await, swap/fault totals, cgroup
-  throttling/events, pressure and SQL observations, availability and limitations.
+  throttling/events, minimum sampled root/workspace disk free, pressure and SQL
+  observations, availability and limitations. Samples cover test commands; workflow
+  capacity/final logs and post-SQL-start filesystem logs cover setup/cleanup checkpoints.
 - `test-results.trx`: the existing invocation's native MTP TRX report.
 - `test-timings.md`: 25 slowest results, class totals, median/p90/p95, summed
   execution time, wall-time coverage/concurrency and gaps, with UTC timestamps.

@@ -59,7 +59,7 @@ scripts/review/Invoke-AsapReview.ps1. It remains independent of ordinary CI test
 
 ## Execution and evidence
 
-Full CI uses three concurrent clc-linux workers after hosted trust/current-head
+Full CI uses three concurrent standard GitHub-hosted Ubuntu 24.04 workers after trust/current-head
 preflight: frontend/CI safety/package, non-browser .NET/SQL and browser/SQL.
 Each independently checks out and builds the exact event SHA in Release with
 pinned configuration. Separate compiled outputs are accepted; they need not
@@ -71,6 +71,11 @@ Chromium preparation occur only when the assigned suite needs fresh execution.
 The hosted Build, test and package reporting gate requires all three successful
 workers, explicit verified coverage of every suite and package validation/upload.
 Draft CI result stays distinct. No shared build or extra aggregation runner is used.
+Draft validation also uses Ubuntu 24.04. DEVWEB/IIS deployment stays on its local
+Windows runner. A new hosted environment epoch and exact runner label/group name
+and ID reject local-runner evidence. Existing trust, provenance and retry checks
+remain; no new reuse mechanism is introduced. Capacity checkpoints and command
+CPU/memory/disk-free samples qualify the advertised 4-vCPU/16-GB/14-GB public tier.
 
 Evidence schema 6 rejects the old population and single-/two-job topologies.
 Fixed job IDs determine suite ownership; no ambient scope can narrow the complete
@@ -102,7 +107,7 @@ children; incomplete/cancelled populations cannot become passing evidence.
 
 Deployment still waits for the required gate and existing explicit authorization.
 Build/test/package remains isolated from self-hosted activation. No IIS
-activation, production tag, production deployment, runner configuration change
+activation, production tag, production deployment, runner provisioning
 or merge is part of this work. test_cd_activation: pending_runner_setup.
 
 ## Reproducible measurements

@@ -484,7 +484,7 @@ async function main() {
     }
   });
   await check('draft work is bounded and has no SQL, browser, publish or evidence setup', () => {
-    assert.equal(draft['runs-on'], 'clc-linux');
+    assert.equal(draft['runs-on'], 'ubuntu-24.04');
     assert.ok(draft['timeout-minutes'] <= 15);
     assert.deepEqual(draft.permissions, { contents: 'read' });
     assert.equal(draft.needs, 'validation-policy');
@@ -522,6 +522,10 @@ async function main() {
   });
   await check('full CI retains safety, evidence checks and current-source packaging', () => {
     assert.equal(reuse.schema, 6);
+    assert.deepEqual(reuse.runner_labels, ['ubuntu-24.04']);
+    assert.equal(reuse.runner_group, 'GitHub Actions');
+    assert.equal(reuse.runner_group_id, 0);
+    assert.equal(reuse.environment_epoch, 'github-hosted-ubuntu-24.04-2026-11-08-v1');
     assert.equal(reuse.job, undefined);
     const safety = step(full, 'Verify current CI safety contracts');
     assert.equal(safety.if, undefined);
@@ -547,10 +551,14 @@ async function main() {
     assert.deepEqual(Object.keys(workflow.jobs), ['validation-policy', 'build-test-package', 'dotnet-qualification',
       'browser-qualification', 'draft-validation', 'validation', 'deploy-test-iis']);
     const artifacts = [];
+    for (const job of [...Object.values(owners), draft]) {
+      assert.match(step(job, 'Record runner capacity').run, /nproc[\s\S]*free --mebi[\s\S]*df --block-size=1/);
+      assert.equal(step(job, 'Record final runner headroom').if, '${{ always() }}');
+    }
     for (const [suite, job] of Object.entries(owners)) {
       assert.deepEqual(reuse.executors[suite], { id: Object.keys(workflow.jobs).find((id) => workflow.jobs[id] === job), name: job.name });
       assert.equal(job.needs, 'validation-policy');
-      assert.equal(job['runs-on'], 'clc-linux');
+      assert.equal(job['runs-on'], 'ubuntu-24.04');
       assert.equal(job['timeout-minutes'], 120);
       assert.equal(job['continue-on-error'], undefined);
       assert.equal(job.strategy, undefined, 'No fail-fast matrix or dynamic sharding');
@@ -593,7 +601,7 @@ async function main() {
       'bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run');
     assert.equal(step(owners.browser, 'Run browser accessibility tests').run, 'bash scripts/ci/run-with-performance.sh npm run test:browser');
     for (const [context, expected] of [[await routed(pr('ready_for_review', false)), 3], [await routed(pr('converted_to_draft', true)), 1]]) {
-      const active = Object.values(workflow.jobs).filter((job) => job['runs-on'] === 'clc-linux' && enabled(job, context));
+      const active = Object.values(workflow.jobs).filter((job) => job['runs-on'] === 'ubuntu-24.04' && enabled(job, context));
       assert.equal(active.length, expected);
     }
   });

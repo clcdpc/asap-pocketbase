@@ -66,6 +66,7 @@ class Fixture:
                            created_at=reuse.iso(self.now - timedelta(hours=3)))
         self.job = success(id=9, run_id=7, head_sha=self.run["head_sha"], name=self.config["executors"]["dotnet"]["name"],
                            labels=self.config["runner_labels"], runner_group_name=self.config["runner_group"],
+                           runner_group_id=self.config["runner_group_id"],
                            started_at=reuse.iso(self.now - timedelta(hours=2)),
                            completed_at=reuse.iso(self.now - timedelta(hours=1)), steps=[])
         self.gate = success(id=90, run_id=7, head_sha=self.run["head_sha"], name="Build, test and package")
@@ -796,6 +797,7 @@ class ProvenanceTests(unittest.TestCase):
         for target, key, value in (("repository", "id", 42), ("head_repository", "id", 42),
                                    ("run", "workflow_id", 42), ("run", "path", ".github/workflows/other.yml"),
                                    ("job", "name", "Other job"), ("job", "runner_group_name", "other"),
+                                   ("job", "runner_group_id", 1), ("job", "labels", ["clc-linux"]),
                                    ("job", "labels", ["ubuntu-latest"]), ("job", "head_sha", "f" * 40)):
             fixture = Fixture()
             record = fixture.run[target] if target in ("repository", "head_repository") else getattr(fixture, target)
@@ -1437,7 +1439,7 @@ class WorkflowTests(unittest.TestCase):
     def test_required_check_and_always_current_commit_packaging_are_preserved(self):
         workflow = (fp.ROOT / ".github/workflows/dotnet.yml").read_text(encoding="utf-8")
         for token in ("name: ${{ needs.validation-policy.outputs.mode == 'draft' && 'Draft CI result' || 'Build, test and package' }}",
-                      "runs-on: clc-linux", "ref: ${{ github.sha }}",
+                      "runs-on: ubuntu-24.04", "ref: ${{ github.sha }}",
                       "dotnet build Asap.sln --configuration Release", "run: npm ci", "run: npm test",
                       "npm run test:browser", "python3 -B scripts/ci/selection.py run-draft", "bash scripts/ci/run-with-performance.sh",
                       "name: Summarize .NET/SQL diagnostic evidence", "name: Upload .NET/SQL performance telemetry",

@@ -83,7 +83,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    runs-on: clc-linux
+    runs-on: ubuntu-24.04
     # Independent builds qualify the same event SHA; this worker owns the package.
     timeout-minutes: 120
     env:
@@ -105,6 +105,13 @@ jobs:
 
       - name: Verify exact test source
         run: python3 -B scripts/ci/reuse.py checkout
+
+      - name: Record runner capacity
+        run: |
+          printf 'Runner: %s/%s/%s\n' "$RUNNER_ENVIRONMENT" "$RUNNER_OS" "$RUNNER_ARCH"
+          nproc
+          free --mebi
+          df --block-size=1 / "$GITHUB_WORKSPACE"
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -384,6 +391,12 @@ jobs:
           retention-days: 14
 
 
+      - name: Record final runner headroom
+        if: ${{ always() }}
+        run: |
+          free --mebi
+          df --block-size=1 / "$GITHUB_WORKSPACE"
+
   dotnet-qualification:
     name: Non-browser .NET/SQL qualification
     needs: validation-policy
@@ -392,7 +405,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    runs-on: clc-linux
+    runs-on: ubuntu-24.04
     # Independent build and SQL instance; test commands remain serial within this job.
     timeout-minutes: 120
     env:
@@ -409,6 +422,13 @@ jobs:
 
       - name: Verify exact test source
         run: python3 -B scripts/ci/reuse.py checkout
+
+      - name: Record runner capacity
+        run: |
+          printf 'Runner: %s/%s/%s\n' "$RUNNER_ENVIRONMENT" "$RUNNER_OS" "$RUNNER_ARCH"
+          nproc
+          free --mebi
+          df --block-size=1 / "$GITHUB_WORKSPACE"
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -470,6 +490,7 @@ jobs:
             --env ACCEPT_EULA=Y \
             --env MSSQL_SA_PASSWORD \
             "$SQL_IMAGE"
+          sudo df --block-size=1 / "$GITHUB_WORKSPACE" "$(docker info --format '{{.DockerRootDir}}')"
           sql_address="$(docker port "$ASAP_CI_SQL_CONTAINER" 1433/tcp)"
           sql_port="${sql_address##*:}"
           [[ "$sql_port" =~ ^[0-9]+$ ]]
@@ -553,6 +574,12 @@ jobs:
 
 
 
+      - name: Record final runner headroom
+        if: ${{ always() }}
+        run: |
+          free --mebi
+          df --block-size=1 / "$GITHUB_WORKSPACE"
+
   browser-qualification:
     name: Browser/SQL qualification
     needs: validation-policy
@@ -561,7 +588,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    runs-on: clc-linux
+    runs-on: ubuntu-24.04
     # Independent build and SQL instance; test commands remain serial within this job.
     timeout-minutes: 120
     env:
@@ -578,6 +605,13 @@ jobs:
 
       - name: Verify exact test source
         run: python3 -B scripts/ci/reuse.py checkout
+
+      - name: Record runner capacity
+        run: |
+          printf 'Runner: %s/%s/%s\n' "$RUNNER_ENVIRONMENT" "$RUNNER_OS" "$RUNNER_ARCH"
+          nproc
+          free --mebi
+          df --block-size=1 / "$GITHUB_WORKSPACE"
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -639,6 +673,7 @@ jobs:
             --env ACCEPT_EULA=Y \
             --env MSSQL_SA_PASSWORD \
             "$SQL_IMAGE"
+          sudo df --block-size=1 / "$GITHUB_WORKSPACE" "$(docker info --format '{{.DockerRootDir}}')"
           sql_address="$(docker port "$ASAP_CI_SQL_CONTAINER" 1433/tcp)"
           sql_port="${sql_address##*:}"
           [[ "$sql_port" =~ ^[0-9]+$ ]]
@@ -737,13 +772,19 @@ jobs:
 
 
 
+      - name: Record final runner headroom
+        if: ${{ always() }}
+        run: |
+          free --mebi
+          df --block-size=1 / "$GITHUB_WORKSPACE"
+
   draft-validation:
     name: Draft validation
     needs: validation-policy
     if: ${{ needs.validation-policy.outputs.mode == 'draft' }}
     permissions:
       contents: read
-    runs-on: clc-linux
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -752,6 +793,13 @@ jobs:
 
       - name: Verify exact test source
         run: python3 -B scripts/ci/reuse.py checkout
+
+      - name: Record runner capacity
+        run: |
+          printf 'Runner: %s/%s/%s\n' "$RUNNER_ENVIRONMENT" "$RUNNER_OS" "$RUNNER_ARCH"
+          nproc
+          free --mebi
+          df --block-size=1 / "$GITHUB_WORKSPACE"
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -785,6 +833,12 @@ jobs:
 
       - name: Run frontend unit tests
         run: npm test
+
+      - name: Record final runner headroom
+        if: ${{ always() }}
+        run: |
+          free --mebi
+          df --block-size=1 / "$GITHUB_WORKSPACE"
 
   validation:
     # Draft success must not emit the required full-validation check name.

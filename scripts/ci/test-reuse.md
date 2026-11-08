@@ -6,7 +6,8 @@ populations and former single-/two-executor workflows cannot qualify current tes
 
 Reuse is per suite (dotnet, browser, frontend), never a reduced passing count.
 An original qualification must belong to the trusted repository/workflow,
-correct execution job and runner group. Checkout logs, Git commit/tree/blob
+correct execution job, exact Ubuntu 24.04 label and GitHub Actions runner group
+(name and ID 0). Checkout logs, Git commit/tree/blob
 identity, source and resolved test-dependency fingerprints, exact native test identities,
 outcomes, SHA-256 artifact digest and the 14-day lifetime are revalidated.
 Skipped or failed source steps, corrupt archives, altered population,
@@ -54,7 +55,7 @@ browser packages. These dependencies are prepared only for fresh execution.
 The final verifier re-reads resolved NuGet and Playwright identities and ambient
 extension guards after lookup.
 
-Three clc-linux execution jobs independently build the same exact event SHA.
+Three standard GitHub-hosted Ubuntu 24.04 execution jobs independently build the same exact event SHA.
 Frontend/CI checks/package, non-browser .NET/SQL and browser/SQL become eligible
 concurrently after hosted preflight. Separate builds are accepted; compiled bytes
 need not be identical or transferred. Fixed job IDs in the validated executor
@@ -62,6 +63,11 @@ map determine suite ownership; an ambient suite-scope flag cannot narrow the
 overall requirement. Each worker discovers the complete disjoint population,
 plans only its assigned suite and verifies its actual result or re-fetches the
 original evidence after a planned skip.
+
+Draft validation also uses Ubuntu 24.04; DEVWEB/IIS deployment keeps its local
+Windows runner. Environment epoch `github-hosted-ubuntu-24.04-2026-11-08-v1`
+requires a fresh hosted baseline: local-runner results cannot qualify hosted tests.
+Schema 6 and the existing original-evidence machinery remain unchanged.
 
 Each manifest names its owning job and must match that job's successful test,
 verification and evidence-upload steps and independently verified checkout.

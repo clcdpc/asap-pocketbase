@@ -22,18 +22,21 @@ mandatory; counts are derived from current discovery.
 
 ## Execution and required gate
 
-Hosted validation-policy resolves current trusted PR state before local repository
+Hosted validation-policy resolves current trusted PR state before repository
 execution. Draft PRs retain bounded configuration/unit contracts and the complete
 frontend suite, under their distinct Draft CI result.
 
-Full qualification makes exactly three clc-linux jobs eligible concurrently:
+Full qualification makes exactly three standard GitHub-hosted Ubuntu 24.04 jobs eligible concurrently:
 Frontend, CI checks and package; Non-browser .NET/SQL qualification; and
 Browser/SQL qualification. Each checks out and verifies the exact event SHA,
 uses repository-pinned setup, independently builds Release and discovers the
 complete native population and its disjoint partitions. Tests and package
 qualify the same source commit; compiled outputs need not be byte-identical or
-transferred. No shared-build prerequisite or aggregation worker is used. Existing
-runner resources, labels and 120-minute limits remain unchanged.
+transferred. No shared-build prerequisite or aggregation worker is used.
+Draft validation also uses Ubuntu 24.04. Full-worker 120-minute limits remain;
+DEVWEB/IIS deployment retains its existing local runner and authorization.
+The hosted environment epoch rejects local-runner evidence. Logs record runner
+capacity/setup/final disk headroom; test telemetry samples CPU, memory and disk free.
 
 Fixed owning job IDs determine each suite's advisory plan and final verification.
 Each worker verifies only its own actual execution or revalidated original.
