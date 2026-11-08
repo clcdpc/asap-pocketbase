@@ -5,6 +5,13 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
 
+// An unresolved controller promise must fail the test, rather than letting Node
+// exit successfully before the race assertions have run.
+const completionDeadline = setTimeout(() => {
+  console.error('Settings mutation race assertions did not complete within 60 seconds.');
+  process.exit(1);
+}, 60000);
+
 function response(status, body) {
   return {
     ok: status >= 200 && status < 300,
@@ -12,6 +19,14 @@ function response(status, body) {
     statusText: status === 409 ? 'Conflict' : 'OK',
     json: async () => body
   };
+}
+
+function organizationCatalogResponse() {
+  return response(200, { data: [
+    { id: 1, name: 'System', organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'o1' },
+    { id: 2, name: 'Library Two', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'o2' },
+    { id: 3, name: 'Library Three', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'o3' }
+  ] });
 }
 
 function settingsData(organizationId, version, prefix) {
@@ -58,6 +73,7 @@ function settingsData(organizationId, version, prefix) {
       providers: [],
       formats: [],
       customFields: [],
+      formatRules: [],
       templates: [],
       autoClaimRules: [],
       branding: { hasLogo: false, altText: null }
@@ -213,8 +229,29 @@ async function flush() {
       }
       assert.strictEqual(document.getElementById('settings-form').inert, false);
       assert.strictEqual(scope.value, '2');
-      assert.ok(settingsRequests.length > requestsBeforeRelease,
-        'the owning library must refresh after the save or conflict result');
+      if (outcome === 'success') {
+        assert.ok(settingsRequests.length > requestsBeforeRelease, 'a successful save refreshes current values');
+      } else {
+        assert.strictEqual(settingsRequests.length, requestsBeforeRelease, 'a conflict must not reload over the draft');
+        assert.strictEqual(libraryTwoDraft.value, 'Draft for library two');
+        assert.strictEqual(document.getElementById('settings-version').value, '2-version', 'no silent rebase');
+        assert.strictEqual(controller.isDirty(), true);
+        assert.strictEqual(document.getElementById('settings-save-title').textContent, 'Conflict; edits retained');
+        assert.strictEqual(document.getElementById('settings-save').disabled, true);
+        document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+        await flush();
+        assert.strictEqual(saveRequestCount, 1, 'conflicted drafts cannot be resubmitted');
+        require('./helpers/confirmation.cjs').answerConfirmations(window, () => false);
+        document.getElementById('settings-refresh').click();
+        await flush();
+        assert.strictEqual(libraryTwoDraft.value, 'Draft for library two', 'cancelled reload retains edits');
+        assert.strictEqual(settingsRequests.length, requestsBeforeRelease);
+        require('./helpers/confirmation.cjs').answerConfirmations(window, () => true);
+        document.getElementById('settings-refresh').click();
+        for (let attempt = 0; attempt < 12 && controller.isDirty(); attempt++) await flush();
+        assert.strictEqual(controller.isDirty(), false, 'explicit discard and reload resolves the conflict');
+        assert.strictEqual(document.getElementById('settings-save-title').textContent, 'No changes');
+      }
 
       const announcementsBeforeSwitch = announcements.length;
       scope.value = '3';
@@ -324,7 +361,8 @@ async function flush() {
         }
         document.getElementById(mutation.startsWith('logo') ? 'save-branding-logo' : 'clear-branding-logo').click();
       }
-      for (let attempt = 0; attempt < 10 && document.getElementById('settings-form').inert; attempt++) {
+      for (let attempt = 0; attempt < 30 &&
+          (mutationRequests === 0 || document.getElementById('settings-form').inert); attempt++) {
         await flush();
       }
       assert.strictEqual(mutationRequests, 1, `${mutation} should submit once`);
@@ -483,7 +521,7 @@ async function flush() {
           data.orgId = 'system';
           return response(200, data);
         }
-        if (requestUrl.endsWith('/organizations')) return response(200, []);
+        if (requestUrl.endsWith('/organizations')) return organizationCatalogResponse();
         if (requestUrl.includes('/patron-codes?')) return response(200, { data: [] });
         throw new Error(`Unexpected request: ${requestUrl}`);
       };
@@ -524,7 +562,7 @@ async function flush() {
           data.orgId = 'system';
           return response(200, data);
         }
-        if (url.endsWith('/organizations')) return response(200, []);
+        if (url.endsWith('/organizations')) return organizationCatalogResponse();
         if (url.includes('/patron-codes?')) return response(200, { data: [] });
         throw new Error(`Unexpected request: ${url}`);
       };
@@ -551,6 +589,7 @@ async function flush() {
     }
     console.log('Settings scope races and two canonical authentication-evidence replacement cases passed');
   } finally {
+    clearTimeout(completionDeadline);
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 })().catch(error => {

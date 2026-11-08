@@ -121,8 +121,12 @@ async function until(check) {
     assert.deepEqual(selected(), []);
     add('3'); conflict = true;
     assert.deepEqual((await save()).workflow.allowedPatronCodeIds, [3]);
-    assert.deepEqual(selected(), [], 'Version conflict retains the existing authoritative reload behavior');
-    assert.equal(controller.isDirty(), false);
+    assert.deepEqual(selected(), ['3'], 'Version conflict retains the selected IDs for recovery');
+    assert.equal(controller.isDirty(), true);
+    assert.equal(document.getElementById('settings-save').disabled, true);
+    document.getElementById('settings-discard').click();
+    await until(() => !controller.isDirty());
+    assert.deepEqual(selected(), [], 'Explicit discard reloads the authoritative selection');
     conflict = false;
     await scope('system');
     assert.deepEqual(selected(), ['77', '2']);

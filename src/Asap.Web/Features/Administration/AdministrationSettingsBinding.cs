@@ -108,6 +108,11 @@ public sealed record AdministrationSettingsCommand(
 // are bound once here, with omission distinct from an explicit inherited/null value.
 public static class AdministrationSettingsBinding
 {
+    // The shipped editor writes these collections by their canonical names.
+    // Reject retired write aliases so old/malformed snapshots cannot become silent no-ops.
+    private static readonly string[] RetiredCollectionAliases =
+        ["externalSearchProviders", "materialFormats", "additionalFieldDefinitions", "patronFormatRules", "emailTemplates"];
+
     private static readonly string[][] AmbiguousPropertyAliases =
     [
         ["orgId", "organizationId"],
@@ -119,12 +124,7 @@ public static class AdministrationSettingsBinding
         ["commonAuthorsList", "commonCreators", "commonCreatorsList"],
         ["allowedPatronCodeIds", "patronCodeIds"],
         ["publicationOptions", "publicationOptionSet"],
-        ["providers", "externalSearchProviders"],
-        ["formats", "materialFormats"],
-        ["formatRules", "patronFormatRules"],
-        ["customFields", "additionalFieldDefinitions"],
         ["autoClaimRules", "formatClaimRules"],
-        ["templates", "emailTemplates"],
         ["duplicateStatusLabels", "duplicateLabels"],
         ["outstandingTimeoutRejectionTemplateId", "outstandingTimeoutRejectionTemplate"],
         ["format", "code"],
@@ -210,7 +210,7 @@ public static class AdministrationSettingsBinding
         {
             error = "settings_payload_invalid";
         }
-        else if (HasAmbiguousProperties(payload))
+        else if (HasAmbiguousProperties(payload) || HasRetiredCollectionAlias(payload))
         {
             error = "settings_payload_invalid";
         }
@@ -221,7 +221,7 @@ public static class AdministrationSettingsBinding
             error ??= "organization_invalid";
         }
         if (scope.Kind == LibraryScopeKind.System &&
-            (HasPropertyNamed(payload, "customFields") || HasPropertyNamed(payload, "additionalFieldDefinitions") ||
+            (HasPropertyNamed(payload, "customFields") ||
              HasPropertyNamed(payload, "autoClaimRules") || HasPropertyNamed(payload, "formatClaimRules")))
         {
             error ??= "settings_library_only";
@@ -242,8 +242,8 @@ public static class AdministrationSettingsBinding
             error ??= "settings_payload_invalid";
         }
         if (hasWorkflowSection &&
-            ((HasAnyDirectProperty(payload, "providers", "externalSearchProviders") &&
-              HasAnyDirectProperty(workflow, "providers", "externalSearchProviders")) ||
+            ((HasAnyDirectProperty(payload, "providers") &&
+              HasAnyDirectProperty(workflow, "providers")) ||
              (HasAnyDirectProperty(payload, "commonAuthorsList", "commonCreators", "commonCreatorsList") &&
               HasAnyDirectProperty(workflow, "commonAuthorsList", "commonCreators", "commonCreatorsList")) ||
              (HasAnyDirectProperty(payload, "allowedPatronCodeIds", "patronCodeIds") &&
@@ -252,15 +252,15 @@ public static class AdministrationSettingsBinding
             error ??= "settings_payload_invalid";
         }
         if (hasPatronSection &&
-            ((HasAnyDirectProperty(payload, "formats", "materialFormats") &&
-              HasAnyDirectProperty(patron, "formats", "materialFormats")) ||
+            ((HasAnyDirectProperty(payload, "formats") &&
+              HasAnyDirectProperty(patron, "formats")) ||
              (HasAnyDirectProperty(payload, "formatLabels") && HasAnyDirectProperty(patron, "formatLabels")) ||
              (HasAnyDirectProperty(payload, "formatOrder") && HasAnyDirectProperty(patron, "formatOrder")) ||
              (HasAnyDirectProperty(payload, "availableFormats") && HasAnyDirectProperty(patron, "availableFormats")) ||
-             (HasAnyDirectProperty(payload, "customFields", "additionalFieldDefinitions") &&
-              HasAnyDirectProperty(patron, "customFields", "additionalFieldDefinitions")) ||
-             (HasAnyDirectProperty(payload, "formatRules", "patronFormatRules") &&
-              HasAnyDirectProperty(patron, "formatRules", "patronFormatRules")) ||
+             (HasAnyDirectProperty(payload, "customFields") &&
+              HasAnyDirectProperty(patron, "customFields")) ||
+             (HasAnyDirectProperty(payload, "formatRules") &&
+              HasAnyDirectProperty(patron, "formatRules")) ||
              (HasAnyDirectProperty(payload, "publicationOptions", "publicationOptionSet") &&
               HasAnyDirectProperty(patron, "publicationOptions", "publicationOptionSet")) ||
              HasAnyDirectProperty(payload, "duplicateStatusLabels", "duplicateLabels") ||
@@ -275,16 +275,16 @@ public static class AdministrationSettingsBinding
         {
             error ??= "settings_payload_invalid";
         }
-        var hasModernFormats = HasAnyDirectProperty(payload, "formats", "materialFormats") ||
-                               HasAnyDirectProperty(patron, "formats", "materialFormats");
+        var hasModernFormats = HasAnyDirectProperty(payload, "formats") ||
+                               HasAnyDirectProperty(patron, "formats");
         var hasLegacyFormatMaps = HasAnyDirectProperty(payload, "formatLabels", "formatOrder", "availableFormats") ||
                                   HasAnyDirectProperty(patron, "formatLabels", "formatOrder", "availableFormats");
         if (hasModernFormats && hasLegacyFormatMaps)
         {
             error ??= "settings_payload_invalid";
         }
-        var hasModernProviders = HasAnyDirectProperty(payload, "providers", "externalSearchProviders") ||
-                                 HasAnyDirectProperty(workflow, "providers", "externalSearchProviders");
+        var hasModernProviders = HasAnyDirectProperty(payload, "providers") ||
+                                 HasAnyDirectProperty(workflow, "providers");
         var hasLegacyProviders = HasAnyDirectProperty(payload, LegacyProviderScalarProperties) ||
                                  HasAnyDirectProperty(workflow, LegacyProviderScalarProperties);
         if (hasModernProviders && hasLegacyProviders)
@@ -357,7 +357,7 @@ public static class AdministrationSettingsBinding
         {
             error ??= "settings_payload_invalid";
         }
-        if (HasAnyDirectProperty(payload, "templates", "emailTemplates") && hasEmailSection &&
+        if (HasAnyDirectProperty(payload, "templates") && hasEmailSection &&
             HasLegacyEmailTemplateMembers(email))
         {
             error ??= "settings_payload_invalid";
@@ -635,6 +635,23 @@ public static class AdministrationSettingsBinding
         }
         return new(true, value.ValueKind == JsonValueKind.Number ? value.GetRawText() :
             value.ValueKind == JsonValueKind.String ? value.GetString() : null);
+    }
+
+    private static bool HasRetiredCollectionAlias(JsonElement payload)
+    {
+        if (HasAnyDirectProperty(payload, RetiredCollectionAliases))
+        {
+            return true;
+        }
+        foreach (var sectionName in new[] { "workflow", "patron", "ui_text", "email", "emails" })
+        {
+            if (payload.TryGetProperty(sectionName, out var section) &&
+                HasAnyDirectProperty(section, RetiredCollectionAliases))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static JsonElement Section(JsonElement root, ref string? error, params string[] names)

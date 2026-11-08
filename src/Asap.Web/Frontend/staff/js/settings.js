@@ -11,6 +11,8 @@ import { createEmailTestController } from './email-test.js';
 import { confirmAction, controlSnapshot } from './confirmation.js';
 import { byDisplayLabel } from './display-order.js';
 import { inheritanceStatus } from './settings-inheritance.js';
+import { clean, object, property, meaningful } from './settings-values.js';
+import { isLibraryOrganization, validateOrganizationCatalog } from './settings-organization-catalog.js';
 
 const WORKFLOW_FIELDS = [
   ['suggestionLimit', 'suggestion-limit', 'number'],
@@ -114,26 +116,6 @@ function node(tag, attributes = {}, children = []) {
   return value;
 }
 
-function clone(value) {
-  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
-}
-
-function object(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-}
-
-function property(value, key) {
-  const source = object(value);
-  if (Object.prototype.hasOwnProperty.call(source, key)) return source[key];
-  const pascal = key.charAt(0).toUpperCase() + key.slice(1);
-  return source[pascal];
-}
-
-function meaningful(value) {
-  return value !== null && value !== undefined &&
-    (typeof value !== 'string' || value.trim() !== '');
-}
-
 function isNonemptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -145,12 +127,6 @@ function isNonnegativeInt32(value) {
 function isCanonicalPositiveInt64Id(value) {
   return typeof value === 'string' && /^[1-9]\d*$/.test(value) &&
     (value.length < 19 || value.length === 19 && value <= '9223372036854775807');
-}
-
-function clean(value) {
-  if (value === null || value === undefined) return null;
-  const result = String(value).trim();
-  return result || null;
 }
 
 function stringValue(value) {
@@ -231,27 +207,6 @@ function templateEffectiveRows(data, organizationId) {
       overridden: Boolean(override)
     };
   }).concat(library.filter(row => row.isCustom));
-}
-
-function formatRulesFromEffective(formats) {
-  const result = {};
-  for (const format of Array.isArray(formats) ? formats : []) {
-    const rule = {
-      messageBehavior: format.messageBehavior,
-      message: format.message,
-      title: format.title,
-      author: format.author,
-      identifier: format.identifier,
-      publication: format.publication
-    };
-    if (format.customFields && typeof format.customFields === 'object') rule.customFields = format.customFields;
-    result[format.code] = rule;
-  }
-  return result;
-}
-
-export function mergeSettingsValues(system, override, fallback = {}) {
-  return mergeConfigured(system, override, fallback);
 }
 
 export function createSettingsController({
@@ -356,6 +311,7 @@ export function createSettingsController({
     pendingDeletedFormats: [],
     savedRejectionTemplateId: '',
     awaitingReload: false,
+    conflict: false,
     awaitingReloadMutation: null,
     outcomeUncertain: false,
     unconfirmedMutation: null,
@@ -878,6 +834,9 @@ export function createSettingsController({
   function holdSettingsMutation(operation) {
     cancelPolarisTest();
     reads.begin('administration-settings').abort();
+    // This mutation supersedes the settings read. Its retired finally block
+    // cannot clear current loading state, including when the mutation is rejected.
+    state.loading = false;
     reads.begin('administration-staff-access').abort();
     reads.begin('administration-patron-codes').abort();
     placeholders.clear();
@@ -946,62 +905,6 @@ export function createSettingsController({
     return isSystem() ? 1 : Number(state.scope);
   }
 
-  function isLibraryOrganization(organization) {
-    return Number(organization?.id) > 1 && Number(organization?.organizationCodeId) === 2;
-  }
-
-  function validateOrganizationCatalog(response, scope, settingsData) {
-    const values = response?.data ?? response;
-    if (!Array.isArray(values) || values.length === 0) {
-      throw new Error('The organization list is incomplete. Reload settings before saving.');
-    }
-    const ids = new Set();
-    const rows = [];
-    for (const value of values) {
-      if (!value || typeof value !== 'object' || Array.isArray(value) ||
-          !Number.isSafeInteger(value.id) || value.id < 1 || ids.has(value.id) ||
-          typeof value.name !== 'string' || !value.name.trim() ||
-          !Object.prototype.hasOwnProperty.call(value, 'organizationCodeId') ||
-          value.organizationCodeId !== null && !Number.isSafeInteger(value.organizationCodeId) ||
-          !Object.prototype.hasOwnProperty.call(value, 'parentOrganizationId') ||
-          value.parentOrganizationId !== null && !Number.isSafeInteger(value.parentOrganizationId) ||
-          typeof value.isActive !== 'boolean' || typeof value.version !== 'string' || !value.version.trim()) {
-        throw new Error('The organization list is malformed or incomplete. Reload settings before saving.');
-      }
-      ids.add(value.id);
-      rows.push(value);
-    }
-
-    if (state.staff?.role === 'super_admin') {
-      if (!ids.has(1)) {
-        throw new Error('The organization list is missing the system organization. Reload settings before saving.');
-      }
-      const systemSettings = property(property(settingsData, 'stored'), 'systemSettings');
-      const expectedEnabled = property(systemSettings, 'enabledLibraryOrgIds');
-      const expectedLibraries = property(systemSettings, 'libraryOrgIds');
-      if (!Array.isArray(expectedEnabled) || expectedEnabled.some(id => !Number.isSafeInteger(id) || id <= 1) ||
-          new Set(expectedEnabled).size !== expectedEnabled.length ||
-          !Array.isArray(expectedLibraries) || expectedLibraries.some(id => !Number.isSafeInteger(id) || id <= 1) ||
-          new Set(expectedLibraries).size !== expectedLibraries.length) {
-        throw new Error('The saved participation snapshot is incomplete. Reload settings before saving.');
-      }
-      const libraryRows = rows.filter(isLibraryOrganization).map(item => item.id).sort((first, second) => first - second);
-      const expectedLibraryRows = [...expectedLibraries].sort((first, second) => first - second);
-      if (JSON.stringify(libraryRows) !== JSON.stringify(expectedLibraryRows)) {
-        throw new Error('The organization list is missing library rows. Reload settings before saving.');
-      }
-      const activeRows = rows.filter(item => isLibraryOrganization(item) && item.isActive)
-        .map(item => item.id).sort((first, second) => first - second);
-      const expectedRows = [...expectedEnabled].sort((first, second) => first - second);
-      if (JSON.stringify(activeRows) !== JSON.stringify(expectedRows)) {
-        throw new Error('The organization list is missing active libraries. Reload settings before saving.');
-      }
-    } else if (scope !== 'system' && !ids.has(Number(scope))) {
-      throw new Error('The organization list is missing the selected library. Reload settings before saving.');
-    }
-
-    return rows;
-  }
 
   function acceptOrganizationCatalog(rows) {
     state.organizations = rows;
@@ -1192,16 +1095,19 @@ export function createSettingsController({
     }
     const dirty = isDirty();
     const settingsDirty = hasSettingsDraft();
-    const needsAttention = dirty || state.awaitingReload || state.outcomeUncertain || state.saving;
+    const needsAttention = dirty || state.conflict || state.awaitingReload || state.outcomeUncertain || state.saving;
     dom.saveBar.classList.toggle('attention', needsAttention);
-    dom.save.disabled = !settingsDirty || state.awaitingReload || state.saving || (isSystem() && !state.organizationsReady);
-    dom.saveLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
-    dom.clearLogo.disabled = state.awaitingReload || Boolean(state.pendingMutation);
+    dom.save.disabled = !settingsDirty || state.conflict || state.awaitingReload || state.saving || (isSystem() && !state.organizationsReady);
+    dom.saveLogo.disabled = state.conflict || state.awaitingReload || Boolean(state.pendingMutation);
+    dom.clearLogo.disabled = state.conflict || state.awaitingReload || Boolean(state.pendingMutation);
     dom.discard.hidden = !dirty;
     dom.saveTitle.textContent = state.outcomeUncertain ? 'Outcome uncertain; reload needed'
+      : state.conflict ? 'Conflict; edits retained'
       : state.awaitingReload ? 'Saved; reload needed' : dirty ? 'Unsaved changes' : 'No changes';
     dom.saveDetail.textContent = state.outcomeUncertain
       ? 'The request may have committed. Reload current settings before retrying.'
+      : state.conflict
+      ? 'Copy any edits you need to keep, then discard changes and reload current settings before saving again.'
       : state.awaitingReload
       ? 'The save committed. Reload current settings before editing again.'
       : isSystem() && !state.organizationsReady
@@ -1210,7 +1116,7 @@ export function createSettingsController({
       ? settingsDirty ? 'Changes are local until you save this settings context.' : 'Save changes in each staff editor, or cancel the edits.'
       : 'Everything in this settings context is saved.';
     dom.reset.hidden = isSystem();
-    dom.reset.disabled = state.awaitingReload || Boolean(state.pendingMutation);
+    dom.reset.disabled = state.conflict || state.awaitingReload || Boolean(state.pendingMutation);
     for (const row of staffRows.values()) row.sync();
     emailTest.sync();
   }
@@ -1928,6 +1834,7 @@ export function createSettingsController({
     dom.logo.value = '';
     dom.discardLogoDraft.hidden = true;
     state.data = data;
+    state.conflict = false;
     state.scalarIntents.clear(); state.templateIntents.clear(); state.scalarDisplays.clear();
     state.scope = String(data.orgId || state.scope);
     const stored = object(data.stored);
@@ -2045,7 +1952,7 @@ export function createSettingsController({
       const data = settingsResponse?.data && settingsResponse?.version === undefined
         ? settingsResponse.data
         : settingsResponse;
-      const organizations = validateOrganizationCatalog(organizationsResponse, context.scope, data);
+      const organizations = validateOrganizationCatalog(organizationsResponse, context.scope, data, state.staff?.role === 'super_admin');
       acceptOrganizationCatalog(organizations);
       populateScopeOptions();
       const patronCodeChoices = patronCodesResponse?.data ?? patronCodesResponse;
@@ -2486,7 +2393,7 @@ export function createSettingsController({
 
   async function saveSettings(event) {
     event?.preventDefault();
-    if (!state.data || !isDirty() || state.awaitingReload || state.saving || state.pendingMutation) return;
+    if (!state.data || !isDirty() || state.conflict || state.awaitingReload || state.saving || state.pendingMutation) return;
     if (isSystem() && !state.organizationsReady) {
       notify('The organization list is unavailable or incomplete. Reload settings before saving.', 'error');
       return;
@@ -2593,13 +2500,11 @@ export function createSettingsController({
       }
       if (error.status === 409) {
         const stale = error.response?.code === 'stale_version';
-        if (stale || error.response?.code === 'template_referenced') {
-          await load({ silent: true, owner: mutation });
-          if (isSettingsOperationCurrent(mutation)) {
-            notify(stale
-              ? 'These settings changed elsewhere. Review the refreshed values before saving again.'
-              : 'This rejection template is used by auto-rejection. Change and save that workflow setting before deleting it.', 'error');
-          }
+        if (stale) {
+          state.conflict = true;
+          notify('These settings changed elsewhere. Your edits are retained. Copy any edits you need to keep, then discard changes and reload before saving again.', 'error');
+        } else if (error.response?.code === 'template_referenced') {
+          notify('This rejection template is used by auto-rejection. Your edits are retained. Review the workflow setting before deleting it.', 'error');
         } else {
           notify(error.message || 'The settings could not be saved.', 'error');
         }
@@ -2614,7 +2519,7 @@ export function createSettingsController({
   }
 
   async function resetSettings() {
-    if (isSystem() || !state.data || state.awaitingReload || state.pendingMutation) return;
+    if (isSystem() || !state.data || state.conflict || state.awaitingReload || state.pendingMutation) return;
     if (!await confirmSettings('Reset inherited overrides?',
       `${isDirty() ? 'Discard unsaved settings changes and reset' : 'Reset'} this library's inherited overrides to the current system values? Library-owned custom fields, formats, rejection templates, auto-claim rules and their history are preserved.`,
       'Reset inherited overrides', 'danger')) return;
@@ -2652,10 +2557,8 @@ export function createSettingsController({
         return;
       }
       if (error.status === 409) {
-        await load({ silent: true, owner: mutation });
-        if (isSettingsOperationCurrent(mutation)) {
-          notify(error.message || 'The settings changed elsewhere. Review the refreshed values.', 'error');
-        }
+        state.conflict = true;
+        notify('These settings changed elsewhere. Your edits are retained. Copy any edits you need to keep, then discard changes and reload before resetting.', 'error');
       } else if (error.status !== 401) notify(error.message || 'The inherited overrides could not be reset.', 'error');
     } finally {
       finishSettingsMutation(mutation);
@@ -2664,7 +2567,7 @@ export function createSettingsController({
   }
 
   async function saveLogo(clear = false) {
-    if (!state.data || state.awaitingReload || state.pendingMutation) return;
+    if (!state.data || state.conflict || state.awaitingReload || state.pendingMutation) return;
     const withoutLogo = rows => rows.filter(([id]) => id !== 'branding-logo');
     const file = dom.logo.files?.[0];
     const hasOtherDraft = state.baselineOwnership !== ownershipSnapshot() ||
@@ -2725,6 +2628,9 @@ export function createSettingsController({
         dom.brandingStatus.textContent = 'Image change outcome is uncertain. Reload effective branding before retrying.';
         markUnconfirmedMutation(dom.brandingStatus.textContent);
         return;
+      }
+      if (error.status === 409 && error.response?.code === 'stale_version') {
+        state.conflict = true;
       }
       if (error.status !== 401 && !isAbortError(error)) {
         dom.brandingStatus.textContent = `${error.message || 'Logo could not be saved.'} The image preview is still unsaved.`;
@@ -2923,7 +2829,7 @@ export function createSettingsController({
       ]);
       if (!current()) return null;
       const data = response?.data && response.version === undefined ? response.data : response;
-      const organizations = validateOrganizationCatalog(organizationsResponse, scope, data);
+      const organizations = validateOrganizationCatalog(organizationsResponse, scope, data, state.staff?.role === 'super_admin');
       return { isCurrent: current, accept() {
         const staffReview = scope === state.scope && state.awaitingReloadMutation?.slot === 'administration-staff-mutation';
         cancelSettingsOperations(); releaseLogoDraft(); copyGeneration++;
@@ -3000,7 +2906,7 @@ export function createSettingsController({
     if (replaced) {
       cancelSettingsOperations();
       pendingCommonAuthorsFocus = false;
-      state.pendingMutation = null; state.saving = false; state.outcomeUncertain = false; state.awaitingReload = false; state.awaitingReloadMutation = null; state.unconfirmedMutation = null;
+      state.pendingMutation = null; state.saving = false; state.conflict = false; state.outcomeUncertain = false; state.awaitingReload = false; state.awaitingReloadMutation = null; state.unconfirmedMutation = null;
       dom.form.inert = false; dom.form.removeAttribute('aria-busy');
       releaseLogoDraft();
       copyGeneration += 1;

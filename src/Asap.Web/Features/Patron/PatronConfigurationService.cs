@@ -96,6 +96,14 @@ public sealed record EffectivePatronConfiguration(
     bool HasLogo,
     string LogoAltText);
 
+// One operation's already-read scalar rows. Administration uses the same rows for
+// configured and effective views while retaining its serializable scope locks.
+internal sealed record PatronConfigurationScalars(
+    Organization Organization, SystemSettings SystemSettings,
+    WorkflowSettings SystemWorkflow, WorkflowSettings? LibraryWorkflow,
+    PatronSettings SystemPatron, PatronSettings? LibraryPatron,
+    EmailSettings SystemEmail, EmailSettings? LibraryEmail);
+
 public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> contextFactory)
 {
     public async Task<EffectivePatronConfiguration?> GetAsync(
@@ -136,13 +144,35 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
                 .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
         var systemSettings = await context.SystemSettings.AsNoTracking()
             .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var systemEmail = await context.EmailSettings.AsNoTracking()
+            .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var libraryEmail = organizationId == LibraryScope.SystemOrganizationId
+            ? null
+            : await context.EmailSettings.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
+        return await GetAsync(context, new PatronConfigurationScalars(organization, systemSettings,
+            systemWorkflow, libraryWorkflow, systemPatron, libraryPatron, systemEmail, libraryEmail), cancellationToken);
+    }
+
+    internal async Task<EffectivePatronConfiguration> GetAsync(
+        AsapDbContext context,
+        PatronConfigurationScalars scalars,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var (organization, systemSettings, systemWorkflow, libraryWorkflow, systemPatron, libraryPatron,
+            systemEmail, libraryEmail) = scalars;
+        var organizationId = organization.Id;
 
         var customFields = await LoadCustomFieldsAsync(context, organizationId, cancellationToken);
         var formats = await LoadFormatsAsync(context, organizationId, customFields, cancellationToken);
         var publicationOptions = await LoadPublicationOptionsAsync(context, organizationId, cancellationToken);
         var creators = await LoadCommonCreatorsAsync(context, organizationId, cancellationToken);
         var patronCodes = await LoadPatronCodesAsync(context, organizationId, cancellationToken);
-        var email = await LoadEmailAsync(context, organizationId, cancellationToken);
+        var email = new EffectiveEmailConfiguration(
+            Inherit(libraryEmail?.FromAddress, systemEmail.FromAddress),
+            Inherit(libraryEmail?.FromName, systemEmail.FromName),
+            systemEmail.ProtectedServerToken);
         var template = await LoadSubmissionTemplateAsync(context, organizationId, cancellationToken);
         var branding = await LoadBrandingAsync(context, organizationId, organization.DisplayName, cancellationToken);
         var externalSearchProviders = await LoadExternalSearchProvidersAsync(
@@ -396,23 +426,6 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             .Select(item => item.PatronCodeId)
             .ToListAsync(cancellationToken);
         return values.ToHashSet();
-    }
-
-    private static async Task<EffectiveEmailConfiguration> LoadEmailAsync(
-        AsapDbContext context,
-        int organizationId,
-        CancellationToken cancellationToken)
-    {
-        var system = await context.EmailSettings.AsNoTracking()
-            .SingleAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
-        var library = organizationId == LibraryScope.SystemOrganizationId
-            ? null
-            : await context.EmailSettings.AsNoTracking()
-                .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
-        return new EffectiveEmailConfiguration(
-            Inherit(library?.FromAddress, system.FromAddress),
-            Inherit(library?.FromName, system.FromName),
-            system.ProtectedServerToken);
     }
 
     private static async Task<EffectiveEmailTemplate?> LoadSubmissionTemplateAsync(

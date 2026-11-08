@@ -2,6 +2,108 @@ using System.Text.Json.Serialization;
 
 namespace Asap.Web.Features.Administration;
 
+public sealed record SettingsProviderView
+{
+    [JsonPropertyName("kind")]
+    public string Kind { get; init; } = string.Empty;
+    [JsonPropertyName("id")]
+    public string Id { get; init; } = string.Empty;
+    [JsonPropertyName("key")]
+    public string? Key { get; init; }
+    [JsonPropertyName("isEnabled")]
+    public bool? IsEnabled { get; init; }
+    [JsonPropertyName("label")]
+    public string? Label { get; init; }
+    [JsonPropertyName("urlTemplate")]
+    public string? UrlTemplate { get; init; }
+    [JsonPropertyName("sortOrder")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SortOrder { get; init; }
+    [JsonPropertyName("version")]
+    public string Version { get; init; } = string.Empty;
+}
+
+public sealed record SettingsFormatView
+{
+    [JsonPropertyName("kind")]
+    public string Kind { get; init; } = string.Empty;
+    [JsonPropertyName("id")]
+    public string Id { get; init; } = string.Empty;
+    [JsonPropertyName("materialFormatId")]
+    public string? MaterialFormatId { get; init; }
+    [JsonPropertyName("ownerOrganizationId")]
+    public string OwnerOrganizationId { get; init; } = string.Empty;
+    [JsonPropertyName("code")]
+    public string? Code { get; init; }
+    [JsonPropertyName("label")]
+    public string? Label { get; init; }
+    [JsonPropertyName("sortOrder")]
+    public int? SortOrder { get; init; }
+    [JsonPropertyName("isEnabled")]
+    public bool? IsEnabled { get; init; }
+    [JsonPropertyName("messageBehavior")]
+    public string? MessageBehavior { get; init; }
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+    [JsonPropertyName("titleMode")]
+    public string? TitleMode { get; init; }
+    [JsonPropertyName("titleLabel")]
+    public string? TitleLabel { get; init; }
+    [JsonPropertyName("authorMode")]
+    public string? AuthorMode { get; init; }
+    [JsonPropertyName("authorLabel")]
+    public string? AuthorLabel { get; init; }
+    [JsonPropertyName("identifierMode")]
+    public string? IdentifierMode { get; init; }
+    [JsonPropertyName("identifierLabel")]
+    public string? IdentifierLabel { get; init; }
+    [JsonPropertyName("publicationMode")]
+    public string? PublicationMode { get; init; }
+    [JsonPropertyName("publicationLabel")]
+    public string? PublicationLabel { get; init; }
+    [JsonPropertyName("version")]
+    public string Version { get; init; } = string.Empty;
+}
+
+public sealed record SettingsSetView<T>(
+    [property: JsonPropertyName("exists")] bool Exists,
+    [property: JsonPropertyName("values")] IReadOnlyList<T> Values);
+
+public sealed record PublicationOptionSettingsView(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("label")] string Label,
+    [property: JsonPropertyName("enabled")] bool Enabled,
+    [property: JsonPropertyName("sortOrder")] int SortOrder);
+
+public sealed record CommonCreatorSettingsView(
+    [property: JsonPropertyName("value")] string Value,
+    [property: JsonPropertyName("sortOrder")] int SortOrder);
+
+public sealed record EmailTemplateSettingsView(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("organizationId")] string OrganizationId,
+    [property: JsonPropertyName("templateKey")] string TemplateKey,
+    [property: JsonPropertyName("sourceTemplateId")] string? SourceTemplateId,
+    [property: JsonPropertyName("displayName")] string? DisplayName,
+    [property: JsonPropertyName("subject")] string? Subject,
+    [property: JsonPropertyName("body")] string? Body,
+    [property: JsonPropertyName("enabled")] bool Enabled,
+    [property: JsonPropertyName("isCustom")] bool IsCustom,
+    [property: JsonPropertyName("sortOrder")] int SortOrder,
+    [property: JsonPropertyName("version")] string Version);
+
+public sealed record SettingsScopeView(
+    [property: JsonPropertyName("workflow")] WorkflowSettingsView? Workflow,
+    [property: JsonPropertyName("patron")] PatronTextSettingsView? Patron,
+    [property: JsonPropertyName("email")] EmailSettingsView? Email,
+    [property: JsonPropertyName("publicationOptions")] SettingsSetView<PublicationOptionSettingsView> PublicationOptions,
+    [property: JsonPropertyName("commonCreators")] SettingsSetView<CommonCreatorSettingsView> CommonCreators,
+    [property: JsonPropertyName("allowedPatronCodeIds")] SettingsSetView<int> AllowedPatronCodeIds,
+    [property: JsonPropertyName("providers")] IReadOnlyList<SettingsProviderView> Providers,
+    [property: JsonPropertyName("formats")] IReadOnlyList<SettingsFormatView> Formats,
+    [property: JsonPropertyName("templates")] IReadOnlyList<EmailTemplateSettingsView> Templates,
+    [property: JsonPropertyName("branding")] BrandingSettingsView Branding);
+
 public sealed record SystemSettingsView
 {
     [JsonPropertyName("staffUrl")]

@@ -283,8 +283,8 @@ public sealed partial class AdministrationService
         JsonElement payload,
         CancellationToken cancellationToken)
     {
-        var found = TryGetAny(payload, out var providerValue, "providers", "externalSearchProviders") ||
-                    TryGetAny(workflow, out providerValue, "providers", "externalSearchProviders");
+        var found = TryGetAny(payload, out var providerValue, "providers") ||
+                    TryGetAny(workflow, out providerValue, "providers");
         var inputs = found
             ? ParseProviders(providerValue)
             : ParseLegacyProviders(workflow, payload);
@@ -426,10 +426,10 @@ public sealed partial class AdministrationService
         JsonElement patron,
         CancellationToken cancellationToken)
     {
-        var hasFormats = TryGetAny(payload, out var value, "formats", "materialFormats") ||
-                         TryGetAny(patron, out value, "formats", "materialFormats");
-        var hasRules = TryGetAny(payload, out var rulesValue, "formatRules", "patronFormatRules") ||
-                       TryGetAny(patron, out rulesValue, "formatRules", "patronFormatRules");
+        var hasFormats = TryGetAny(payload, out var value, "formats") ||
+                         TryGetAny(patron, out value, "formats");
+        var hasRules = TryGetAny(payload, out var rulesValue, "formatRules") ||
+                       TryGetAny(patron, out rulesValue, "formatRules");
         if (!hasFormats && !hasRules &&
             !TryGetAtRootOrSection(payload, patron, out _, "formatLabels") &&
             !TryGetAtRootOrSection(payload, patron, out _, "formatOrder") &&
@@ -810,10 +810,10 @@ public sealed partial class AdministrationService
         JsonElement payload,
         CancellationToken cancellationToken)
     {
-        var hasDefinitions = TryGetAny(payload, out var definitions, "customFields", "additionalFieldDefinitions") ||
-                             TryGetAny(patron, out definitions, "customFields", "additionalFieldDefinitions");
-        var hasRules = TryGetAny(payload, out var rules, "formatRules", "patronFormatRules") ||
-                       TryGetAny(patron, out rules, "formatRules", "patronFormatRules");
+        var hasDefinitions = TryGetAny(payload, out var definitions, "customFields") ||
+                             TryGetAny(patron, out definitions, "customFields");
+        var hasRules = TryGetAny(payload, out var rules, "formatRules") ||
+                       TryGetAny(patron, out rules, "formatRules");
         if (organizationId == LibraryScope.SystemOrganizationId)
         {
             if (hasDefinitions || hasRules && HasCustomFieldRules(rules))
@@ -956,8 +956,8 @@ public sealed partial class AdministrationService
             }
         }
 
-        if (!hasRules && (TryGetAny(payload, out var formats, "formats", "materialFormats") ||
-                          TryGetAny(patron, out formats, "formats", "materialFormats")) && formats.ValueKind == JsonValueKind.Array)
+        if (!hasRules && (TryGetAny(payload, out var formats, "formats") ||
+                          TryGetAny(patron, out formats, "formats")) && formats.ValueKind == JsonValueKind.Array)
         {
             hasRules = formats.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.Object && HasProperty(item, "customFields"));
             if (hasRules)
@@ -1076,10 +1076,10 @@ public sealed partial class AdministrationService
         HasEffectiveFormatOrCustomFieldEditsIn(payload) || HasEffectiveFormatOrCustomFieldEditsIn(patron);
 
     private static bool HasEffectiveFormatOrCustomFieldEditsIn(JsonElement section) =>
-        TryGetAny(section, out _, "formats", "materialFormats") ||
+        TryGetAny(section, out _, "formats") ||
         TryGetAny(section, out _, "availableFormats") ||
-        TryGetAny(section, out _, "customFields", "additionalFieldDefinitions") ||
-        TryGetAny(section, out _, "formatRules", "patronFormatRules");
+        TryGetAny(section, out _, "customFields") ||
+        TryGetAny(section, out _, "formatRules");
 
     private static async Task ValidateLibraryRequiredSelectRulesAsync(
         AsapDbContext context,
@@ -1227,7 +1227,7 @@ public sealed partial class AdministrationService
         CancellationToken cancellationToken)
     {
         var seenTemplateTargets = new HashSet<(int OrganizationId, string Kind, long? Id, string? Key)>();
-        if (TryGetAny(payload, out var templates, "templates", "emailTemplates"))
+        if (TryGetAny(payload, out var templates, "templates"))
         {
             if (templates.ValueKind != JsonValueKind.Array)
             {

@@ -96,11 +96,9 @@ public sealed partial class AdministrationService(
             ? null
             : await context.EmailSettings.AsNoTracking().SingleOrDefaultAsync(
                 item => item.OrganizationId == organizationId, cancellationToken);
-        var effective = await patronConfiguration.GetAsync(context, organizationId, cancellationToken);
-        if (effective is null)
-        {
-            return new AdministrationResult("organization_not_found");
-        }
+        var effective = await patronConfiguration.GetAsync(context,
+            new PatronConfigurationScalars(organization, systemSettings, systemWorkflow, libraryWorkflow,
+                systemPatron, libraryPatron, systemEmail, libraryEmail), cancellationToken);
 
         var origins = await context.PatronEmbedAllowedOrigins.AsNoTracking()
             .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
@@ -153,37 +151,31 @@ public sealed partial class AdministrationService(
             ? branding
             : await context.Branding.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
-        var hasOverrides = organizationId != LibraryScope.SystemOrganizationId && await HasLibraryOverridesAsync(context, organizationId, cancellationToken);
         var version = await ComputeSettingsVersionAsync(context, organizationId, cancellationToken);
 
-        var configuredSystem = new
-        {
-            workflow = ToWorkflow(systemWorkflow),
-            patron = ToPatron(systemPatron),
-            email = ToEmail(systemEmail),
-            publicationOptions = await LoadPublicationSnapshotAsync(context, 1, cancellationToken),
-            commonCreators = await LoadCommonCreatorSnapshotAsync(context, 1, cancellationToken),
-            allowedPatronCodeIds = await LoadPatronCodeSnapshotAsync(context, 1, cancellationToken),
-            providers = await LoadRawProviderOverridesAsync(context, 1, cancellationToken),
-            formats = await LoadRawFormatsAsync(context, 1, cancellationToken),
-            templates = await LoadRawTemplatesAsync(context, 1, cancellationToken),
-            branding = ToBranding(systemBranding)
-        };
+        var configuredSystem = new SettingsScopeView(
+            ToWorkflow(systemWorkflow), ToPatron(systemPatron), ToEmail(systemEmail),
+            await LoadPublicationSnapshotAsync(context, 1, cancellationToken),
+            await LoadCommonCreatorSnapshotAsync(context, 1, cancellationToken),
+            await LoadPatronCodeSnapshotAsync(context, 1, cancellationToken),
+            await LoadRawProviderOverridesAsync(context, 1, cancellationToken),
+            await LoadRawFormatsAsync(context, 1, cancellationToken),
+            templates.Where(item => item.OrganizationId == "1").ToArray(), ToBranding(systemBranding));
         var libraryOverride = organizationId == LibraryScope.SystemOrganizationId
             ? null
-            : new
-            {
-                workflow = libraryWorkflow is null ? null : ToWorkflow(libraryWorkflow),
-                patron = libraryPatron is null ? null : ToPatron(libraryPatron),
-                email = libraryEmail is null ? null : ToEmail(libraryEmail),
-                publicationOptions = await LoadPublicationSnapshotAsync(context, organizationId, cancellationToken),
-                commonCreators = await LoadCommonCreatorSnapshotAsync(context, organizationId, cancellationToken),
-                allowedPatronCodeIds = await LoadPatronCodeSnapshotAsync(context, organizationId, cancellationToken),
-                providers = await LoadRawProviderOverridesAsync(context, organizationId, cancellationToken),
-                formats = await LoadRawFormatsAsync(context, organizationId, cancellationToken),
-                templates = await LoadRawTemplatesAsync(context, organizationId, cancellationToken),
-                branding = ToBranding(branding)
-            };
+            : new SettingsScopeView(
+                ToWorkflow(libraryWorkflow), ToPatron(libraryPatron), ToEmail(libraryEmail),
+                await LoadPublicationSnapshotAsync(context, organizationId, cancellationToken),
+                await LoadCommonCreatorSnapshotAsync(context, organizationId, cancellationToken),
+                await LoadPatronCodeSnapshotAsync(context, organizationId, cancellationToken),
+                await LoadRawProviderOverridesAsync(context, organizationId, cancellationToken),
+                await LoadRawFormatsAsync(context, organizationId, cancellationToken),
+                templates.Where(item => item.OrganizationId == organizationId.ToString()).ToArray(), ToBranding(branding));
+        var hasOverrides = libraryOverride is not null &&
+            (libraryWorkflow is not null || libraryPatron is not null || libraryEmail is not null || branding is not null ||
+             libraryOverride.PublicationOptions.Exists || libraryOverride.CommonCreators.Exists || libraryOverride.AllowedPatronCodeIds.Exists ||
+             overriddenProviderIds.Count > 0 || formatMetadata.Values.Any(item => item.Overridden) ||
+             formatRules.Count > 0 || autoClaimRules.Count > 0 || customFields.Count > 0 || libraryOverride.Templates.Count > 0);
         var stored = new
         {
             systemSettings = ToSystemSettings(systemSettings, origins, enabledLibraryOrgIds, libraryOrgIds),
@@ -210,8 +202,9 @@ public sealed partial class AdministrationService(
             overriddenProviderIds, formatMetadata);
         var inherited = organizationId == LibraryScope.SystemOrganizationId
             ? effective
-            : await patronConfiguration.GetAsync(context, LibraryScope.SystemOrganizationId, cancellationToken)
-                ?? throw new InvalidOperationException("System configuration is unavailable.");
+            : await patronConfiguration.GetAsync(context,
+                new PatronConfigurationScalars(lockedOrganizations[LibraryScope.SystemOrganizationId], systemSettings,
+                    systemWorkflow, null, systemPatron, null, systemEmail, null), cancellationToken);
         var result = new AdministrationResult(
             "ok",
             new
@@ -243,7 +236,7 @@ public sealed partial class AdministrationService(
                 // These aliases preserve the shape used by the existing vanilla settings workflow.
                 workflow = ToWorkflow(effective, system: libraryWorkflow is null || organizationId == LibraryScope.SystemOrganizationId),
                 ui_text = ToEffectivePatronText(effective),
-                emails = await ToEffectiveEmailAsync(context, organizationId, effective, cancellationToken),
+                emails = ToEffectiveEmail(effective, templates),
                 templatePlaceholders = PatronEmailTemplateRenderer.SupportedPlaceholders,
                 publicPatron = PublicPatronLinkBuilder.Build(systemSettings.StaffApplicationUrl, organizationId, organization.IsActive),
                 publicPatronUnavailableReason = organizationId == LibraryScope.SystemOrganizationId
@@ -1235,7 +1228,7 @@ public sealed partial class AdministrationService(
             }
         }
 
-        if (TryGetAny(payload, out var templates, "templates", "emailTemplates"))
+        if (TryGetAny(payload, out var templates, "templates"))
         {
             if (templates.ValueKind == JsonValueKind.Array)
             {

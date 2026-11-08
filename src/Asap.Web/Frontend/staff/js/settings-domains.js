@@ -1,5 +1,6 @@
 import { byDisplayLabel } from './display-order.js';
 import { inheritanceStatus } from './settings-inheritance.js';
+import { clean, clone } from './settings-values.js';
 
 let nextRulePanelId = 0;
 let nextTemplateRowId = 0;
@@ -31,19 +32,9 @@ function property(value, key) {
   return value[pascal];
 }
 
-function clean(value) {
-  if (value === null || value === undefined) return null;
-  const text = String(value).trim();
-  return text || null;
-}
-
 function stringId(value) {
   const result = clean(value);
   return result;
-}
-
-function clone(value) {
-  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
 
 function array(value) {
@@ -583,10 +574,6 @@ function validPositiveIdentity(value) {
   }
 }
 
-function rawSnapshot(configuredSystem, libraryOverride, key, system) {
-  if (system) return property(configuredSystem, key);
-  return property(libraryOverride, key);
-}
 
 export function createSettingsDomainEditors({ root, onChange = () => {}, onRetryCodes = () => {},
   canRemoveTemplate = () => true, onTemplatesRendered = () => {}, onInvalidTemplate = () => {},
