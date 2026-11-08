@@ -227,6 +227,17 @@ class SyntheticProcTests(unittest.TestCase):
         self.assertEqual(groups[0]["cpuset_cpu_count"], 4)
         self.assertEqual(groups[0]["memory_limit_status"], "unlimited")
 
+    def test_disk_headroom_is_sampled_again_during_workload(self):
+        self.seed()
+        metrics = self.metrics()
+        with mock.patch.object(perf.shutil, "disk_usage", return_value=shutil._ntuple_diskusage(100, 20, 80)):
+            previous = metrics.snapshot()
+        with mock.patch.object(perf.shutil, "disk_usage", return_value=shutil._ntuple_diskusage(100, 90, 10)):
+            current = metrics.snapshot()
+        row = metrics.interval(previous, current)
+        self.assertEqual(row["filesystems"]["workspace"]["free_bytes"], 10)
+        self.assertIn("Workspace minimum sampled disk free (GiB) | 0.00", perf.summary([row], 1, 0, set()))
+
     def test_missing_interfaces_and_vm_counter_reset(self):
         self.proc.mkdir()
         metrics = self.metrics()

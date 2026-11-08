@@ -1,14 +1,19 @@
 {
-  "schema": 5,
+  "schema": 6,
   "repository": "clcdpc/asap-pocketbase",
   "repository_id": 1221758626,
   "workflow": ".github/workflows/dotnet.yml",
-  "job": "Full CI execution",
+  "executors": {
+    "frontend": {"id": "build-test-package", "name": "Frontend, CI checks and package"},
+    "dotnet": {"id": "dotnet-qualification", "name": "Non-browser .NET/SQL qualification"},
+    "browser": {"id": "browser-qualification", "name": "Browser/SQL qualification"}
+  },
   "runner_labels": [
-    "clc-linux"
+    "ubuntu-24.04"
   ],
-  "runner_group": "clc-runners",
-  "environment_epoch": "clc-linux-2026-10-29-v1",
+  "runner_group": "GitHub Actions",
+  "runner_group_id": 0,
+  "environment_epoch": "github-hosted-ubuntu-24.04-2026-11-08-v1",
   "lifetime_days": 14,
   "source_inputs": [
     {"paths": [".github/workflows/dotnet.yml",".github/actions/","tests/run_all.js","tests/browser/run.cjs","tests/ci_workflow_contract.test.js","tests/test_iis_deployment_contract.test.js"],

@@ -64,15 +64,23 @@ class Fixture:
                            path=self.config["workflow"], repository=copy.deepcopy(repository),
                            head_repository=copy.deepcopy(repository), event="push", head_branch="main",
                            created_at=reuse.iso(self.now - timedelta(hours=3)))
-        self.job = success(id=9, run_id=7, head_sha=self.run["head_sha"], name=self.config["job"],
+        self.job = success(id=9, run_id=7, head_sha=self.run["head_sha"], name=self.config["executors"]["dotnet"]["name"],
                            labels=self.config["runner_labels"], runner_group_name=self.config["runner_group"],
+                           runner_group_id=self.config["runner_group_id"],
                            started_at=reuse.iso(self.now - timedelta(hours=2)),
                            completed_at=reuse.iso(self.now - timedelta(hours=1)), steps=[])
         self.gate = success(id=90, run_id=7, head_sha=self.run["head_sha"], name="Build, test and package")
-        for name in [*reuse.STEPS.values(), "Verify required test suites",
-                     *(f"Upload original {s} execution evidence" for s in fp.SUITES)]:
-            self.job["steps"].append(success(name=name, started_at=reuse.iso(self.now - timedelta(minutes=120)),
-                                              completed_at=reuse.iso(self.now - timedelta(minutes=95))))
+        self.jobs = {}
+        for index, suite in enumerate(fp.SUITES):
+            job = self.job if suite == "dotnet" else copy.deepcopy(self.job)
+            job.update(id=9 + index, name=self.config["executors"][suite]["name"], steps=[])
+            for name in (reuse.STEPS[suite], "Verify required test suites", f"Upload original {suite} execution evidence"):
+                job["steps"].append(success(name=name, started_at=reuse.iso(self.now - timedelta(minutes=120)),
+                                             completed_at=reuse.iso(self.now - timedelta(minutes=95))))
+            self.jobs[suite] = job
+        for name in ("Verify publish artifacts", "Create exact test-IIS deployment ZIP",
+                     "Validate test-IIS package without host mutation", "Upload exact test-IIS deployment artifact"):
+            self.jobs["frontend"]["steps"].append(success(name=name))
         self.source = {"sha": self.current["commit"], "tree": {"sha": self.current["tree"]}, "parents": []}
         self.logs = (f"2026-10-29T10:00:00.000Z [command]/usr/bin/git log -1 --format=%H\n"
                      f"2026-10-29T10:00:00.001Z {self.current['commit']}\n").encode()
@@ -89,7 +97,7 @@ class Fixture:
             self.manifests[suite] = {
                 "schema": self.config["schema"], "kind": "executed", "outcome": "passed", "suite": suite,
                 "repository": self.config["repository"], "repository_id": self.config["repository_id"],
-                "workflow": self.config["workflow"], "job": self.config["job"], "run_id": 7, "run_attempt": 2,
+                "workflow": self.config["workflow"], "job": self.config["executors"][suite]["name"], "run_id": 7, "run_attempt": 2,
                 "source_commit": self.current["commit"], "source_tree": self.current["tree"],
                 "source_algorithm": fp.SOURCE_ALGORITHM,
                 "source_fingerprint": identity["source"], "fingerprint": identity["fingerprint"],
@@ -142,7 +150,7 @@ class Fixture:
         self.calls.append(path)
         if self.failure:
             raise self.failure
-        if path == "/actions/jobs/9/logs":
+        if path in (f"/actions/jobs/{job['id']}/logs" for job in self.jobs.values()):
             return self.logs
         if path.startswith("/actions/artifacts/") and path.endswith("/zip"):
             return self.archives[int(path.split("/")[-2])]
@@ -155,7 +163,7 @@ class Fixture:
         if path.startswith("/actions/workflows/dotnet.yml/runs?"):
             return iter([copy.deepcopy(self.run)])
         if path == "/actions/runs/7/attempts/2/jobs":
-            return iter([copy.deepcopy(self.job), copy.deepcopy(self.gate)])
+            return iter(copy.deepcopy([*self.jobs.values(), self.gate]))
         if path.startswith("/actions/runs/7/attempts/") and path.endswith("/jobs"):
             return iter(copy.deepcopy(self.attempt_jobs[int(path.split("/")[-2])]))
         if path == "/actions/artifacts":
@@ -258,7 +266,8 @@ class GitIdentityTests(unittest.TestCase):
         fixture.entries = fp.tracked_entries(self.root)
         fixture.source = {"sha": head, "tree": {"sha": self.git("rev-parse", "HEAD^{tree}")}, "parents": []}
         fixture.run.update(event="workflow_dispatch", head_sha=head, head_branch="pr")
-        fixture.job["head_sha"] = head
+        for job in fixture.jobs.values():
+            job["head_sha"] = head
         fixture.gate["head_sha"] = head
         for artifact in fixture.artifacts.values():
             artifact["workflow_run"]["head_sha"] = head
@@ -268,7 +277,7 @@ class GitIdentityTests(unittest.TestCase):
         directory = self.root / ".artifacts/test-reuse"
         selection_directory = self.root / ".artifacts/test-selection"
         env = {**{key: os.environ[key] for key in ("PATH", "SystemRoot", "TEMP", "TMP") if key in os.environ},
-               "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": head, "GITHUB_RUN_ID": "7",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": head, "GITHUB_RUN_ID": "7", "GITHUB_JOB": "dotnet-qualification",
                "GITHUB_RUN_ATTEMPT": "2", "GITHUB_OUTPUT": str(self.root / "outputs"),
                "GITHUB_REPOSITORY": fixture.config["repository"], "GH_TOKEN": "fixture-token",
                "ASAP_FORCE_FULL_CI": "true"}
@@ -621,14 +630,15 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(decisions["dotnet"]["source"]["saved_seconds"], 1500)
         self.assertEqual(fixture.calls.count("/actions/jobs/9/logs"), 1)
 
-    def test_each_suite_requires_its_own_original_success_in_the_shared_job(self):
+    def test_each_suite_requires_its_own_original_success_in_its_owning_job(self):
         for suite in fp.SUITES:
             for name in (reuse.STEPS[suite], f"Upload original {suite} execution evidence"):
                 for outcome in ("failure", "cancelled", "skipped", "missing"):
                     fixture = Fixture()
-                    step = next(s for s in fixture.job["steps"] if s["name"] == name)
+                    job = fixture.jobs[suite]
+                    step = next(s for s in job["steps"] if s["name"] == name)
                     if outcome == "missing":
-                        fixture.job["steps"].remove(step)
+                        job["steps"].remove(step)
                     else:
                         step["conclusion"] = outcome
                     decisions = fixture.lookup()
@@ -638,7 +648,7 @@ class ProvenanceTests(unittest.TestCase):
     def test_two_job_schema_and_stale_browser_job_provenance_are_incompatible(self):
         fixture = Fixture()
         for suite in fp.SUITES:
-            fixture.manifests[suite]["schema"] = 3
+            fixture.manifests[suite]["schema"] = 5
             fixture.archive(suite)
         self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
         fixture = Fixture()
@@ -647,6 +657,54 @@ class ProvenanceTests(unittest.TestCase):
         decisions = fixture.lookup()
         self.assertFalse(decisions["browser"]["reuse"])
         self.assertTrue(decisions["dotnet"]["reuse"] and decisions["frontend"]["reuse"])
+
+    def test_every_required_owner_must_be_present_unique_and_successful(self):
+        for suite in fp.SUITES:
+            for failure in ("failure", "cancelled", "skipped", "missing", "duplicate", "wrong-head"):
+                fixture = Fixture()
+                jobs = [*fixture.jobs.values(), fixture.gate]
+                target = fixture.jobs[suite]
+                if failure == "missing":
+                    jobs.remove(target)
+                elif failure == "duplicate":
+                    jobs.append(copy.deepcopy(target))
+                elif failure == "wrong-head":
+                    target["head_sha"] = "f" * 40
+                else:
+                    target["conclusion"] = failure
+                pages = fixture.pages
+                with self.subTest(suite=suite, failure=failure), mock.patch.object(fixture, "pages", side_effect=lambda path, key, **kwargs:
+                        iter(copy.deepcopy(jobs)) if path == "/actions/runs/7/attempts/2/jobs" else pages(path, key, **kwargs)):
+                    self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
+
+    def test_each_package_step_is_required_even_when_all_jobs_claim_success(self):
+        for name in ("Verify publish artifacts", "Create exact test-IIS deployment ZIP",
+                     "Validate test-IIS package without host mutation", "Upload exact test-IIS deployment artifact"):
+            for outcome in ("failure", "cancelled", "skipped", "missing"):
+                fixture = Fixture()
+                steps = fixture.jobs["frontend"]["steps"]
+                step = next(step for step in steps if step["name"] == name)
+                if outcome == "missing":
+                    steps.remove(step)
+                else:
+                    step["conclusion"] = outcome
+                with self.subTest(name=name, outcome=outcome):
+                    self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
+
+    def test_another_owners_manifest_or_checkout_cannot_authorize_a_suite(self):
+        for suite in fp.SUITES:
+            fixture = Fixture()
+            other = next(s for s in fp.SUITES if s != suite)
+            fixture.manifests[suite]["job"] = fixture.config["executors"][other]["name"]
+            fixture.archive(suite)
+            with self.subTest(suite=suite):
+                self.assertFalse(fixture.lookup()[suite]["reuse"])
+            fixture = Fixture()
+            request = fixture.request
+            job_path = f"/actions/jobs/{fixture.jobs[suite]['id']}/logs"
+            with mock.patch.object(fixture, "request", side_effect=lambda path, **kwargs:
+                    fixture.logs.replace(b"a" * 40, b"f" * 40) if path == job_path else request(path, **kwargs)):
+                self.assertFalse(fixture.lookup()[suite]["reuse"])
 
     def test_shared_job_cannot_substitute_another_suites_archive(self):
         for suite in fp.SUITES:
@@ -708,7 +766,7 @@ class ProvenanceTests(unittest.TestCase):
                                if path == "/actions/runs/7/attempts/2" else original_get(path)):
             decisions = fixture.lookup()
             self.assertTrue(all(d["reuse"] and d["source"]["attempt"] == 2 for d in decisions.values()))
-            for name in (fixture.config["job"], "Build, test and package"):
+            for name in (*(owner["name"] for owner in fp.EXECUTORS.values()), "Build, test and package"):
                 for outcome in ("failure", "cancelled", "skipped"):
                     fixture.attempt_jobs[3] = [success(name=name, run_id=7, head_sha=fixture.run["head_sha"], conclusion=outcome)]
                     self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()), (name, outcome))
@@ -726,19 +784,20 @@ class ProvenanceTests(unittest.TestCase):
         fixture.attempt_jobs[3] = [deployment]
         self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
         for jobs in ([], [success(name="Resolve validation policy", run_id=7, head_sha=fixture.run["head_sha"])],
-                     [success(name=fixture.config["job"], run_id=7, head_sha=fixture.run["head_sha"],
+                     [success(name=fixture.config["executors"]["dotnet"]["name"], run_id=7, head_sha=fixture.run["head_sha"],
                               status="in_progress", conclusion=None)],
                      [copy.deepcopy(fixture.job)],
                      [copy.deepcopy(fixture.job), {**fixture.gate, "status": "queued", "conclusion": None}]):
             fixture.attempt_jobs[3] = jobs
             self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()), jobs)
-        fixture.attempt_jobs[3] = [copy.deepcopy(fixture.job), copy.deepcopy(fixture.gate), deployment]
+        fixture.attempt_jobs[3] = copy.deepcopy([*fixture.jobs.values(), fixture.gate, deployment])
         self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
 
     def test_wrong_repository_workflow_job_or_runner_is_rejected(self):
         for target, key, value in (("repository", "id", 42), ("head_repository", "id", 42),
                                    ("run", "workflow_id", 42), ("run", "path", ".github/workflows/other.yml"),
                                    ("job", "name", "Other job"), ("job", "runner_group_name", "other"),
+                                   ("job", "runner_group_id", 1), ("job", "labels", ["clc-linux"]),
                                    ("job", "labels", ["ubuntu-latest"]), ("job", "head_sha", "f" * 40)):
             fixture = Fixture()
             record = fixture.run[target] if target in ("repository", "head_repository") else getattr(fixture, target)
@@ -807,7 +866,7 @@ class ProvenanceTests(unittest.TestCase):
         fixture.run["status"] = "completed"
         fixture.attempts[2] = copy.deepcopy(fixture.run)
         fixture.run["run_attempt"] = 3
-        fixture.attempt_jobs[3] = [success(name=fixture.config["job"], run_id=7,
+        fixture.attempt_jobs[3] = [success(name=fixture.config["executors"]["dotnet"]["name"], run_id=7,
                                          head_sha=fixture.run["head_sha"], conclusion="failure")]
         with self.assertRaises(reuse.EvidenceError):
             validator.validate(fixture.run, fixture.artifacts["browser"], "browser")
@@ -863,7 +922,8 @@ class ProvenanceTests(unittest.TestCase):
     def test_synthetic_merge_can_reuse_across_different_commit_ids(self):
         fixture = Fixture()
         fixture.run.update(event="pull_request", head_sha="e" * 40)
-        fixture.job["head_sha"] = fixture.run["head_sha"]
+        for job in fixture.jobs.values():
+            job["head_sha"] = fixture.run["head_sha"]
         fixture.gate["head_sha"] = fixture.run["head_sha"]
         fixture.source["parents"] = [{"sha": "f" * 40}, {"sha": fixture.run["head_sha"]}]
         for artifact in fixture.artifacts.values():
@@ -1092,7 +1152,7 @@ class EnvironmentTests(unittest.TestCase):
             fixture = Fixture()
             fixture.current["sql_image"] = fp.SQL_TAG
             env = {"GITHUB_SHA": fixture.current["commit"], "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
-                   "GITHUB_OUTPUT": str(output)}
+                   "GITHUB_OUTPUT": str(output), "GITHUB_JOB": "dotnet-qualification"}
             for failure in ("fingerprint", "api"):
                 with self.subTest(failure=failure), mock.patch.dict(os.environ, env, clear=True), \
                      mock.patch.object(fp, "calculate", side_effect=RuntimeError("secret") if failure == "fingerprint" else None,
@@ -1107,7 +1167,7 @@ class EnvironmentTests(unittest.TestCase):
 
 
 class GateTests(unittest.TestCase):
-    def run_gate(self, fixture, outcomes, decisions=None, mutate_plan=None, forced=False, scope=None, environments=None):
+    def run_gate(self, fixture, outcomes, decisions=None, mutate_plan=None, forced=False, scope=None, environments=None, owned=None):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         directory = Path(temporary.name)
@@ -1118,6 +1178,7 @@ class GateTests(unittest.TestCase):
                 mutate_plan(plan)
             reuse.write_json(directory / "plan.json", plan)
         env = {"GITHUB_SHA": fixture.current["commit"], "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
+               "GITHUB_OUTPUT": str(directory / "outputs"),
                **{s.upper() + "_OUTCOME": value for s, value in outcomes.items() if value is not None}}
         if scope:
             env["ASAP_CI_SUITES"] = scope
@@ -1132,7 +1193,15 @@ class GateTests(unittest.TestCase):
              mock.patch.object(reuse, "api_client", return_value=fixture), \
              mock.patch.object(reuse, "execution_results", side_effect=lambda s, *args: results(fixture.selections[s])), \
              mock.patch("sys.stdout", new_callable=io.StringIO):
-            reuse.verify(directory)
+            rows = {}
+            for suite in (owned,) if owned else fp.SUITES:
+                os.environ["GITHUB_JOB"] = fp.EXECUTORS[suite]["id"]
+                if decisions is not None:
+                    plan["job"] = os.environ["GITHUB_JOB"]
+                    reuse.write_json(directory / "plan.json", plan)
+                reuse.verify(directory)
+                rows.update(json.loads((directory / "verification.json").read_bytes()))
+            reuse.write_json(directory / "verification.json", rows)
         return directory
 
     def test_ambient_split_scope_cannot_narrow_the_required_suite_population(self):
@@ -1153,7 +1222,13 @@ class GateTests(unittest.TestCase):
             self.assertEqual(manifest["kind"], "executed")
             self.assertEqual(manifest["counts"]["passed"], 2)
             self.assertEqual(manifest["selection"]["expected"], 2)
-            self.assertEqual(manifest["job"], fixture.config["job"])
+            self.assertEqual(manifest["job"], fixture.config["executors"][suite]["name"])
+
+    def test_worker_cannot_attest_another_suite_even_with_ambient_scope(self):
+        for suite in fp.SUITES:
+            directory = self.run_gate(Fixture(), {suite: "success"}, scope=",".join(fp.SUITES), owned=suite)
+            self.assertEqual(set(json.loads((directory / "verification.json").read_bytes())), {suite})
+            self.assertEqual((directory / "outputs").read_text().strip(), f"verified_{suite}=true")
 
     def test_all_hits_are_revalidated_and_do_not_create_original_evidence(self):
         fixture = Fixture()
@@ -1217,7 +1292,7 @@ class GateTests(unittest.TestCase):
                     self.run_gate(fixture, outcomes)
 
     def test_partial_hit_only_records_executed_suites(self):
-        # Every cold, warm and mixed scheduling combination shares one executor.
+        # Exercise the real verifier under each fixed owning job for all eight combinations.
         for mask in range(8):
             fixture = Fixture()
             hits = {suite for index, suite in enumerate(fp.SUITES) if mask & (1 << index)}
@@ -1328,16 +1403,16 @@ class NativeResultsTests(unittest.TestCase):
 
 
 class ExecutorScopeTests(unittest.TestCase):
-    def test_lookup_and_plan_publish_the_complete_population_despite_ambient_scope(self):
-        for scope in ("dotnet,frontend", "browser"):
+    def test_plan_uses_fixed_job_ownership_despite_ambient_scope(self):
+        for owned, owner in fp.EXECUTORS.items():
             for forced in (False, True):
                 with tempfile.TemporaryDirectory() as name:
                     fixture = Fixture()
-                    fixture.current["sql_image"] = fp.SQL_TAG
                     directory = Path(name)
                     output = directory / "outputs"
                     env = {"GITHUB_SHA": fixture.current["commit"], "GITHUB_RUN_ID": "99",
-                           "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(output), "ASAP_CI_SUITES": scope}
+                           "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(output),
+                           "GITHUB_JOB": owner["id"], "ASAP_CI_SUITES": ",".join(fp.SUITES)}
                     with mock.patch.dict(os.environ, env, clear=True), \
                          mock.patch.object(fp, "calculate", return_value=fixture.current), \
                          mock.patch.object(reuse, "api_client", return_value=fixture), \
@@ -1345,14 +1420,16 @@ class ExecutorScopeTests(unittest.TestCase):
                          mock.patch.object(reuse, "utcnow", return_value=fixture.now), \
                          mock.patch("sys.stdout", new_callable=io.StringIO):
                         reuse.plan(directory)
-                    decisions = json.loads((directory / "plan.json").read_bytes())["decisions"]
-                    self.assertEqual(set(decisions), set(fp.SUITES))
-                    self.assertTrue(all(d["reuse"] == (not forced) for d in decisions.values()))
+                    plan = json.loads((directory / "plan.json").read_bytes())
+                    self.assertEqual(plan["job"], owner["id"])
+                    self.assertEqual(set(plan["decisions"]), {owned})
+                    self.assertEqual(plan["decisions"][owned]["reuse"], not forced)
                     exported = dict(line.split("=", 1) for line in output.read_text().splitlines())
-                    self.assertEqual(set(exported), {*fp.SUITES, "schema", *(s + "_fingerprint" for s in fp.SUITES)})
+                    self.assertEqual(set(exported), {owned, "schema", owned + "_fingerprint"})
 
-    def test_only_the_full_executor_can_qualify_suites(self):
-        reuse.validate_executor({"GITHUB_JOB": "build-test-package"})
+    def test_only_fixed_owning_executors_can_qualify_their_suite(self):
+        for suite, owner in fp.EXECUTORS.items():
+            self.assertEqual(reuse.validate_executor({"GITHUB_JOB": owner["id"], "ASAP_CI_SUITES": "other"}), suite)
         for job in (None, "", "draft-validation", "validation", "removed-executor"):
             with self.assertRaises(reuse.EvidenceError):
                 reuse.validate_executor({"GITHUB_JOB": job})
@@ -1362,7 +1439,7 @@ class WorkflowTests(unittest.TestCase):
     def test_required_check_and_always_current_commit_packaging_are_preserved(self):
         workflow = (fp.ROOT / ".github/workflows/dotnet.yml").read_text(encoding="utf-8")
         for token in ("name: ${{ needs.validation-policy.outputs.mode == 'draft' && 'Draft CI result' || 'Build, test and package' }}",
-                      "runs-on: clc-linux", "ref: ${{ github.sha }}",
+                      "runs-on: ubuntu-24.04", "ref: ${{ github.sha }}",
                       "dotnet build Asap.sln --configuration Release", "run: npm ci", "run: npm test",
                       "npm run test:browser", "python3 -B scripts/ci/selection.py run-draft", "bash scripts/ci/run-with-performance.sh",
                       "name: Summarize .NET/SQL diagnostic evidence", "name: Upload .NET/SQL performance telemetry",
@@ -1389,12 +1466,12 @@ class WorkflowTests(unittest.TestCase):
         for suite in fp.SUITES:
             self.assertIn(f"if: ${{{{ steps.reuse.outputs.{suite} != 'true' }}}}", workflow)
             self.assertIn(f"name: asap-test-evidence-v${{{{ steps.reuse.outputs.schema }}}}-{suite}-${{{{ steps.reuse.outputs.{suite}_fingerprint }}}}", workflow)
-        runtime_condition = "if: ${{ steps.reuse.outputs.dotnet != 'true' || steps.reuse.outputs.browser != 'true' }}"
-        # Credentials, SQL startup/readiness serve either executing partition.
-        self.assertEqual(workflow.count(runtime_condition), 3)
+        for suite in ("dotnet", "browser"):
+            condition = f"if: ${{{{ steps.reuse.outputs.{suite} != 'true' }}}}"
+            self.assertGreaterEqual(workflow.count(condition), 4)
         self.assertNotIn("ASAP_CI_SUITES:", workflow)
         # Packaging is unconditional on reuse; only the existing test-IIS activation gate can deploy.
-        publishing = workflow.split("      - name: Verify publish artifacts\n", 1)[1].split("  draft-validation:", 1)[0]
+        publishing = workflow.split("      - name: Verify publish artifacts\n", 1)[1].split("  dotnet-qualification:", 1)[0]
         self.assertNotIn("steps.reuse.outputs", publishing)
 
 
