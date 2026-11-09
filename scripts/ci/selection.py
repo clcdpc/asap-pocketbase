@@ -19,6 +19,10 @@ ALL = ["core"]
 FILTERS = {key: f"TestCategory={value}" for key, value in CATEGORIES.items()}
 FILTERS["core"] = "&".join(f"TestCategory!={value}" for value in CATEGORIES.values())
 APPLICATION = "tests/Asap.Tests/bin/Release/net10.0/Asap.Tests.dll"
+# Frozen after balancing PR #504's native TRX durations (not test counts).
+# All data rows of a method share a worker; newly discovered methods are assigned automatically.
+PARTITION_SEED = "asap-method-v1-33"
+NATIVE_SUITES = ("dotnet_a", "dotnet_b", "browser_a", "browser_b")
 
 
 class SelectionError(ValueError):
@@ -207,6 +211,24 @@ def validate_partitions(catalog, partitions, reviewed):
     require(set(partitions["core"]) == expected_core, "Unclassified/core tests were unexpectedly excluded")
 
 
+def worker_partition(method):
+    return hashlib.sha256((PARTITION_SEED + "\n" + method).encode("utf-8")).digest()[0] % 2
+
+
+def worker_populations(partitions):
+    workers = {}
+    for category, suite in (("core", "dotnet"), ("browser", "browser")):
+        tests = partitions[category]
+        pair = [{uid: value for uid, value in tests.items() if worker_partition(value["method"]) == bucket}
+                for bucket in (0, 1)]
+        require(all(pair), "A required worker partition is empty")
+        require(not set(pair[0]).intersection(pair[1]) and set(pair[0]) | set(pair[1]) == set(tests),
+                "Worker partitions must be a complete disjoint union: " + category)
+        for bucket, suffix in enumerate(("a", "b")):
+            workers[suite + "_" + suffix] = pair[bucket]
+    return workers
+
+
 def population(selected, root=ROOT):
     require(selected["categories"] and selected["categories"][0] == "core"
             and selected["categories"] == [key for key in ALL if key in selected["categories"]], "Invalid category selection")
@@ -215,15 +237,16 @@ def population(selected, root=ROOT):
     partitions = {key: discover(FILTERS[key], root) for key in PARTITIONS}
     reviewed = json.loads((root / "scripts/ci/reviewed-test-categories.json").read_bytes())
     validate_partitions(catalog, partitions, reviewed)
-    selected_uids = sorted(uid for key in selected["categories"] for uid in partitions[key])
-    expression = FILTERS["core"]
-    require(expression == FILTERS["core"], "Unexpected execution filter")
+    workers = worker_populations(partitions)
     suites = {}
-    for suite, tests, expression in (("dotnet", selected_uids, expression),
-                                      ("browser", sorted(partitions["browser"]), FILTERS["browser"])):
+    for suite, members in workers.items():
+        tests = sorted(members)
+        category = "core" if suite.startswith("dotnet_") else "browser"
         # The full disjoint union is validated above on every invocation. Its
         # unrelated partition must not become an input to this suite's reuse key.
-        suites[suite] = {"filter": expression, "minimum": len(tests), "expected": len(tests),
+        suites[suite] = {"filter": FILTERS[category], "minimum": len(tests), "expected": len(tests),
+                         "uids": tests, "partition": {"algorithm": "sha256-method-v1", "seed": PARTITION_SEED,
+                                                       "bucket": 0 if suite.endswith("_a") else 1},
                          "identities": sorted(digest(uid) for uid in tests),
                          "population": digest({uid: catalog[uid] for uid in tests})}
     files = frontend_files(root)
@@ -231,7 +254,7 @@ def population(selected, root=ROOT):
     suites["frontend"] = {"filter": "npm test (root *.test.js and declared portable acceptance files)", "minimum": len(files),
                            "expected": len(files), "files": files}
     members = {key: [{"uid": uid, **value} for uid, value in sorted(tests.items())]
-               for key, tests in partitions.items()}
+               for key, tests in workers.items()}
     return suites, round(time.monotonic() - started, 3), members
 
 
@@ -250,20 +273,20 @@ def frontend_files(root=ROOT):
 def prepare(root=ROOT, directory=DIRECTORY):
     selected = decision(root=root)
     suites, seconds, members = population(selected, root)
-    result = {"schema": 2, "kind": "qualification", "commit": git("rev-parse", "HEAD", root=root),
+    result = {"schema": 3, "kind": "qualification", "commit": git("rev-parse", "HEAD", root=root),
               "decision": selected, "suites": suites, "discovery_seconds": seconds}
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "selection.json").write_bytes(canonical(result) + b"\n")
     # Human-readable case inventory; authorization still re-discovers the population.
     (directory / "catalog.json").write_bytes(canonical({"commit": result["commit"], "partitions": members}) + b"\n")
     print(json.dumps({"decision": selected, "counts": {key: len(value) for key, value in members.items()},
-                      "selected": suites["dotnet"]["expected"], "discovery_seconds": seconds}, indent=2))
+                      "discovery_seconds": seconds}, indent=2))
 
 
 def load(root=ROOT, verify=False, directory=None):
     path = (directory or root / ".artifacts/test-selection") / "selection.json"
     value = json.loads(path.read_bytes())
-    require(value.get("schema") == 2 and value.get("kind") == "qualification"
+    require(value.get("schema") == 3 and value.get("kind") == "qualification"
             and value["commit"] == git("rev-parse", "HEAD", root=root), "Missing current-commit qualification population")
     if verify:
         selected = decision(root=root)
@@ -273,12 +296,18 @@ def load(root=ROOT, verify=False, directory=None):
     return value
 
 
-def execute(selected, root=ROOT):
-    args = ["dotnet", "test", "--project", "tests/Asap.Tests/Asap.Tests.csproj", "--configuration", "Release",
+def execute(selected, root=ROOT, suite="dotnet_a"):
+    output = os.environ.get("ASAP_CI_PERFORMANCE_OUTPUT", ".artifacts/ci-performance" +
+                            ("-" + suite[-1] if "uids" in selected else ""))
+    args = ["--project", "tests/Asap.Tests/Asap.Tests.csproj", "--configuration", "Release",
             "--no-build", "--no-restore", "--minimum-expected-tests", str(selected["expected"]),
-            "--report-trx", "--report-trx-filename", "test-results.trx", "--results-directory", ".artifacts/ci-performance",
-            "--filter", selected["filter"]]
-    return subprocess.call(args, cwd=root)
+            "--report-trx", "--report-trx-filename", "test-results.trx", "--results-directory", output]
+    args.extend(["--filter-uid", *selected["uids"]] if "uids" in selected else ["--filter", selected["filter"]])
+    # The SDK's response format is one token per line. Avoid OS command length limits.
+    response = root / ".artifacts/test-selection" / (suite + ".rsp")
+    response.parent.mkdir(parents=True, exist_ok=True)
+    response.write_text("\n".join(args) + "\n", encoding="utf-8")
+    return subprocess.call(["dotnet", "test", "@" + str(response)], cwd=root)
 
 
 def draft(root=ROOT):
@@ -290,20 +319,21 @@ def draft(root=ROOT):
                 "identities": sorted(digest(uid) for uid in tests)}
     result = execute(selected, root)
     require(result == 0, "Draft tests failed")
-    reuse.execution_results("dotnet", selected)
+    reuse.execution_results("dotnet_a", selected, output="ci-performance")
     return 0
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("prepare", "run", "run-draft"))
+    parser.add_argument("--suite", choices=NATIVE_SUITES, default="dotnet_a")
     args = parser.parse_args()
     if args.operation == "prepare":
         prepare()
         return 0
     if args.operation == "run-draft":
         return draft()
-    return execute(load()["suites"]["dotnet"])
+    return execute(load(verify=True)["suites"][args.suite], suite=args.suite)
 
 
 if __name__ == "__main__":

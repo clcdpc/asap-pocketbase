@@ -7,7 +7,8 @@ const YAML = require('yaml');
 const root = path.resolve(__dirname, '..');
 const workflow = YAML.parse(fs.readFileSync(path.join(root, '.github/workflows/dotnet.yml'), 'utf8'), { uniqueKeys: true });
 const full = workflow.jobs['build-test-package'];
-const owners = { frontend: full, dotnet: workflow.jobs['dotnet-qualification'], browser: workflow.jobs['browser-qualification'] };
+const owners = { frontend: full, ...Object.fromEntries(['dotnet', 'browser'].flatMap((kind) =>
+  ['a', 'b'].map((part) => [kind + '_' + part, workflow.jobs[kind + '-qualification-' + part]]))) };
 const draft = workflow.jobs['draft-validation'];
 const policy = workflow.jobs['validation-policy'];
 const gate = workflow.jobs.validation;
@@ -110,8 +111,9 @@ async function main() {
     : 'bash';
   function qualify(context) {
     context.needs['build-test-package'] = { result: 'success', outputs: { verified_frontend: 'true', package_validated: 'true' } };
-    context.needs['dotnet-qualification'] = { result: 'success', outputs: { verified_dotnet: 'true' } };
-    context.needs['browser-qualification'] = { result: 'success', outputs: { verified_browser: 'true' } };
+    for (const [suite, owner] of Object.entries(reuse.executors)) {
+      context.needs[owner.id] = { result: 'success', outputs: { ['verified_' + suite]: 'true', ...(suite === 'frontend' ? { package_validated: 'true' } : {}) } };
+    }
   }
   function report(context) {
     const selected = step(gate, 'Require successful selected validation');
@@ -521,7 +523,7 @@ async function main() {
     }
   });
   await check('full CI retains safety, evidence checks and current-source packaging', () => {
-    assert.equal(reuse.schema, 6);
+    assert.equal(reuse.schema, 7);
     assert.deepEqual(reuse.runner_labels, ['ubuntu-24.04']);
     assert.equal(reuse.runner_group, 'GitHub Actions');
     assert.equal(reuse.runner_group_id, 0);
@@ -547,9 +549,9 @@ async function main() {
       }
     }
   });
-  await check('exactly three full workers become eligible together with fixed suite ownership and independent builds', async () => {
-    assert.deepEqual(Object.keys(workflow.jobs), ['validation-policy', 'build-test-package', 'dotnet-qualification',
-      'browser-qualification', 'draft-validation', 'validation', 'deploy-test-iis']);
+  await check('exactly five full workers become eligible together with fixed suite ownership and independent builds', async () => {
+    assert.deepEqual(Object.keys(workflow.jobs), ['validation-policy', 'build-test-package', 'dotnet-qualification-a', 'dotnet-qualification-b',
+      'browser-qualification-a', 'browser-qualification-b', 'draft-validation', 'validation', 'deploy-test-iis']);
     const artifacts = [];
     for (const job of [...Object.values(owners), draft]) {
       assert.match(step(job, 'Record runner capacity').run, /nproc[\s\S]*free --mebi[\s\S]*df --block-size=1/);
@@ -596,19 +598,23 @@ async function main() {
         assert.ok(!job.steps.some((candidate) => /dotnet publish|Compress-Archive/.test(candidate.run || '')));
       }
     }
-    assert.equal(new Set(artifacts).size, 3, 'Decision artifacts must not collide across workers');
-    assert.equal(step(owners.dotnet, 'Run .NET and real SQL tests (non-browser partition)').run,
-      'bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run');
-    assert.equal(step(owners.browser, 'Run browser accessibility tests').run, 'bash scripts/ci/run-with-performance.sh npm run test:browser');
-    for (const [context, expected] of [[await routed(pr('ready_for_review', false)), 3], [await routed(pr('converted_to_draft', true)), 1]]) {
+    assert.equal(new Set(artifacts).size, 5, 'Decision artifacts must not collide across workers');
+    for (const part of ['a', 'b']) {
+      assert.equal(step(owners['dotnet_' + part], 'Run .NET and real SQL tests (non-browser partition)').run,
+        'bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run --suite dotnet_' + part);
+      const browser = step(owners['browser_' + part], 'Run browser accessibility tests');
+      assert.equal(browser.run, 'bash scripts/ci/run-with-performance.sh npm run test:browser');
+      assert.equal(browser.env.ASAP_CI_TEST_SUITE, 'browser_' + part);
+    }
+    for (const [context, expected] of [[await routed(pr('ready_for_review', false)), 5], [await routed(pr('converted_to_draft', true)), 1]]) {
       const active = Object.values(workflow.jobs).filter((job) => job['runs-on'] === 'ubuntu-24.04' && enabled(job, context));
       assert.equal(active.length, expected);
     }
   });
   await check('cold, reused and all mixed schedules prepare only each native workers owned runtime', () => {
     assert.ok(!full.steps.some((candidate) => /docker run|docker rm|playwright install/.test(candidate.run || '')));
-    for (let mask = 0; mask < 8; mask++) {
-      const suites = ['frontend', 'dotnet', 'browser'];
+    for (let mask = 0; mask < (1 << Object.keys(owners).length); mask++) {
+      const suites = Object.keys(owners);
       const outputs = Object.fromEntries(suites.map((suite, index) => [suite, String(Boolean(mask & (1 << index)))]));
       const context = { steps: { reuse: { outputs } } };
       for (const suite of suites) {
@@ -628,15 +634,17 @@ async function main() {
         assert.match(step(job, 'Remove SQL Server test container').run, /docker rm --force "\$ASAP_CI_SQL_CONTAINER"/);
         assert.equal(step(job, 'Remove SQL Server test container').if, '${{ always() }}');
       }
-      assert.equal(enabled(step(owners.browser, 'Install browser acceptance dependencies'), context), outputs.browser !== 'true');
+      for (const suite of ['browser_a', 'browser_b']) {
+        assert.equal(enabled(step(owners[suite], 'Install browser acceptance dependencies'), context), outputs[suite] !== 'true');
+      }
     }
   });
   await check('normal ready PR reuse retains final verification, packaging and the required gate', async () => {
     const context = await routed(pr('opened', false));
-    context.steps = { reuse: { outputs: { frontend: 'true', dotnet: 'true', browser: 'true' } } };
+    context.steps = { reuse: { outputs: Object.fromEntries(Object.keys(owners).map((suite) => [suite, 'true'])) } };
     assert.equal(template(full.env.ASAP_FORCE_FULL_CI, context), 'false');
     assert.equal(template(full.env.ASAP_DEPLOY_TEST_IIS, context), 'false');
-    for (const suite of ['frontend', 'dotnet', 'browser']) {
+    for (const suite of Object.keys(owners)) {
       assert.equal(enabled(owners[suite].steps.find((candidate) => candidate.id === suite), context), false);
     }
     assert.equal(step(full, 'Verify required test suites').if, '${{ always() }}');
@@ -657,12 +665,12 @@ async function main() {
     ]) {
       const context = await routed(request);
       context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'true';
-      context.steps = { reuse: { outputs: { frontend: 'true', dotnet: 'true', browser: 'true' } } };
+      context.steps = { reuse: { outputs: Object.fromEntries(Object.keys(owners).map((suite) => [suite, 'true'])) } };
       qualify(context);
       context.needs['draft-validation'] = { result: 'skipped' };
       context.needs.validation = { result: 'success' };
       assert.equal(template(full.env.ASAP_FORCE_FULL_CI, context), 'false');
-      for (const suite of ['frontend', 'dotnet', 'browser']) {
+      for (const suite of Object.keys(owners)) {
         assert.equal(enabled(owners[suite].steps.find((candidate) => candidate.id === suite), context), false);
       }
       assert.equal(step(full, 'Verify required test suites').if, '${{ always() }}');
@@ -673,24 +681,33 @@ async function main() {
     }
   });
   await check('suite diagnostics retain separate TRX, fixture timelines and resource files without copying results', () => {
-    const dotnet = owners.dotnet.steps.find((candidate) => candidate.id === 'dotnet');
-    const browser = owners.browser.steps.find((candidate) => candidate.id === 'browser');
-    const frontend = full.steps.find((candidate) => candidate.id === 'frontend');
-    assert.equal(new Set([dotnet, browser, frontend].map((candidate) => candidate.env.ASAP_CI_PERFORMANCE_OUTPUT)).size, 3);
-    assert.equal(browser.env.ASAP_CI_BROWSER_RESULTS, '${{ github.workspace }}/.artifacts/browser-performance/test-results.trx');
-    assert.notEqual(dotnet.env.ASAP_CI_FIXTURE_TIMINGS, browser.env.ASAP_CI_FIXTURE_TIMINGS);
-    assert.equal(step(owners.browser, 'Summarize browser diagnostic evidence').run, 'python3 -B scripts/ci/diagnostic_report.py --output .artifacts/browser-performance');
-    assert.equal(step(owners.browser, 'Upload browser performance telemetry').with.path, '.artifacts/browser-performance/');
-    assert.equal(step(owners.dotnet, 'Upload .NET/SQL performance telemetry').with.path, '.artifacts/ci-performance/');
-    assert.doesNotMatch(full.steps.map((candidate) => candidate.run || '').join('\n'), /\bcp\s+.*\.trx/);
-    for (const name of ['Summarize .NET/SQL diagnostic evidence', 'Summarize browser diagnostic evidence']) {
-      assert.match(step(name.includes('browser') ? owners.browser : owners.dotnet, name).if, /always\(\).*outcome != 'skipped'/);
+    const outputs = [];
+    const artifacts = [];
+    for (const [suite, job] of Object.entries(owners)) {
+      const test = job.steps.find((candidate) => candidate.id === suite);
+      outputs.push(test.env.ASAP_CI_PERFORMANCE_OUTPUT);
+      if (suite === 'frontend') { continue; }
+      const browser = suite.startsWith('browser_');
+      const output = '.artifacts/' + (browser ? 'browser-performance-' : 'ci-performance-') + suite.at(-1);
+      const summary = step(job, browser ? 'Summarize browser diagnostic evidence' : 'Summarize .NET/SQL diagnostic evidence');
+      assert.equal(summary.run, 'python3 -B scripts/ci/diagnostic_report.py --output ' + output);
+      assert.match(summary.if, /always\(\).*outcome != 'skipped'/);
+      assert.equal(test.env.ASAP_CI_FIXTURE_TIMINGS, '${{ github.workspace }}/' + output + '/fixture-timings.jsonl');
+      if (browser) {
+        assert.equal(test.env.ASAP_CI_BROWSER_RESULTS, '${{ github.workspace }}/' + output + '/test-results.trx');
+      }
+      const upload = step(job, browser ? 'Upload browser performance telemetry' : 'Upload .NET/SQL performance telemetry');
+      assert.equal(upload.with.path, output + '/');
+      artifacts.push(upload.with.name);
     }
+    assert.equal(new Set(outputs).size, 5);
+    assert.equal(new Set(artifacts).size, 4);
+    assert.doesNotMatch(full.steps.map((candidate) => candidate.run || '').join('\n'), /\bcp\s+.*\.trx/);
   });
   await check('the reporter always inspects selected execution and runs no PR code', () => {
     assert.equal(gate.if, '${{ always() }}');
     assert.deepEqual(gate.permissions, { contents: 'read' });
-    assert.deepEqual(gate.needs, ['validation-policy', 'build-test-package', 'dotnet-qualification', 'browser-qualification', 'draft-validation']);
+    assert.deepEqual(gate.needs, ['validation-policy', 'build-test-package', 'dotnet-qualification-a', 'dotnet-qualification-b', 'browser-qualification-a', 'browser-qualification-b', 'draft-validation']);
     assert.equal(gate['runs-on'], 'ubuntu-latest');
     assert.ok(!gate.steps.some((candidate) => candidate.uses?.startsWith('actions/checkout')));
     assert.equal(gate['continue-on-error'], undefined);

@@ -314,7 +314,8 @@ class PopulationIdentityTests(unittest.TestCase):
         (self.root / "tests").mkdir()
         (self.root / "tests/frontend.test.js").touch()
         portable_fixture(self.root / "tests")
-        self.parts = {key: {key: {"method": "Asap.Tests." + key + ".Case", "name": key}}
+        self.parts = {key: {key + str(i): {"method": "Asap.Tests." + key + ".Case" + str(i), "name": key}
+                           for i in range(8)}
                       for key in policy.PARTITIONS}
 
     def population(self):
@@ -331,21 +332,45 @@ class PopulationIdentityTests(unittest.TestCase):
         before = self.population()
         self.parts["browser"]["new"] = {"method": "Asap.Tests.browser.New", "name": "new"}
         after = self.population()
-        self.assertEqual(before["dotnet"], after["dotnet"])
-        self.assertNotEqual(before["browser"], after["browser"])
+        for suite in ("dotnet_a", "dotnet_b"):
+            self.assertEqual(before[suite], after[suite])
+        self.assertTrue(any(before[suite] != after[suite] for suite in ("browser_a", "browser_b")))
         (self.root / "tests/new.test.js").touch()
         with_frontend = self.population()
-        self.assertEqual(after["dotnet"], with_frontend["dotnet"])
-        self.assertEqual(after["browser"], with_frontend["browser"])
+        for suite in policy.NATIVE_SUITES:
+            self.assertEqual(after[suite], with_frontend[suite])
         self.assertNotEqual(after["frontend"], with_frontend["frontend"])
 
     def test_reclassification_changes_both_affected_suite_keys(self):
         before = self.population()
         self.parts["core"]["other"] = {"method": "Asap.Tests.core.Other", "name": "other"}
-        self.parts["browser"]["core"] = self.parts["core"].pop("core")
+        self.parts["browser"]["core0"] = self.parts["core"].pop("core0")
         after = self.population()
-        for suite in ("dotnet", "browser"):
-            self.assertNotEqual(before[suite], after[suite])
+        for kind in ("dotnet_", "browser_"):
+            self.assertTrue(any(before[suite] != after[suite] for suite in policy.NATIVE_SUITES if suite.startswith(kind)))
+
+    def test_additions_removals_and_seed_changes_cannot_reuse_stale_populations(self):
+        before = self.population()
+        method = "Asap.Tests.core.NewParameterizedMethod"
+        suite = "dotnet_" + ("a" if policy.worker_partition(method) == 0 else "b")
+        self.parts["core"]["new-row-1"] = {"method": method, "name": "row 1"}
+        self.parts["core"]["new-row-2"] = {"method": method, "name": "row 2"}
+        added = self.population()
+        self.assertEqual(added[suite]["expected"], before[suite]["expected"] + 2)
+        self.assertTrue({"new-row-1", "new-row-2"} <= set(added[suite]["uids"]))
+        for other in set(policy.NATIVE_SUITES) - {suite}:
+            self.assertEqual(before[other], added[other])
+        del self.parts["core"]["new-row-1"]
+        removed = self.population()
+        self.assertNotEqual(added[suite], removed[suite])
+        with mock.patch.object(policy, "PARTITION_SEED", "changed-partition-definition"):
+            changed = self.population()
+        for suite in policy.NATIVE_SUITES:
+            self.assertNotEqual(removed[suite], changed[suite])
+
+    def test_empty_worker_fails_closed(self):
+        with mock.patch.object(policy, "worker_partition", return_value=0), self.assertRaises(policy.SelectionError):
+            self.population()
 
 
 class PopulationTests(unittest.TestCase):
@@ -363,6 +388,29 @@ class PopulationTests(unittest.TestCase):
         self.assertTrue(any("PatronJourneyTests" in value["method"] for value in self.partitions["core"].values()))
         self.assertTrue(any("DacpacDeploysSql2022CompatibilityAndSingletonRows" in value["method"]
                             for value in self.partitions["core"].values()))
+
+    def test_four_workers_cover_exact_native_population_and_keep_method_rows_together(self):
+        workers = policy.worker_populations(self.partitions)
+        owned, methods = set(), {}
+        for suite, tests in workers.items():
+            self.assertTrue(tests)
+            self.assertFalse(owned.intersection(tests))
+            owned.update(tests)
+            for value in tests.values():
+                self.assertEqual(methods.setdefault(value["method"], suite), suite)
+        self.assertEqual(owned, set(self.catalog))
+        for category, kind in (("core", "dotnet"), ("browser", "browser")):
+            self.assertEqual(set(workers[kind + "_a"]) | set(workers[kind + "_b"]), set(self.partitions[category]))
+
+    def test_native_uid_filter_executes_the_exact_selected_population(self):
+        workers = policy.worker_populations(self.partitions)
+        with tempfile.TemporaryDirectory() as name:
+            for suite, tests in workers.items():
+                response = Path(name) / (suite + ".rsp")
+                response.write_text("\n".join(["--list-tests", "json", "--no-ansi", "--filter-uid", *sorted(tests)]) + "\n")
+                raw = subprocess.check_output(["dotnet", policy.APPLICATION, "@" + str(response)],
+                                              cwd=policy.ROOT, text=True, timeout=90)
+                self.assertEqual(sorted(test["uid"] for test in json.loads(raw)["tests"]), sorted(tests), suite)
 
     def test_missing_duplicated_or_reclassified_test_cannot_pass(self):
         uid = next(iter(self.partitions["core"]))

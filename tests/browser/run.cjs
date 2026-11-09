@@ -20,12 +20,22 @@ assert.ok(catalog.tests.length > 0);
 const identities = catalog.tests.map((test) =>
   createHash('sha256').update(JSON.stringify(test.uid)).digest('hex')).sort();
 assert.equal(new Set(identities).size, identities.length);
+const suite = process.env.ASAP_CI_TEST_SUITE;
+if (process.env.ASAP_CI_TEST_SELECTION) {
+  assert.ok(['browser_a', 'browser_b'].includes(suite), 'CI requires an explicit browser partition');
+}
 const selected = process.env.ASAP_CI_TEST_SELECTION
-  ? JSON.parse(fs.readFileSync(process.env.ASAP_CI_TEST_SELECTION, 'utf8')).suites.browser
+  ? JSON.parse(fs.readFileSync(process.env.ASAP_CI_TEST_SELECTION, 'utf8')).suites[suite]
   : { filter: 'TestCategory=Browser', expected: identities.length, identities };
 assert.equal(selected.filter, 'TestCategory=Browser');
-assert.equal(selected.expected, identities.length);
-assert.deepEqual(selected.identities, identities);
+const selectedIdentities = selected.uids
+  ? selected.uids.map((uid) => createHash('sha256').update(JSON.stringify(uid)).digest('hex')).sort()
+  : identities;
+assert.ok(selectedIdentities.length > 0);
+assert.equal(new Set(selectedIdentities).size, selectedIdentities.length);
+assert.ok(selectedIdentities.every((uid) => identities.includes(uid)));
+assert.equal(selected.expected, selectedIdentities.length);
+assert.deepEqual(selected.identities, selectedIdentities);
 const browserTests = selected.filter;
 
 const child = spawn(
@@ -40,8 +50,7 @@ const child = spawn(
     '--no-restore',
     '--minimum-expected-tests',
     String(selected.expected),
-    '--filter',
-    browserTests,
+    ...(selected.uids ? ['--filter-uid', ...selected.uids] : ['--filter', browserTests]),
     ...(process.env.ASAP_CI_BROWSER_RESULTS ? [
       '--report-trx',
       '--report-trx-filename',

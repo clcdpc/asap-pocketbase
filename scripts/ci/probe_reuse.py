@@ -33,12 +33,12 @@ class Origin:
 
 def probes(config, current, run_id, api_factory):
     changed = copy.deepcopy(current)
-    identity = changed["suites"]["browser"]
+    identity = changed["suites"]["browser_a"]
     identity["selection"]["expected"] += 1
     identity["fingerprint"] = fp.digest({k: identity[k] for k in ("schema", "suite", "source", "environment", "selection")})
     cases = (
         ("baseline", current, False, {s: True for s in fp.SUITES}),
-        ("browser-count-invalidation", changed, False, {"dotnet": True, "browser": False, "frontend": True}),
+        ("browser-count-invalidation", changed, False, {s: s != "browser_a" for s in fp.SUITES}),
         ("corrupt-artifact-fallback", current, True, {s: False for s in fp.SUITES}),
     )
     report = {}

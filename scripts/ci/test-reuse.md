@@ -1,10 +1,10 @@
 # Reuse of current test evidence
 
 See [test selection and qualification](test-selection.md) for the current DAG
-and dependency audit. Schema 6 is the only supported evidence schema; earlier
+and dependency audit. Schema 7 is the only supported evidence schema; earlier
 populations and former single-/two-executor workflows cannot qualify current tests.
 
-Reuse is per suite (dotnet, browser, frontend), never a reduced passing count.
+Reuse is per partition (dotnet_a, dotnet_b, browser_a, browser_b) and frontend, never a reduced passing count.
 Frontend selection includes root *.test.js files and the explicit portable
 acceptance declaration in tests/frontend-tests.json. File receipts must match
 discovery exactly once with zero failures/skips; node:test subtest counts do not
@@ -60,8 +60,8 @@ browser packages. These dependencies are prepared only for fresh execution.
 The final verifier re-reads resolved NuGet and Playwright identities and ambient
 extension guards after lookup.
 
-Three standard GitHub-hosted Ubuntu 24.04 execution jobs independently build the same exact event SHA.
-Frontend/CI checks/package, non-browser .NET/SQL and browser/SQL become eligible
+Five standard GitHub-hosted Ubuntu 24.04 execution jobs independently build the same exact event SHA.
+Frontend/CI checks/package, non-browser .NET/SQL A/B and browser/SQL A/B become eligible
 concurrently after hosted preflight. Separate builds are accepted; compiled bytes
 need not be identical or transferred. Fixed job IDs in the validated executor
 map determine suite ownership; an ambient suite-scope flag cannot narrow the
@@ -72,15 +72,15 @@ original evidence after a planned skip.
 Draft validation also uses Ubuntu 24.04; DEVWEB/IIS deployment keeps its local
 Windows runner. Environment epoch `github-hosted-ubuntu-24.04-2026-11-08-v1`
 requires a fresh hosted baseline: local-runner results cannot qualify hosted tests.
-Schema 6 and the existing original-evidence machinery remain unchanged.
+Schema 7 rejects whole-suite evidence from the former three-worker layout.
 
 Each manifest names its owning job and must match that job's successful test,
 verification and evidence-upload steps and independently verified checkout.
-Every originating qualification must also contain all three successful workers,
+Every originating qualification must also contain all five successful workers,
 the successful package publish/ZIP/ValidateOnly/upload steps and the successful
 Build, test and package reporting gate. A successful partial worker never
 qualifies the entire run. Non-deployment later attempts must independently show
-all three successful workers and the reporting gate; a deployment-only retry
+all five successful workers and the reporting gate; a deployment-only retry
 preserves the original qualification. Worker decisions/verification artifacts
 include job, run and attempt; original lookup names retain suite/fingerprint
 identity. Reused results never become new original evidence.
@@ -92,7 +92,7 @@ fixture/test-command execution and owned database/process/container cleanup.
 Browser installs Chromium only for fresh browser execution. Full reuse still
 runs all current-source builds, mandatory safety checks, complete native
 discovery, final evidence revalidation and current-commit packaging.
-The hosted reporting gate requires all three job successes, each suite's explicit
+The hosted reporting gate requires all five job successes, each suite's explicit
 verification output and validated/uploaded packaging. Missing, failed, cancelled
 or unexpectedly skipped workers or verification fail; draft reporting stays
 distinct. Package creation may finish before native tests; deployment still
@@ -112,7 +112,7 @@ separately gated and is outside ordinary implementation.
 
 To qualify reuse without duplicate suites, let one successful Full CI run
 establish original evidence for the final inputs. A later supported event at
-that commit or equivalent tree must report `REUSED` for all three suites at
+that commit or equivalent tree must report `REUSED` for all five suites at
 final verification and pass `Build, test and package`. Do not change relevant
 inputs between these runs. A test tag can exercise reuse while retaining its
 normal authorized test-IIS activation; creating such a tag can really deploy.

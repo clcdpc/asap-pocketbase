@@ -23,11 +23,14 @@ import selection as test_selection
 
 DIRECTORY = fp.ROOT / ".artifacts/test-reuse"
 STEPS = {
-    "dotnet": "Run .NET and real SQL tests (non-browser partition)",
-    "browser": "Run browser accessibility tests",
+    "dotnet_a": "Run .NET and real SQL tests (non-browser partition)",
+    "dotnet_b": "Run .NET and real SQL tests (non-browser partition)",
+    "browser_a": "Run browser accessibility tests",
+    "browser_b": "Run browser accessibility tests",
     "frontend": "Run frontend unit tests",
 }
-LABELS = {"dotnet": ".NET/SQL", "browser": "Browser", "frontend": "Frontend"}
+LABELS = {"dotnet_a": ".NET/SQL A", "dotnet_b": ".NET/SQL B",
+          "browser_a": "Browser A", "browser_b": "Browser B", "frontend": "Frontend"}
 MAX_ARCHIVE = 4 * 1024 * 1024
 
 
@@ -145,7 +148,7 @@ def passing_results(results, selection):
         require(identities == [fp.digest(name) for name in selection["files"]], "Frontend selection mismatch")
 
 
-def execution_results(suite, selection, directory=DIRECTORY):
+def execution_results(suite, selection, directory=DIRECTORY, output=None):
     if suite == "frontend":
         raw = json.loads((directory / "frontend-results.json").read_text(encoding="utf-8"))
         require(raw.get("filter") == "" and raw.get("failed") == 0 and raw.get("skipped") == 0,
@@ -161,7 +164,8 @@ def execution_results(suite, selection, directory=DIRECTORY):
                    "failed": raw["failed"], "skipped": raw["skipped"],
                    "identities": [fp.digest(name) for name in raw["files"]]}
     else:
-        output = "ci-performance" if suite == "dotnet" else "browser-performance"
+        if output is None:
+            output = ("ci-performance-" if suite.startswith("dotnet_") else "browser-performance-") + suite[-1]
         path = fp.ROOT / ".artifacts" / output / "test-results.trx"
         root = ET.parse(path).getroot()
         ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
@@ -494,16 +498,15 @@ def summary(rows, current):
         source = row.get("source", {}).get("url")
         lines.append(f"| {LABELS[suite]} | {row['status']} | " + (f"[Original run]({source})" if source else "Current run") + " |")
     lines.append("")
-    selection = current["suites"]["dotnet"]["selection"] if current else {}
     if current:
         lines.extend(["| .NET category | Discovered | Coverage |", "| --- | ---: | --- |"])
-        for category, suite in (("core", "dotnet"), ("browser", "browser")):
+        for suite in test_selection.NATIVE_SUITES:
             if suite not in rows:
                 continue
             count = current["suites"][suite]["selection"]["expected"]
             status = rows[suite]["status"]
-            lines.append(f"| {category} | {count} | {status} |")
-        lines.extend(["", f"Selected non-browser population: {selection['expected']}; native test identities must match exactly.", ""])
+            lines.append(f"| {LABELS[suite]} | {count} | {status} |")
+        lines.extend(["", "Every partition must match its discovered native test identities exactly.", ""])
     for suite in rows:
         row = rows[suite]
         identity = current["suites"][suite]["fingerprint"] if current else "unavailable"
@@ -552,7 +555,7 @@ def verify(directory=DIRECTORY):
                         and identity["selection"] == selected[suite],
                         "Current fingerprint inputs changed")
                 # Fresh SQL bootstrap records the selected digest after planning.
-                if suite in ("dotnet", "browser") and os.environ.get("ASAP_CI_SQL_IMAGE"):
+                if suite in test_selection.NATIVE_SUITES and os.environ.get("ASAP_CI_SQL_IMAGE"):
                     identity["environment_inputs"]["sql_image"] = os.environ["ASAP_CI_SQL_IMAGE"]
         checkout_valid = True
     except Exception:

@@ -64,7 +64,7 @@ class Fixture:
                            path=self.config["workflow"], repository=copy.deepcopy(repository),
                            head_repository=copy.deepcopy(repository), event="push", head_branch="main",
                            created_at=reuse.iso(self.now - timedelta(hours=3)))
-        self.job = success(id=9, run_id=7, head_sha=self.run["head_sha"], name=self.config["executors"]["dotnet"]["name"],
+        self.job = success(id=9, run_id=7, head_sha=self.run["head_sha"], name=self.config["executors"]["dotnet_a"]["name"],
                            labels=self.config["runner_labels"], runner_group_name=self.config["runner_group"],
                            runner_group_id=self.config["runner_group_id"],
                            started_at=reuse.iso(self.now - timedelta(hours=2)),
@@ -72,7 +72,7 @@ class Fixture:
         self.gate = success(id=90, run_id=7, head_sha=self.run["head_sha"], name="Build, test and package")
         self.jobs = {}
         for index, suite in enumerate(fp.SUITES):
-            job = self.job if suite == "dotnet" else copy.deepcopy(self.job)
+            job = self.job if suite == "dotnet_a" else copy.deepcopy(self.job)
             job.update(id=9 + index, name=self.config["executors"][suite]["name"], steps=[])
             for name in (reuse.STEPS[suite], "Verify required test suites", f"Upload original {suite} execution evidence"):
                 job["steps"].append(success(name=name, started_at=reuse.iso(self.now - timedelta(minutes=120)),
@@ -180,7 +180,7 @@ class Fixture:
         with mock.patch.object(reuse, "utcnow", return_value=self.now):
             return reuse.lookup(self, self.config, self.current, forced)
 
-    def validate(self, suite="dotnet"):
+    def validate(self, suite="dotnet_a"):
         validator = reuse.Validator(self, self.config, self.current, now=self.now)
         return validator.validate(self.run, self.artifacts[suite], suite)
 
@@ -257,7 +257,7 @@ class GitIdentityTests(unittest.TestCase):
                  "tests/frontend-tests.json": fp.canonical({"portable": ["acceptance/runner.test.cjs"]}),
                  "tests/acceptance/runner.test.cjs": b""}
         partitions = {key: {str(i): {"method": "Asap.Tests." + key + ".Case" + str(i), "name": str(i)}
-                            for i in values} for key, values in (("core", (1, 2)), ("browser", (3, 4)))}
+                            for i in values} for key, values in (("core", (1, 2, 3, 4, 5, 6)), ("browser", (7, 8, 9, 10, 11, 12)))}
         reviewed = {"Browser": [value["method"] for value in partitions["browser"].values()]}
         files["scripts/ci/reviewed-test-categories.json"] = fp.canonical(reviewed)
         for path, contents in files.items():
@@ -279,7 +279,7 @@ class GitIdentityTests(unittest.TestCase):
         directory = self.root / ".artifacts/test-reuse"
         selection_directory = self.root / ".artifacts/test-selection"
         env = {**{key: os.environ[key] for key in ("PATH", "SystemRoot", "TEMP", "TMP") if key in os.environ},
-               "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": head, "GITHUB_RUN_ID": "7", "GITHUB_JOB": "dotnet-qualification",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": head, "GITHUB_RUN_ID": "7", "GITHUB_JOB": "dotnet-qualification-a",
                "GITHUB_RUN_ATTEMPT": "2", "GITHUB_OUTPUT": str(self.root / "outputs"),
                "GITHUB_REPOSITORY": fixture.config["repository"], "GH_TOKEN": "fixture-token",
                "ASAP_FORCE_FULL_CI": "true"}
@@ -397,9 +397,10 @@ class GitIdentityTests(unittest.TestCase):
                     elif change == "invalid-metadata":
                         live_pr["head"]["sha"] = "f" * 40
                     elif change == "changed-dependency":
-                        environments["dotnet"]["nuget"] = "different-resolved-package-content"
+                        environments["dotnet_a"]["nuget"] = "different-resolved-package-content"
                     elif change == "incomplete-population":
-                        partitions["core"]["5"] = {"method": "Asap.Tests.core.NewCase", "name": "NewCase"}
+                        uid = baseline["suites"]["dotnet_a"]["selection"]["uids"][0]
+                        partitions["core"]["new"] = {**partitions["core"][uid], "name": "new data row"}
                     elif change == "corrupt-evidence":
                         fixture.archives[10] = b"corrupt archive"
                     else:
@@ -417,7 +418,7 @@ class GitIdentityTests(unittest.TestCase):
                     fixture.calls.clear()
                     reuse.plan(directory)
                     decisions = json.loads((directory / "plan.json").read_bytes())["decisions"]
-                    self.assertFalse(decisions["dotnet"]["reuse"])
+                    self.assertFalse(decisions["dotnet_a"]["reuse"])
                     if change in ("force", "invalid-metadata"):
                         self.assertEqual(fixture.calls, [])
                     # A previously valid plan must not mask the later failure.
@@ -439,7 +440,7 @@ class DependencyTests(unittest.TestCase):
             for suite in fp.SUITES:
                 before = fp.source_fingerprint([[path, "100644", "blob", "a"]], suite, config)
                 after = fp.source_fingerprint([[path, "100644", "blob", "b"]], suite, config)
-                self.assertEqual(before != after, suite in ("browser", "frontend"), (path, suite))
+                self.assertEqual(before != after, suite in ("browser_a", "browser_b", "frontend"), (path, suite))
 
     def test_actual_portable_runner_imports_all_have_frontend_ownership(self):
         # Observe the bounded real module load, rather than parsing source or
@@ -468,7 +469,7 @@ class DependencyTests(unittest.TestCase):
     def test_native_exclusions_have_no_cross_suite_consumers(self):
         config = fp.configuration()
         names = {path.name for path in (fp.ROOT / "tests").glob("*.test.js")
-                 if not {"dotnet", "browser"}.intersection(fp.source_suites("tests/" + path.name, config))}
+                 if not set(test_selection.NATIVE_SUITES).intersection(fp.source_suites("tests/" + path.name, config))}
         names.add("run_all.js")
         consumers = [*(fp.ROOT / "tests/Asap.Tests").rglob("*.cs"),
                      *(fp.ROOT / "tests/browser").rglob("*.cjs"),
@@ -489,14 +490,14 @@ class DependencyTests(unittest.TestCase):
         for path in ("src/Asap.Web/Frontend/staff/app.js", "src/Asap.Web/Frontend/staff/styles.css",
                      "src/Asap.Web/Frontend/new-module.js"):
             before, after = [[path, "100644", "blob", "a"]], [[path, "100644", "blob", "b"]]
-            self.assertEqual(fp.source_fingerprint(before, "dotnet", config), fp.source_fingerprint(after, "dotnet", config))
-            for suite in ("browser", "frontend"):
+            self.assertEqual(fp.source_fingerprint(before, "dotnet_a", config), fp.source_fingerprint(after, "dotnet_a", config))
+            for suite in ("browser_a", "browser_b", "frontend"):
                 self.assertNotEqual(fp.source_fingerprint(before, suite, config), fp.source_fingerprint(after, suite, config))
         for path in ("src/Asap.Web/Frontend/vendor/changed.js", "src/Asap.Web/Frontend/staff/index.html",
                      "src/Asap.Web/Build/FrontendAssets.targets", "src/Asap.Web/Features/Patron/PatronSessionService.cs",
                      "src/Asap.Web/Infrastructure/Data/AsapDbContext.cs"):
-            self.assertNotEqual(fp.source_fingerprint([[path,"100644","blob","a"]], "dotnet", config),
-                                fp.source_fingerprint([[path,"100644","blob","b"]], "dotnet", config))
+            self.assertNotEqual(fp.source_fingerprint([[path,"100644","blob","a"]], "dotnet_a", config),
+                                fp.source_fingerprint([[path,"100644","blob","b"]], "dotnet_a", config))
 
     def test_unknown_and_shared_dependencies_invalidate_every_suite(self):
         config = fp.configuration()
@@ -519,8 +520,8 @@ class DependencyTests(unittest.TestCase):
                 with self.subTest(path=path, suite=suite):
                     self.assertNotEqual(fp.source_fingerprint([[path, "100644", "blob", "a"]], suite, config),
                                         fp.source_fingerprint([[path, "100644", "blob", "b"]], suite, config))
-        self.assertNotEqual(fp.source_fingerprint([], "dotnet", config),
-                            fp.source_fingerprint([["scripts/ci/new-policy.py", "100644", "blob", "b"]], "dotnet", config))
+        self.assertNotEqual(fp.source_fingerprint([], "dotnet_a", config),
+                            fp.source_fingerprint([["scripts/ci/new-policy.py", "100644", "blob", "b"]], "dotnet_a", config))
 
     def test_every_workflow_executor_and_gate_edit_invalidates_evidence(self):
         workflow = (fp.ROOT / ".github/workflows/dotnet.yml").read_text()
@@ -534,11 +535,11 @@ class DependencyTests(unittest.TestCase):
     def test_exact_acceptance_screenshot_files_do_not_invalidate_sql(self):
         config = fp.configuration()
         for path in ("tests/acceptance/run.cjs", "tests/acceptance/helpers/reporting.cjs", "tests/acceptance/helpers/accessibility.cjs"):
-            self.assertEqual(fp.source_fingerprint([[path, "100644", "blob", "a"]], "dotnet", config),
-                             fp.source_fingerprint([[path, "100644", "blob", "b"]], "dotnet", config))
+            self.assertEqual(fp.source_fingerprint([[path, "100644", "blob", "a"]], "dotnet_a", config),
+                             fp.source_fingerprint([[path, "100644", "blob", "b"]], "dotnet_a", config))
         path = "tests/fixtures/new-shared-fixture.cjs"
-        self.assertNotEqual(fp.source_fingerprint([], "dotnet", config),
-                            fp.source_fingerprint([[path, "100644", "blob", "b"]], "dotnet", config))
+        self.assertNotEqual(fp.source_fingerprint([], "dotnet_a", config),
+                            fp.source_fingerprint([[path, "100644", "blob", "b"]], "dotnet_a", config))
 
     def test_documentation_is_scoped_and_runtime_or_fixture_markdown_stays_included(self):
         config = fp.configuration()
@@ -561,7 +562,7 @@ class DependencyTests(unittest.TestCase):
         for path in ("new-top-level/runtime.json", "src/new-feature/code.cs", "database/new-schema.sql",
                      "tests/new-shared-data/input.txt", "Directory.Build.targets", "tests/nested/example.test.js"):
             self.assertEqual(set(fp.source_suites(path, config)), set(fp.SUITES), path)
-        self.assertEqual(set(fp.source_suites("tests/browser/new-journey.cjs", config)), {"browser"})
+        self.assertEqual(set(fp.source_suites("tests/browser/new-journey.cjs", config)), {"browser_a", "browser_b"})
         self.assertEqual(set(fp.source_suites("tests/browserish/shared.cs", config)), set(fp.SUITES))
 
     def test_audited_browser_script_only_invalidates_browser(self):
@@ -570,7 +571,7 @@ class DependencyTests(unittest.TestCase):
         for suite in fp.SUITES:
             changed = (fp.source_fingerprint([[path, "100644", "blob", "a"]], suite, config)
                        != fp.source_fingerprint([[path, "100644", "blob", "b"]], suite, config))
-            self.assertEqual(changed, suite == "browser")
+            self.assertEqual(changed, suite.startswith("browser_"))
 
     def test_file_modes_and_deleted_dependencies_invalidate(self):
         config = fp.configuration()
@@ -582,7 +583,7 @@ class DependencyTests(unittest.TestCase):
 
     def test_environment_count_filter_and_schema_changes_invalidate(self):
         fixture = Fixture()
-        original = fixture.current["suites"]["dotnet"]
+        original = fixture.current["suites"]["dotnet_a"]
         for key, value in (("schema", 99), ("environment", "new-runtime-or-epoch"),
                            ("selection", {**original["selection"], "expected": 3}),
                            ("selection", {**original["selection"], "minimum": 3}),
@@ -599,9 +600,9 @@ class DependencyTests(unittest.TestCase):
 
     def test_discovery_count_changes_require_new_evidence(self):
         fixture = Fixture()
-        fixture.current["suites"]["dotnet"]["selection"]["minimum"] = 3
-        fixture.current["suites"]["dotnet"]["selection"]["expected"] = 3
-        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+        fixture.current["suites"]["dotnet_a"]["selection"]["minimum"] = 3
+        fixture.current["suites"]["dotnet_a"]["selection"]["expected"] = 3
+        self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
 class ProvenanceTests(unittest.TestCase):
     def test_literal_commit_from_trusted_pr_is_reusable_without_synthetic_parent_assumptions(self):
@@ -627,18 +628,18 @@ class ProvenanceTests(unittest.TestCase):
         for current_categories, evidence_categories in ((["core"], ["unrecognized"]),
                                                         (["unrecognized"], ["core"])):
             fixture = Fixture()
-            fixture.current["suites"]["dotnet"]["selection"]["categories"] = current_categories
-            manifest = fixture.manifests["dotnet"]
+            fixture.current["suites"]["dotnet_a"]["selection"]["categories"] = current_categories
+            manifest = fixture.manifests["dotnet_a"]
             manifest["selection"] = {**manifest["selection"], "categories": evidence_categories}
-            fixture.archive("dotnet")
-            self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+            fixture.archive("dotnet_a")
+            self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_same_count_wrong_native_test_identity_is_not_execution_evidence(self):
         fixture = Fixture()
-        fixture.reports["dotnet"]["identities"] = sorted([fp.digest("substituted"), fp.digest("1")])
-        fixture.manifests["dotnet"]["results_sha256"] = fp.digest(fixture.reports["dotnet"])
-        fixture.archive("dotnet")
-        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+        fixture.reports["dotnet_a"]["identities"] = sorted([fp.digest("substituted"), fp.digest("1")])
+        fixture.manifests["dotnet_a"]["results_sha256"] = fp.digest(fixture.reports["dotnet_a"])
+        fixture.archive("dotnet_a")
+        self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_legacy_schema_or_algorithm_cannot_authorize_new_selection(self):
         fixture = Fixture()
@@ -652,13 +653,13 @@ class ProvenanceTests(unittest.TestCase):
     def test_modified_origin_workflow_blob_is_rejected(self):
         fixture = Fixture()
         fixture.workflow_bytes = b"forged content"
-        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+        self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_identical_successful_original_run_hits_all_suites(self):
         fixture = Fixture()
         decisions = fixture.lookup()
         self.assertTrue(all(d["reuse"] for d in decisions.values()))
-        self.assertEqual(decisions["dotnet"]["source"]["saved_seconds"], 1500)
+        self.assertEqual(decisions["dotnet_a"]["source"]["saved_seconds"], 1500)
         self.assertEqual(fixture.calls.count("/actions/jobs/9/logs"), 1)
 
     def test_each_suite_requires_its_own_original_success_in_its_owning_job(self):
@@ -676,18 +677,19 @@ class ProvenanceTests(unittest.TestCase):
                     with self.subTest(suite=suite, name=name, outcome=outcome):
                         self.assertEqual({s for s, d in decisions.items() if d["reuse"]}, set(fp.SUITES) - {suite})
 
-    def test_two_job_schema_and_stale_browser_job_provenance_are_incompatible(self):
+    def test_previous_executor_schemas_and_stale_browser_job_provenance_are_incompatible(self):
+        for schema in (5, 6):
+            fixture = Fixture()
+            for suite in fp.SUITES:
+                fixture.manifests[suite]["schema"] = schema
+                fixture.archive(suite)
+            self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
         fixture = Fixture()
-        for suite in fp.SUITES:
-            fixture.manifests[suite]["schema"] = 5
-            fixture.archive(suite)
-        self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
-        fixture = Fixture()
-        fixture.manifests["browser"]["job"] = "Browser qualification"
-        fixture.archive("browser")
+        fixture.manifests["browser_a"]["job"] = "Browser qualification"
+        fixture.archive("browser_a")
         decisions = fixture.lookup()
-        self.assertFalse(decisions["browser"]["reuse"])
-        self.assertTrue(decisions["dotnet"]["reuse"] and decisions["frontend"]["reuse"])
+        self.assertFalse(decisions["browser_a"]["reuse"])
+        self.assertTrue(decisions["dotnet_a"]["reuse"] and decisions["frontend"]["reuse"])
 
     def test_every_required_owner_must_be_present_unique_and_successful(self):
         for suite in fp.SUITES:
@@ -737,10 +739,11 @@ class ProvenanceTests(unittest.TestCase):
                     fixture.logs.replace(b"a" * 40, b"f" * 40) if path == job_path else request(path, **kwargs)):
                 self.assertFalse(fixture.lookup()[suite]["reuse"])
 
-    def test_shared_job_cannot_substitute_another_suites_archive(self):
+    def test_opposite_partition_cannot_substitute_its_archive(self):
         for suite in fp.SUITES:
             fixture = Fixture()
-            other = next(s for s in fp.SUITES if s != suite)
+            other = (suite[:-1] + ("b" if suite.endswith("a") else "a")
+                     if suite in test_selection.NATIVE_SUITES else "dotnet_a")
             artifact = fixture.artifacts[suite]
             body = fixture.archives[fixture.artifacts[other]["id"]]
             fixture.archives[artifact["id"]] = body
@@ -815,7 +818,7 @@ class ProvenanceTests(unittest.TestCase):
         fixture.attempt_jobs[3] = [deployment]
         self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
         for jobs in ([], [success(name="Resolve validation policy", run_id=7, head_sha=fixture.run["head_sha"])],
-                     [success(name=fixture.config["executors"]["dotnet"]["name"], run_id=7, head_sha=fixture.run["head_sha"],
+                     [success(name=fixture.config["executors"]["dotnet_a"]["name"], run_id=7, head_sha=fixture.run["head_sha"],
                               status="in_progress", conclusion=None)],
                      [copy.deepcopy(fixture.job)],
                      [copy.deepcopy(fixture.job), {**fixture.gate, "status": "queued", "conclusion": None}]):
@@ -834,7 +837,7 @@ class ProvenanceTests(unittest.TestCase):
             record = fixture.run[target] if target in ("repository", "head_repository") else getattr(fixture, target)
             record[key] = value
             with self.subTest(target=target, key=key):
-                self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+                self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_draft_validation_and_reporting_gate_cannot_supply_full_suite_evidence(self):
         for job_name in ("Draft validation", "Draft CI result", "Build, test and package", "Browser qualification"):
@@ -846,40 +849,40 @@ class ProvenanceTests(unittest.TestCase):
                 self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
 
     def test_skipped_failed_or_missing_original_step_is_rejected(self):
-        for name in (reuse.STEPS["dotnet"], "Verify required test suites", "Upload original dotnet execution evidence"):
+        for name in (reuse.STEPS["dotnet_a"], "Verify required test suites", "Upload original dotnet_a execution evidence"):
             for conclusion in ("skipped", "failure", None):
                 fixture = Fixture()
                 next(s for s in fixture.job["steps"] if s["name"] == name)["conclusion"] = conclusion
                 with self.subTest(name=name, conclusion=conclusion):
-                    self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+                    self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
         fixture = Fixture()
         fixture.job["steps"] = []
-        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+        self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_manifest_cannot_claim_other_suite_count_environment_or_origin(self):
-        changes = {"schema": 99, "suite": "browser", "kind": "reused", "outcome": "skipped",
+        changes = {"schema": 99, "suite": "browser_a", "kind": "reused", "outcome": "skipped",
                    "run_id": 77, "run_attempt": 1, "source_commit": "f" * 40, "source_tree": "f" * 40,
                    "repository": "other/repository", "workflow": "other.yml", "job": "other job",
                    "fingerprint": "forged", "environment_fingerprint": "forged", "environment_inputs": {},
                    "source_fingerprint": "forged", "selection": {}, "counts": {}, "results_sha256": "forged"}
         for key, value in [*changes.items(), ("schema", True), ("run_attempt", True)]:
             fixture = Fixture()
-            fixture.manifests["dotnet"][key] = value
-            fixture.archive("dotnet")
+            fixture.manifests["dotnet_a"][key] = value
+            fixture.archive("dotnet_a")
             with self.subTest(key=key):
-                self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+                self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_expiration_and_missing_integrity_metadata_are_misses(self):
         for key, value in (("expired", True), ("expires_at", "2020-01-01T00:00:00Z"),
                            ("digest", None), ("digest", "sha256:" + "0" * 64),
                            ("name", "asap-test-evidence-v1-dotnet-7-1"), ("size_in_bytes", 0)):
             fixture = Fixture()
-            fixture.artifacts["dotnet"][key] = value
+            fixture.artifacts["dotnet_a"][key] = value
             with self.subTest(key=key):
-                self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+                self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
         fixture = Fixture()
         fixture.run["created_at"] = reuse.iso(fixture.now + timedelta(days=1))
-        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+        self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_fresh_original_attempt_of_old_run_is_valid_until_its_execution_expires(self):
         fixture = Fixture()
@@ -891,32 +894,32 @@ class ProvenanceTests(unittest.TestCase):
     def test_cached_origin_context_preserves_deployment_progress_and_rechecks_advanced_attempt(self):
         fixture = Fixture()
         validator = reuse.Validator(fixture, fixture.config, fixture.current, now=fixture.now)
-        validator.validate(fixture.run, fixture.artifacts["dotnet"], "dotnet")
+        validator.validate(fixture.run, fixture.artifacts["dotnet_a"], "dotnet_a")
         fixture.run["status"] = "in_progress"
-        validator.validate(fixture.run, fixture.artifacts["browser"], "browser")
+        validator.validate(fixture.run, fixture.artifacts["browser_a"], "browser_a")
         fixture.run["status"] = "completed"
         fixture.attempts[2] = copy.deepcopy(fixture.run)
         fixture.run["run_attempt"] = 3
-        fixture.attempt_jobs[3] = [success(name=fixture.config["executors"]["dotnet"]["name"], run_id=7,
+        fixture.attempt_jobs[3] = [success(name=fixture.config["executors"]["dotnet_a"]["name"], run_id=7,
                                          head_sha=fixture.run["head_sha"], conclusion="failure")]
         with self.assertRaises(reuse.EvidenceError):
-            validator.validate(fixture.run, fixture.artifacts["browser"], "browser")
+            validator.validate(fixture.run, fixture.artifacts["browser_a"], "browser_a")
 
     def test_forged_execution_timestamp_and_expiration_are_misses(self):
         for key, value in (("executed_at", "2020-01-01T00:00:00Z"), ("executed_at", "2099-01-01T00:00:00Z"),
                            ("expires_at", "2099-01-01T00:00:00Z"), ("lifetime_days", 365)):
             fixture = Fixture()
-            fixture.manifests["dotnet"][key] = value
-            fixture.archive("dotnet")
+            fixture.manifests["dotnet_a"][key] = value
+            fixture.archive("dotnet_a")
             with self.subTest(key=key):
-                self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+                self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_artifact_origin_must_match_repository_head_run_and_attempt(self):
         for key in ("id", "repository_id", "head_repository_id", "head_sha"):
             fixture = Fixture()
-            fixture.artifacts["dotnet"]["workflow_run"][key] = "incorrect"
+            fixture.artifacts["dotnet_a"]["workflow_run"][key] = "incorrect"
             with self.subTest(key=key):
-                self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+                self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_missing_corrupt_and_unexpected_archive_contents_fall_back(self):
         fixture = Fixture()
@@ -924,31 +927,31 @@ class ProvenanceTests(unittest.TestCase):
         self.assertFalse(any(d["reuse"] for d in fixture.lookup().values()))
         fixture = Fixture()
         fixture.archives[10] = b"corrupt archive"
-        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+        self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
         for extra in ("../commands.sh", "commands.py", "nested/manifest.json"):
             fixture = Fixture()
-            fixture.archive("dotnet", extra)
+            fixture.archive("dotnet_a", extra)
             with self.subTest(extra=extra):
-                self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+                self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_results_need_all_discovered_unique_passing_outcomes(self):
         for key, value in (("total", 1), ("executed", 1), ("passed", 1), ("failed", 1), ("skipped", 1), ("failed", False),
                            ("identities", []), ("identities", [fp.digest("same")] * 2)):
             fixture = Fixture()
-            fixture.reports["dotnet"][key] = value
-            fixture.manifests["dotnet"]["results_sha256"] = fp.digest(fixture.reports["dotnet"])
-            fixture.archive("dotnet")
+            fixture.reports["dotnet_a"][key] = value
+            fixture.manifests["dotnet_a"]["results_sha256"] = fp.digest(fixture.reports["dotnet_a"])
+            fixture.archive("dotnet_a")
             with self.subTest(key=key):
-                self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+                self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_exact_checkout_log_is_required_and_manifest_cannot_substitute_tree(self):
         for logs in (b"", b"checkout skipped", b"git log -1 --format=%H\nforged"):
             fixture = Fixture()
             fixture.logs = logs
-            self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+            self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
         fixture = Fixture()
         fixture.entries[0][3] = "e" * 40
-        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+        self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_synthetic_merge_can_reuse_across_different_commit_ids(self):
         fixture = Fixture()
@@ -966,7 +969,7 @@ class ProvenanceTests(unittest.TestCase):
         fixture.prs[0]["head"]["sha"] = "3" * 40  # The trusted PR advanced after the original run.
         self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
         fixture.source["parents"][1]["sha"] = "2" * 40
-        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+        self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_untrusted_same_repository_pr_author_cannot_supply_evidence(self):
         fixture = Fixture()
@@ -974,7 +977,7 @@ class ProvenanceTests(unittest.TestCase):
         fixture.source["parents"] = [{"sha": "f" * 40}, {"sha": fixture.run["head_sha"]}]
         fixture.prs = [{"head": {"sha": fixture.run["head_sha"], "repo": fixture.run["head_repository"]},
                         "base": {"repo": fixture.run["repository"], "ref": "main"}, "author_association": "CONTRIBUTOR"}]
-        self.assertFalse(fixture.lookup()["dotnet"]["reuse"])
+        self.assertFalse(fixture.lookup()["dotnet_a"]["reuse"])
 
     def test_api_denial_rate_limit_and_unexpected_data_require_normal_tests(self):
         for error in (urllib.error.HTTPError("https://api.github.com", 403, "rate limit", {}, None),
@@ -989,20 +992,20 @@ class ProvenanceTests(unittest.TestCase):
         fixture = Fixture()
         self.assertFalse(any(d["reuse"] for d in fixture.lookup(forced=True).values()))
         self.assertEqual(fixture.calls, [])
-        fixture.artifacts.pop("browser")
+        fixture.artifacts.pop("browser_a")
         fixture.artifacts.pop("frontend")
         decisions = fixture.lookup()
         self.assertEqual({s: d["reuse"] for s, d in decisions.items()},
-                         {"dotnet": True, "browser": False, "frontend": False})
+                         {s: s not in ("browser_a", "frontend") for s in fp.SUITES})
 
     def test_api_failure_after_a_partial_hit_restores_full_execution(self):
         fixture = Fixture()
-        fixture.artifacts.pop("browser")
+        fixture.artifacts.pop("browser_a")
         fixture.artifacts.pop("frontend")
         original = fixture.pages
 
         def pages(path, key, **kwargs):
-            if path.startswith("/actions/artifacts?name=") and "-browser-" in path:
+            if path.startswith("/actions/artifacts?name=") and "-browser_a-" in path:
                 raise urllib.error.URLError("API unavailable after first suite")
             return original(path, key, **kwargs)
 
@@ -1023,11 +1026,11 @@ class ProvenanceTests(unittest.TestCase):
 
     def test_unknown_environment_only_disables_affected_suites(self):
         fixture = Fixture()
-        fixture.current["suites"]["dotnet"]["unavailable"] = "SQL identity unavailable"
-        fixture.current["suites"]["browser"]["unavailable"] = "SQL identity unavailable"
+        fixture.current["suites"]["dotnet_a"]["unavailable"] = "SQL identity unavailable"
+        fixture.current["suites"]["browser_a"]["unavailable"] = "SQL identity unavailable"
         decisions = fixture.lookup()
-        self.assertFalse(decisions["dotnet"]["reuse"])
-        self.assertFalse(decisions["browser"]["reuse"])
+        self.assertFalse(decisions["dotnet_a"]["reuse"])
+        self.assertFalse(decisions["browser_a"]["reuse"])
         self.assertTrue(decisions["frontend"]["reuse"])
 
 
@@ -1055,7 +1058,7 @@ class ApiTests(unittest.TestCase):
             return original(path, key, **kwargs)
         with mock.patch.object(fixture, "pages", side_effect=pages):
             self.assertTrue(all(d["reuse"] for d in fixture.lookup().values()))
-        self.assertEqual(len([path for path in fixture.calls if path.startswith("/actions/artifacts?name=")]), 3)
+        self.assertEqual(len([path for path in fixture.calls if path.startswith("/actions/artifacts?name=")]), len(fp.SUITES))
         # Thousands of unrelated runs are absent from this server-side exact-key
         # query, rather than occupying the former latest-30-run search window.
         for suite in fp.SUITES:
@@ -1109,8 +1112,8 @@ class EnvironmentTests(unittest.TestCase):
         first, problems, image = self.environment()
         self.assertEqual(problems, {})
         self.assertEqual(image, fp.SQL_TAG)
-        self.assertIn("sql_image", first["dotnet"])
-        self.assertIn("playwright", first["browser"])
+        self.assertIn("sql_image", first["dotnet_a"])
+        self.assertIn("playwright", first["browser_a"])
         self.assertNotIn("sql_image", first["frontend"])
         second, _, _ = self.environment(tool_version="version-2")
         native_changed, _, _ = self.environment(package_version="2")
@@ -1151,8 +1154,8 @@ class EnvironmentTests(unittest.TestCase):
                 self.assertNotIn("private probe detail", json.dumps(environments))
 
     def test_unidentified_runtime_extensions_disable_affected_reuse_without_exporting_values(self):
-        for variable, suites in (("ASAP_TEST_CHROMIUM_EXECUTABLE_PATH", {"browser"}),
-                                 ("PLAYWRIGHT_BROWSERS_PATH", {"browser"}), ("NODE_OPTIONS", set(fp.SUITES)),
+        for variable, suites in (("ASAP_TEST_CHROMIUM_EXECUTABLE_PATH", {"browser_a", "browser_b"}),
+                                 ("PLAYWRIGHT_BROWSERS_PATH", {"browser_a", "browser_b"}), ("NODE_OPTIONS", set(fp.SUITES)),
                                  ("DOTNET_STARTUP_HOOKS", set(fp.SUITES))):
             environment, problems, _ = self.environment({variable: "sensitive-runtime-override"})
             with self.subTest(variable=variable):
@@ -1183,7 +1186,7 @@ class EnvironmentTests(unittest.TestCase):
             fixture = Fixture()
             fixture.current["sql_image"] = fp.SQL_TAG
             env = {"GITHUB_SHA": fixture.current["commit"], "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
-                   "GITHUB_OUTPUT": str(output), "GITHUB_JOB": "dotnet-qualification"}
+                   "GITHUB_OUTPUT": str(output), "GITHUB_JOB": "dotnet-qualification-a"}
             for failure in ("fingerprint", "api"):
                 with self.subTest(failure=failure), mock.patch.dict(os.environ, env, clear=True), \
                      mock.patch.object(fp, "calculate", side_effect=RuntimeError("secret") if failure == "fingerprint" else None,
@@ -1194,7 +1197,7 @@ class EnvironmentTests(unittest.TestCase):
                 plan = json.loads((directory / "plan.json").read_bytes())
                 self.assertFalse(any(d["reuse"] for d in plan["decisions"].values()))
                 self.assertNotIn("secret", printed.getvalue())
-                self.assertIn("dotnet=false", output.read_text())
+                self.assertIn("dotnet_a=false", output.read_text())
 
 
 class GateTests(unittest.TestCase):
@@ -1236,7 +1239,7 @@ class GateTests(unittest.TestCase):
         return directory
 
     def test_ambient_split_scope_cannot_narrow_the_required_suite_population(self):
-        for scope in ("dotnet,frontend", "browser"):
+        for scope in ("dotnet,frontend", "browser_a"):
             suites = fp.SUITES
             directory = self.run_gate(Fixture(), {s: "success" for s in suites}, scope=scope)
             self.assertEqual(set(json.loads((directory / "verification.json").read_bytes())), set(suites))
@@ -1280,7 +1283,7 @@ class GateTests(unittest.TestCase):
         fixture = Fixture()
         decisions = fixture.lookup()
         changed = {s: copy.deepcopy(fixture.current["suites"][s]["environment_inputs"]) for s in fp.SUITES}
-        changed["dotnet"]["nuget"] = "changed-untracked-restored-dependency"
+        changed["dotnet_a"]["nuget"] = "changed-untracked-restored-dependency"
         with self.assertRaises(reuse.EvidenceError):
             self.run_gate(fixture, {s: "skipped" for s in fp.SUITES}, decisions, environments=changed)
 
@@ -1323,8 +1326,8 @@ class GateTests(unittest.TestCase):
                     self.run_gate(fixture, outcomes)
 
     def test_partial_hit_only_records_executed_suites(self):
-        # Exercise the real verifier under each fixed owning job for all eight combinations.
-        for mask in range(8):
+        # Exercise the real verifier under each fixed owning job for all combinations.
+        for mask in range(1 << len(fp.SUITES)):
             fixture = Fixture()
             hits = {suite for index, suite in enumerate(fp.SUITES) if mask & (1 << index)}
             for suite in set(fp.SUITES) - hits:
@@ -1347,7 +1350,7 @@ class GateTests(unittest.TestCase):
 
     def test_forged_current_fingerprint_and_other_attempt_plan_fail_gate(self):
         fixture = Fixture()
-        fixture.current["suites"]["dotnet"]["fingerprint"] = "forged"
+        fixture.current["suites"]["dotnet_a"]["fingerprint"] = "forged"
         with self.assertRaises(ValueError):
             self.run_gate(fixture, {s: "success" for s in fp.SUITES})
         fixture = Fixture()
@@ -1360,10 +1363,10 @@ class GateTests(unittest.TestCase):
         source = fixture.validate()
         rows = {s: {"status": "REUSED", "reason": "Verified successful original execution", "source": source} for s in fp.SUITES}
         report = reuse.summary(rows, fixture.current)
-        self.assertIn("| .NET/SQL | REUSED | [Original run](https://github.com/clcdpc/asap-pocketbase/actions/runs/7)", report)
+        self.assertIn("| .NET/SQL A | REUSED | [Original run](https://github.com/clcdpc/asap-pocketbase/actions/runs/7)", report)
         self.assertIn("25.00 min saved", report)
         self.assertIn("Evidence age 1.50 h", report)
-        self.assertIn(fixture.current["suites"]["dotnet"]["fingerprint"], report)
+        self.assertIn(fixture.current["suites"]["dotnet_a"]["fingerprint"], report)
 
 
 class NativeResultsTests(unittest.TestCase):
@@ -1377,22 +1380,22 @@ class NativeResultsTests(unittest.TestCase):
     def test_native_reports_need_complete_successful_counts_and_outcomes(self):
         with tempfile.TemporaryDirectory() as name, mock.patch.object(fp, "ROOT", Path(name)):
             directory = Path(name)
-            path = directory / ".artifacts/browser-performance/test-results.trx"
+            path = directory / ".artifacts/browser-performance-a/test-results.trx"
             path.parent.mkdir(parents=True)
             selection = {"minimum": 2, "expected": 2}
             path.write_text(self.report())
-            self.assertEqual(reuse.execution_results("browser", selection, directory)["passed"], 2)
+            self.assertEqual(reuse.execution_results("browser_a", selection, directory)["passed"], 2)
             for report in (self.report(outcome="Skipped"), self.report(counts='total="2" executed="2" passed="2" failed="1"'),
                            self.report(counts='total="3" executed="3" passed="3" failed="0"'), "<partial"):
                 path.write_text(report)
                 with self.subTest(report=report), self.assertRaises((ValueError, ET.ParseError)):
-                    reuse.execution_results("browser", selection, directory)
+                    reuse.execution_results("browser_a", selection, directory)
 
     def test_native_suites_read_only_their_own_trx_after_sequential_execution(self):
         with tempfile.TemporaryDirectory() as name, mock.patch.object(fp, "ROOT", Path(name)):
             selected = {"minimum": 2, "expected": 2}
             paths = {s: Path(name) / ".artifacts" / output / "test-results.trx"
-                     for s, output in (("dotnet", "ci-performance"), ("browser", "browser-performance"))}
+                     for s, output in (("dotnet_a", "ci-performance-a"), ("dotnet_b", "ci-performance-b"), ("browser_a", "browser-performance-a"), ("browser_b", "browser-performance-b"))}
             for path in paths.values():
                 path.parent.mkdir(parents=True)
             for failed in paths:
@@ -1426,10 +1429,10 @@ class NativeResultsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name, mock.patch.object(fp, "ROOT", Path(name)):
             directory = Path(name)
             selected = {"minimum": 2, "expected": 2, "identities": sorted(fp.digest(uid) for uid in ("one", "two"))}
-            path = directory / ".artifacts/browser-performance/test-results.trx"
+            path = directory / ".artifacts/browser-performance-a/test-results.trx"
             path.parent.mkdir(parents=True)
             path.write_text(self.report())
-            reuse.execution_results("browser", selected, directory)
+            reuse.execution_results("browser_a", selected, directory)
             for report in (self.report().replace('testId="two"', 'testId="one"'),
                            self.report().replace('testId="two"', 'testId="wrong"'),
                            self.report().replace('executionId="two"', 'executionId="one"'),
@@ -1437,7 +1440,7 @@ class NativeResultsTests(unittest.TestCase):
                            self.report().replace('testId="two" outcome="Passed"', 'testId="two" outcome="Failed"')):
                 path.write_text(report)
                 with self.subTest(report=report), self.assertRaises(reuse.EvidenceError):
-                    reuse.execution_results("browser", selected, directory)
+                    reuse.execution_results("browser_a", selected, directory)
 
 
 class ExecutorScopeTests(unittest.TestCase):
@@ -1504,12 +1507,12 @@ class WorkflowTests(unittest.TestCase):
         for suite in fp.SUITES:
             self.assertIn(f"if: ${{{{ steps.reuse.outputs.{suite} != 'true' }}}}", workflow)
             self.assertIn(f"name: asap-test-evidence-v${{{{ steps.reuse.outputs.schema }}}}-{suite}-${{{{ steps.reuse.outputs.{suite}_fingerprint }}}}", workflow)
-        for suite in ("dotnet", "browser"):
+        for suite in ("dotnet_a", "browser_a"):
             condition = f"if: ${{{{ steps.reuse.outputs.{suite} != 'true' }}}}"
             self.assertGreaterEqual(workflow.count(condition), 4)
         self.assertNotIn("ASAP_CI_SUITES:", workflow)
         # Packaging is unconditional on reuse; only the existing test-IIS activation gate can deploy.
-        publishing = workflow.split("      - name: Verify publish artifacts\n", 1)[1].split("  dotnet-qualification:", 1)[0]
+        publishing = workflow.split("      - name: Verify publish artifacts\n", 1)[1].split("  dotnet-qualification-a:", 1)[0]
         self.assertNotIn("steps.reuse.outputs", publishing)
 
 

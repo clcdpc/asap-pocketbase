@@ -208,13 +208,14 @@ class SqlLifecycleTests(unittest.TestCase):
                        ASAP_CI_SQL_CONTAINER="asap-sql-bootstrap-fixture", GITHUB_ENV=str(root / "github-env"),
                        GITHUB_WORKSPACE=str(root),
                        SQL_IMAGE="mcr.microsoft.com/mssql/server@sha256:" + "1" * 64)
-            for job in ("dotnet-qualification", "browser-qualification"):
+            for job in ("dotnet-qualification-a", "dotnet-qualification-b",
+                        "browser-qualification-a", "browser-qualification-b"):
                 owned = re.split(r"\n  [a-zA-Z][\w-]*:", text.split(f"  {job}:\n", 1)[1], maxsplit=1)[0]
                 env["ASAP_CI_SQL_CONTAINER"] = "asap-sql-" + job + "-fixture"
                 for name, style in (("Start SQL Server 2022", "|"), ("Wait for SQL Server", "|"), ("Remove SQL Server test container", "|")):
                     result = subprocess.run(["/bin/bash", "-c", command(owned, name, style)], env=env, capture_output=True, text=True, timeout=4)
                     self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(calls.read_text(), "run\ninfo\nport\nexec\nrm\n" * 2)
+            self.assertEqual(calls.read_text(), "run\ninfo\nport\nexec\nrm\n" * 4)
             self.assertIn("Server=localhost,15432;", (root / "github-env").read_text())
 
     @unittest.skipUnless(sys.platform == "linux", "Linux executable Docker fixture")

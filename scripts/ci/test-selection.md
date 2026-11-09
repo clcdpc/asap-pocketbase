@@ -31,15 +31,40 @@ suite modules/registry, browser confirmation and the three imported Settings
 browser helpers participate in the
 frontend source fingerprint. Changes to those consumed inputs invalidate reuse.
 
+## Stable worker partitions
+
+After authoritative category discovery, selection.py assigns each method using
+`SHA256("asap-method-v1-33\n" + fullyQualifiedMethod)[0] % 2` (0 = A, 1 = B).
+The seed is frozen from PR #504 TRX timings: approximately 675.54/678.89 seconds
+non-browser and 673.34/661.77 seconds browser. Counts did not determine balance.
+All data rows of one method stay together. Individual browser scenarios retain
+their internal ordering; fixture initialization/cleanup runs independently in
+each process. The large PatronJourneyTests partial class cannot stay on one
+worker without preserving the old bottleneck. Its methods use independent
+per-test state; shared fixture setup is repeated in each isolated SQL container.
+
+New methods/rows enter the discovered population automatically. Each pair must
+be nonempty, disjoint and cover its entire category. Full selection schema 3
+binds sorted UIDs, exact identities, population digest, algorithm, seed and bucket.
+Non-browser execution passes MTP `--filter-uid` through an SDK response file
+(one token per line); browser execution uses the same selected native UIDs.
+Every worker rediscovers all categories at verification and checks its exact
+TRX outcomes/counts. Schema 7 suite/job/fingerprint identities reject former
+whole-suite evidence and evidence from the opposite partition. Changing the
+seed or execution code invalidates incompatible evidence. The final gate
+requires all five independently verified jobs, including mixed fresh/reused runs.
+
+See [five-worker measurements](../../docs/implementation/five-worker-ci.md).
+
 ## Execution and required gate
 
 Hosted validation-policy resolves current trusted PR state before repository
 execution. Draft PRs retain bounded configuration/unit contracts and the complete
 frontend suite, under their distinct Draft CI result.
 
-Full qualification makes exactly three standard GitHub-hosted Ubuntu 24.04 jobs eligible concurrently:
-Frontend, CI checks and package; Non-browser .NET/SQL qualification; and
-Browser/SQL qualification. Each checks out and verifies the exact event SHA,
+Full qualification makes exactly five standard GitHub-hosted Ubuntu 24.04 jobs eligible concurrently:
+Frontend, CI checks and package; Non-browser .NET/SQL qualification A and B; and
+Browser/SQL qualification A and B. Each checks out and verifies the exact event SHA,
 uses repository-pinned setup, independently builds Release and discovers the
 complete native population and its disjoint partitions. Tests and package
 qualify the same source commit; compiled outputs need not be byte-identical or
@@ -63,7 +88,7 @@ The frontend job runs mandatory workflow/reuse safety contracts and owns publish
 frontend/DACPAC/content validation, deployment ZIP/manifest/digest production,
 ValidateOnly and upload. Packaging can finish before native qualification.
 The reporting-only hosted Build, test and package gate requires successful
-policy, all three successful workers, explicit verified outputs for every suite,
+policy, all five successful workers, explicit verified outputs for every suite,
 and successful package validation/upload. Missing, failed, cancelled or
 unexpectedly skipped work fails. Deployment still requires the complete gate
 and existing event/environment/current-main authorization.
@@ -93,7 +118,7 @@ runs share the same fingerprint/evidence contract. Tag refs (including annotated
 tags) must peel to the exact tested commit; release and deployment metadata must
 agree with it. Verified empty diffs still require the complete population.
 
-Evidence schema 6 rejects prior populations and the single-/two-job contracts. It binds suite, exact
+Evidence schema 7 rejects prior populations and the single-/two-job contracts. It binds suite, exact
 identities, complete classification, source/resolved dependencies, originating
 run/attempt/job, checkout logs, Git blob/tree identity, artifact digest, age and
 successful original steps. Lookup queries artifacts by their exact suite
@@ -125,15 +150,15 @@ to wall time. Failed telemetry writes preserve test exceptions.
 
 The normal execution uploads native TRX, resource/SQL telemetry, fixture spans,
 discovered catalogs, per-file frontend receipts and verification decisions.
-Non-browser TRX, fixture spans and telemetry stay in .artifacts/ci-performance;
+Non-browser TRX, fixture spans and telemetry stay in .artifacts/ci-performance-a or -b;
 browser writes its own test-results.trx, spans and telemetry directly to
-.artifacts/browser-performance. Frontend telemetry uses
+.artifacts/browser-performance-a or -b. Frontend telemetry uses
 .artifacts/frontend-performance and receipts use .artifacts/test-reuse.
 Each worker's discovery catalogs use .artifacts/test-selection; its own plan,
 current fingerprints and assigned-suite verification use .artifacts/test-reuse.
 Uploaded decision names include job/run/attempt to prevent collisions.
 No TRX copying or combined fixture timeline is needed. The existing
-ci-performance, browser-performance and frontend-performance artifact names
+ci-performance-a/b, browser-performance-a/b and frontend-performance artifact names
 retain seven-day retention; verification/original evidence retains 14 days.
 Failure uploads preserve partial diagnostics. Reused suites produce no new
 original evidence or empty diagnostic report.

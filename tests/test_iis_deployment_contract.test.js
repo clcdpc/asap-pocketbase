@@ -51,8 +51,8 @@ const execution = YAML.parse(workflow, { uniqueKeys: true }).jobs['build-test-pa
 const selectionStep = execution.steps.find((step) => step.name === 'Resolve required test population');
 assert.equal(selectionStep.run, 'python3 -B scripts/ci/selection.py prepare');
 assert.equal(selectionStep['continue-on-error'], undefined, 'population verification is mandatory');
-const nonBrowserStep = YAML.parse(workflow, { uniqueKeys: true }).jobs['dotnet-qualification'].steps.find((step) => step.id === 'dotnet');
-assert.equal(nonBrowserStep.run, 'bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run');
+const nonBrowserStep = YAML.parse(workflow, { uniqueKeys: true }).jobs['dotnet-qualification-a'].steps.find((step) => step.id === 'dotnet_a');
+assert.equal(nonBrowserStep.run, 'bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run --suite dotnet_a');
 assert.ok(!/--minimum-expected-tests [0-9]+/.test(nonBrowserStep.run), 'non-browser counts must derive from complete native discovery');
 const reviewed = JSON.parse(fs.readFileSync(path.join(root, 'scripts/ci/reviewed-test-categories.json'), 'utf8'));
 assert.ok(reviewed.Browser.length > 0, "the reviewed browser method population must be nonempty");
@@ -85,7 +85,7 @@ const hostedJobs = workflow.slice(0, deploymentJobStart);
 const deploymentJob = workflow.slice(deploymentJobStart);
 assert.ok(!hostedJobs.includes('self-hosted'), 'hosted build/test/package jobs must not use self-hosted labels');
 const workflowJobs = YAML.parse(workflow, { uniqueKeys: true }).jobs;
-for (const job of [workflowJobs['validation-policy'], workflowJobs['build-test-package'], workflowJobs['dotnet-qualification'], workflowJobs['browser-qualification'], workflowJobs['draft-validation']]) {
+for (const job of [workflowJobs['validation-policy'], workflowJobs['build-test-package'], workflowJobs['dotnet-qualification-a'], workflowJobs['dotnet-qualification-b'], workflowJobs['browser-qualification-a'], workflowJobs['browser-qualification-b'], workflowJobs['draft-validation']]) {
   assert.ok(!JSON.stringify(job).includes('ASAP_TEST_DEPLOYMENT_ENABLED'), 'hosted build/test/package jobs must not depend on activation');
 }
 assert.match(

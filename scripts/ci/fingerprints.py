@@ -15,14 +15,16 @@ import selection as test_selection
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SUITES = ("dotnet", "browser", "frontend")
+SUITES = (*test_selection.NATIVE_SUITES, "frontend")
 SQL_TAG = "mcr.microsoft.com/mssql/server:2022-latest"
 CONFIG = ROOT / "scripts/ci/test-reuse.json"
 SOURCE_ALGORITHM = "suite-inputs-v1"
 EXECUTORS = {
     "frontend": {"id": "build-test-package", "name": "Frontend, CI checks and package"},
-    "dotnet": {"id": "dotnet-qualification", "name": "Non-browser .NET/SQL qualification"},
-    "browser": {"id": "browser-qualification", "name": "Browser/SQL qualification"},
+    "dotnet_a": {"id": "dotnet-qualification-a", "name": "Non-browser .NET/SQL qualification A"},
+    "dotnet_b": {"id": "dotnet-qualification-b", "name": "Non-browser .NET/SQL qualification B"},
+    "browser_a": {"id": "browser-qualification-a", "name": "Browser/SQL qualification A"},
+    "browser_b": {"id": "browser-qualification-b", "name": "Browser/SQL qualification B"},
 }
 
 
@@ -43,7 +45,7 @@ def command(arguments, root=ROOT):
 
 def configuration():
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    if (type(config["schema"]) is not int or config["schema"] != 6
+    if (type(config["schema"]) is not int or config["schema"] != 7
             or not 1 <= config["lifetime_days"] <= 14 or not config["environment_epoch"]):
         raise ValueError("Invalid evidence lifetime/environment epoch")
     if config.get("executors") != EXECUTORS or "job" in config:
@@ -209,7 +211,7 @@ def environment(config, root=ROOT, observe=True):
     # Neither a registry request nor a running Docker daemon is needed for reuse.
     image = os.environ.get("ASAP_CI_SQL_IMAGE", SQL_TAG)
     docker = observed(["docker", "version", "--format", "{{.Server.Version}}"])
-    for suite in ("dotnet", "browser"):
+    for suite in test_selection.NATIVE_SUITES:
         result[suite].update(sql_image=image, docker=docker)
     try:
         browsers = {
@@ -219,11 +221,12 @@ def environment(config, root=ROOT, observe=True):
         }
         if not browsers["version"] or not browsers["browsers"]:
             raise ValueError("Browser identity missing")
-        result["browser"]["playwright"] = browsers
+        for suite in ("browser_a", "browser_b"):
+            result[suite]["playwright"] = browsers
     except Exception:
-        problems["browser"] = "Playwright/browser identity unavailable"
+        problems.update({s: "Playwright/browser identity unavailable" for s in ("browser_a", "browser_b")})
     if any(os.environ.get(k) for k in ("ASAP_TEST_CHROMIUM_EXECUTABLE_PATH", "PLAYWRIGHT_BROWSERS_PATH")):
-        problems["browser"] = "Custom browser installation is not fingerprinted"
+        problems.update({s: "Custom browser installation is not fingerprinted" for s in ("browser_a", "browser_b")})
     if os.environ.get("NODE_OPTIONS"):
         problems.update({s: "Ambient Node options are not fingerprinted" for s in SUITES})
     if any(os.environ.get(k) for k in ("DOTNET_STARTUP_HOOKS", "DOTNET_ADDITIONAL_DEPS", "DOTNET_SHARED_STORE")):

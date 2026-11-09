@@ -7,14 +7,14 @@ full gate, PR cancellation groups, fingerprints, trust boundaries and forced
 full CI. Performance collection below still wraps every fresh .NET/SQL
 execution; reused runs link to original test timing instead of inventing samples.
 
-Full qualification occupies three concurrent standard GitHub-hosted Ubuntu 24.04 workers after
+Full qualification occupies five concurrent standard GitHub-hosted Ubuntu 24.04 workers after
 preflight, with independent Release builds of the exact same event SHA.
-Frontend/CI safety/package, non-browser .NET/SQL and browser/SQL each own their
+Frontend/CI safety/package, non-browser .NET/SQL A/B and browser/SQL A/B each own their
 assigned qualification; the hosted required gate checks every suite and package.
 Each native worker owns its SQL container and independent test databases,
 ephemeral credentials, loopback port and unconditional cleanup. Commands remain
 serial within each worker; reused native suites prepare no SQL/Chromium runtime.
-Evidence reuse remains independent for all three suites. Draft validation also
+Evidence reuse remains independent for all five suites. Draft validation also
 uses Ubuntu 24.04; DEVWEB/IIS deployment retains its existing local runner.
 The frontend worker owns root Node contracts and the declared portable
 acceptance authentication/runner files. Discovery, per-file execution receipts
@@ -25,8 +25,9 @@ standard tier advertises 4 vCPUs, 16 GB RAM and 14 GB SSD; capacity logs and act
 CPU/memory/disk samples establish observed headroom rather than assuming it fits.
 
 The non-browser test step runs
-`bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run`.
-The selector supplies the category filter and native-discovery count to the
+`bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run --suite dotnet_a`
+(or `dotnet_b`).
+The selector supplies exact native UIDs and the native-discovery count to the
 existing Release/no-build `dotnet test` invocation. See [required test selection](test-selection.md)
 for routine versus full populations and controlled benchmark instructions.
 Streams, working directory and test exit behavior are preserved, along with TRX
@@ -51,9 +52,9 @@ SQL query is forced. Workload stdout, stderr and stdin are inherited directly.
 
 ## Output and cadence
 
-The ignored `.artifacts/ci-performance/` directory contains the non-browser
+The ignored `.artifacts/ci-performance-a/` and `-b/` directories contains the non-browser
 evidence below. Browser writes the same filenames to
-`.artifacts/browser-performance/`, including its own TRX and fixture spans;
+`.artifacts/browser-performance-a/` or `-b/`, including its own TRX and fixture spans;
 frontend telemetry uses `.artifacts/frontend-performance/`. The workflow sets
 `ASAP_CI_PERFORMANCE_OUTPUT` for each command, so execution cannot
 overwrite another suite's samples or summaries.
@@ -91,7 +92,7 @@ reports are refreshed at that cadence and finalized on exit; a small final extra
 goes to the log. An independent `always()` step rebuilds reports from available
 evidence after the test/collector exits and appends the consolidated report to
 `GITHUB_STEP_SUMMARY`. Upload follows with `if: always()` and seven-day retention under
-`ci-performance-<run-id>-<attempt>`. GitHub may prevent upload/finalization after
+`ci-performance-<partition>-<run-id>-<attempt>`. GitHub may prevent upload/finalization after
 a hard job timeout or SIGKILL; minute logs and already-flushed samples are the
 remaining evidence. No telemetry can be recovered after destruction of an
 unuploaded disposable VM.
