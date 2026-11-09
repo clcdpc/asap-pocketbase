@@ -370,7 +370,8 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
                                         incompleteOperation.LeaseExpiresUtc <= timeProvider.GetUtcNow().UtcDateTime);
             var canResolveOperation = canTakeOverOperation && operation!.State == HoldOperationState.OperatorRequired;
             var phaseEnteredAt = requestEvents
-                .Where(item => item.EventType == "status_changed" && item.Status == request.Status)
+                .Where(item => item.Status == request.Status &&
+                    item.EventType is "status_changed" or "promoted" or "hold_placed" or "fulfilled" or "timeout_closed")
                 .Select(item => (DateTime?)item.CreatedUtc)
                 .LastOrDefault() ?? request.CreatedUtc;
             formats.TryGetValue(request.MaterialFormatId, out var format);

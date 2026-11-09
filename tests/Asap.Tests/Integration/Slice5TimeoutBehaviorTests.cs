@@ -153,6 +153,10 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("outstanding_purchase", requests["timeout-purchase"].Status);
             Assert.AreEqual("closed", requests["timeout-pending"].Status);
             Assert.AreEqual("closed", requests["timeout-placed"].Status);
+            foreach (var key in new[] { "timeout-suggestion", "timeout-pending", "timeout-placed" })
+            {
+                await AssertTransitionPhaseAsync(requests[key].Id, "timeout_closed");
+            }
             Assert.AreEqual("closed", (await verify.AdditionalCopyRequests.AsNoTracking()
                 .SingleAsync(item => item.Id == copyId)).Status);
             Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(item =>

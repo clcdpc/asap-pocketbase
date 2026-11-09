@@ -470,6 +470,7 @@ public sealed partial class PatronJourneyTests
             new(StaffVersion.Encode(source.RowVersion)), CancellationToken.None);
         Assert.AreEqual("updated", placed.Code);
         Assert.AreEqual("hold_placed", placed.FinalStatus);
+        await AssertTransitionPhaseAsync(source.Id, "hold_placed");
         var operation = await context.HoldPlacementOperations.AsNoTracking().SingleAsync(item => item.TitleRequestId == source.Id);
         Assert.AreEqual("existing_hold_adoption", operation.OutcomeEvidenceKind);
         Assert.AreEqual(8451, operation.PolarisHoldId);
