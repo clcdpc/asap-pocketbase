@@ -156,6 +156,8 @@ async function runJourney(browser, baseOrigin, artifactRoot, axeSource, report) 
         assert.equal(await link.getAttribute('href'), 'https://help.libbyapp.com/en-us/6260.htm');
         assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
         assert.equal(await content.evaluate(node => getComputedStyle(node).whiteSpace), 'pre-wrap');
+        assert.equal(await content.isVisible(), true, `${format} message must remain visible during its scan`);
+        await scanMajorState(page, axeSource, artifactRoot, report, viewport, `${format}-message`);
       }
       await fillSuggestion(page, viewport);
       await page.locator('#step-success:not(.hidden)').waitFor();
@@ -407,7 +409,7 @@ async function main() {
     await runSessionRestoreRace(browser, baseOrigin, artifactRoot, report, true);
     await runStartupRace(browser, baseOrigin, artifactRoot, report);
     await writeReport(artifactRoot, report);
-    assert.equal(report.majorStates.length, 10, 'Expected ten desktop/mobile journey states');
+    assert.equal(report.majorStates.length, 14, 'Expected fourteen desktop/mobile journey states');
     assert.equal(report.authRaces.length, 3, 'Expected three authentication ordering cases');
   } finally {
     await browser.close();

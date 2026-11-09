@@ -19,7 +19,7 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   for (const width of [1280, 1440]) {
     const context = await chromium.launchPersistentContext(path.join(artifacts, `zoom-profile-${width}`), {
-      channel: 'chromium', headless: true, viewport: null, extraHTTPHeaders: headers,
+      channel: 'chromium', headless: true, viewport: null, locale: 'en-US', extraHTTPHeaders: headers,
       args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`, `--window-size=${width},900`]
     });
     try {
@@ -168,19 +168,69 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         assert.ok(Math.abs(geometry.scrollTop - (position === 'top' ? 0 : geometry.scrollHeight - geometry.clientHeight)) <= 1);
       }
       const notes = detail.getByLabel('Notes', { exact: true });
-      await notes.focus();
-      await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
-      assert.equal(await notes.evaluate(node => node === document.activeElement), true);
-      // Native focus scrolling may expose only the textarea's caret line.
-      // The scroll pane must also allow the whole control above the footer.
-      // Center it explicitly: CDP's automatic scroll can leave fractional
-      // clipping at actual browser zoom even when the whole control fits.
+      const middle = detail.locator('.request-middle');
+      await middle.evaluate(node => { node.scrollTop = 0; });
+      const initialMiddleScrollTop = await middle.evaluate(node => node.scrollTop);
+      assert.equal(initialMiddleScrollTop, 0, `${width}: keyboard Notes journey starts at the top of the detail pane`);
+      const detailsTab = detail.getByRole('tab', { name: 'Details', exact: true });
+      await detailsTab.focus();
+      await page.keyboard.press('Tab');
+      assert.equal(await detail.locator('.request-middle > [role="tabpanel"][aria-labelledby$="-details-tab"]')
+        .evaluate(node => node === document.activeElement), true, `${width}: Tab reaches the Details panel`);
+      await page.keyboard.press('Tab');
+      const titleField = detail.getByLabel('Title', { exact: true });
+      assert.equal(await titleField.evaluate(node => node === document.activeElement), true,
+        `${width}: Tab enters the request fields after the Details panel`);
+      const focusableFields = await detail.locator('.edit-form').evaluate(form => [...form.querySelectorAll(
+        'input:not([type="hidden"]), select, textarea, button, a[href], summary, [tabindex]')]
+        .filter(node => node.tabIndex >= 0 && !node.disabled && !node.hidden &&
+          getComputedStyle(node).visibility !== 'hidden' && node.getClientRects().length > 0)
+        .map(node => ({ label: node.labels?.[0]?.querySelector('span')?.textContent?.trim() ||
+            node.getAttribute('aria-label') || node.textContent.trim(),
+          isNotes: node.labels?.[0]?.querySelector('span')?.textContent?.trim() === 'Notes' })));
+      const titleIndex = focusableFields.findIndex(field => field.label === 'Title');
+      const notesIndex = focusableFields.findIndex(field => field.isNotes);
+      assert.ok(titleIndex >= 0 && notesIndex > titleIndex, `${width}: Notes follows Title in keyboard order`);
+      let focusedIndex = titleIndex;
+      for (let tabCount = 0; focusedIndex < notesIndex; tabCount += 1) {
+        assert.ok(tabCount < notesIndex - titleIndex + 4,
+          `${width}: keyboard traversal reaches Notes within the native control sequence`);
+        await page.keyboard.press('Tab');
+        const nextFocusedIndex = await detail.locator('.edit-form').evaluate(form => {
+          const focusables = [...form.querySelectorAll(
+            'input:not([type="hidden"]), select, textarea, button, a[href], summary, [tabindex]')]
+            .filter(node => node.tabIndex >= 0 && !node.disabled && !node.hidden &&
+              getComputedStyle(node).visibility !== 'hidden' && node.getClientRects().length > 0);
+          return focusables.indexOf(document.activeElement);
+        });
+        assert.ok(nextFocusedIndex === focusedIndex || nextFocusedIndex === focusedIndex + 1,
+          `${width}: Tab moves through request fields in order (${focusableFields[focusedIndex]?.label} to ${focusableFields[nextFocusedIndex]?.label || 'outside the form'})`);
+        focusedIndex = nextFocusedIndex;
+      }
+      assert.equal(await notes.evaluate(node => node === document.activeElement), true,
+        `${width}: keyboard navigation reaches Notes`);
+      assert.equal(await notes.isEnabled(), true, `${width}: Notes remains editable at native zoom`);
+      const scrollAfterKeyboardNavigation = await middle.evaluate(node => ({ top: node.scrollTop,
+        scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }));
+      assert.ok(scrollAfterKeyboardNavigation.top > initialMiddleScrollTop &&
+        scrollAfterKeyboardNavigation.scrollHeight > scrollAfterKeyboardNavigation.clientHeight,
+      `${width}: Tab navigation scrolls the genuinely scrollable detail pane`);
+      // At native 200% Chromium scrolls the textarea's caret into view, which
+      // can leave the rest of the control clipped. The keyboard journey above
+      // proves focus and pane movement; center the focused control for stable
+      // footer geometry before typing into it.
       await notes.evaluate(node => node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }));
+      await notes.press('End');
+      await page.keyboard.type(' Keyboard entry check.');
+      assert.ok((await notes.inputValue()).endsWith(' Keyboard entry check.'), `${width}: keyboard can edit Notes`);
       const notesGeometry = await notes.evaluate(node => ({ notes: node.getBoundingClientRect().toJSON(),
-        middle: node.closest('.request-middle').getBoundingClientRect().toJSON() }));
+        middle: node.closest('.request-middle').getBoundingClientRect().toJSON(),
+        footer: node.closest('#request-dialog').querySelector('.request-save-footer').getBoundingClientRect().toJSON() }));
       await captureNativeImage('details-bottom');
       assert.ok(notesGeometry.notes.top >= notesGeometry.middle.top - 1 && notesGeometry.notes.bottom <= notesGeometry.middle.bottom + 1,
-        `${width}: scrolling brings the final Notes control fully above the footer: ${JSON.stringify(notesGeometry)}`);
+        `${width}: the final Notes control fits fully inside the detail pane after keyboard navigation: ${JSON.stringify(notesGeometry)}`);
+      assert.ok(notesGeometry.notes.bottom <= notesGeometry.footer.top + 1,
+        `${width}: Notes is not obscured by the persistent save footer: ${JSON.stringify(notesGeometry)}`);
       await detail.getByRole('button', { name: 'Revert changes', exact: true }).click();
       const confirmation = page.locator('#confirmation-dialog[open]');
       await confirmation.waitFor();
@@ -206,8 +256,17 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       const date = suggestion.getByLabel('Exact publication date', { exact: true });
       const initialDate = await date.inputValue();
       await date.fill('2026-02-18');
-      await date.focus(); await date.press('ArrowUp');
-      assert.notEqual(await date.inputValue(), '2026-02-18', 'Native date segments remain keyboard editable.');
+      const dateBounds = await date.boundingBox();
+      assert.ok(dateBounds && dateBounds.width > 90, `${width}: native date control is wide enough to target its year segment`);
+      // With the context locale fixed to en-US, x=66 lands in the year segment
+      // of Chromium's native MM/DD/YYYY control. A real click selects that
+      // segment before the native ArrowUp key increments it.
+      await date.click({ position: { x: 66, y: dateBounds.height / 2 } });
+      assert.equal(await date.evaluate(node => node === document.activeElement), true,
+        `${width}: clicking the native year segment focuses the date control`);
+      await date.press('ArrowUp');
+      assert.equal(await date.inputValue(), '2027-02-18',
+        `${width}: ArrowUp increments the deliberately selected native year segment`);
       assert.equal(await date.evaluate(node => node.type === 'date' && node.validity.valid), true);
       await date.fill(initialDate);
       await scan('new-suggestion');
