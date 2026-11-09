@@ -333,7 +333,9 @@ def main():
         return 0
     if args.operation == "run-draft":
         return draft()
-    return execute(load(verify=True)["suites"][args.suite], suite=args.suite)
+    # Execution has no API token. Prepare and the mandatory final verifier own
+    # live PR metadata/discovery checks; the current-commit plan selects this run.
+    return execute(load()["suites"][args.suite], suite=args.suite)
 
 
 if __name__ == "__main__":

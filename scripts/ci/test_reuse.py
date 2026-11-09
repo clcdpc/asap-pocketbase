@@ -342,6 +342,16 @@ class GitIdentityTests(unittest.TestCase):
             self.assertIn("docs/ci.md", selected["decision"]["base_paths"])
             self.assertIn(fixture.config["workflow"], selected["decision"]["base_paths"])
             self.assertIn("scripts/ci/policy.py", selected["decision"]["base_paths"])
+            # The test command intentionally has no GitHub token. It consumes
+            # the prepared current-commit population; final verify rechecks trust.
+            token = os.environ.pop("GH_TOKEN")
+            try:
+                with mock.patch.object(test_selection, "execute", return_value=0) as execute, \
+                     mock.patch("sys.argv", ["selection.py", "run", "--suite", "dotnet_a"]):
+                    self.assertEqual(test_selection.main(), 0)
+                    execute.assert_called_once_with(selected["suites"]["dotnet_a"], suite="dotnet_a")
+            finally:
+                os.environ["GH_TOKEN"] = token
             # A later throwaway VM can differ while effective inputs match.
             for value in environments.values():
                 value.update(runtime="another-installed-version", kernel="another-kernel", native_packages="new-packages",
