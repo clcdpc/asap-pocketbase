@@ -163,7 +163,7 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
       if (result.claimClearedReason) message += ` The retained claim was cleared (${String(result.claimClearedReason).replaceAll('_', ' ')}).`;
       onReceipt(`${message} Sign in again to review the committed task.`, owner, attempt);
       if (detail) { onUpdated(detail); renderAdditionalCopy(detail); }
-      else { current = Object.freeze({ id: snapshot.id, version: null }); mounted.content.replaceChildren(element('p', { text: 'The action committed. Reload this task to review current details.' })); }
+      else { resetDrafts(); current = Object.freeze({ id: snapshot.id, version: null }); mounted.content.replaceChildren(element('p', { text: 'The action committed. Reload this task to review current details.' })); }
       host.focusClose(); announce(message, notification.partial ? 'warning' : 'success');
       if (activeAttempt === attempt) activeAttempt = null;
       const refreshed = await refreshQueue({ silent: true });
