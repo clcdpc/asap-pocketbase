@@ -10,10 +10,6 @@ export const formatSelect = document.getElementById('format');
 export const physicalFields = document.getElementById('physical-fields');
 export const econtentFields = document.getElementById('econtent-fields');
 
-export const authorInput = document.getElementById('author');
-export const titleInput = document.getElementById('title');
-export const publicationInput = document.getElementById('publication');
-
 export const defaultPublicationOptions = ['Already published', 'Coming soon', 'Published a while back'];
 export const formatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 export const fieldKeys = ['title', 'author', 'identifier', 'publication'];
@@ -23,13 +19,49 @@ export function setAdditionalFieldDefinitions(definitions) {
   additionalFieldDefinitions = Array.isArray(definitions) ? definitions : [];
 }
 
-export let authToken = sessionStorage.getItem('asap_patron_token') || '';
+function readStoredToken() {
+  try {
+    return sessionStorage.getItem('asap_patron_token') || '';
+  } catch {
+    return '';
+  }
+}
+
+// Read persistence once; the live token owns this page even if later writes fail.
+export let authToken = readStoredToken();
 export function setAuthToken(token) {
   authToken = token || '';
-  if (authToken) {
-    sessionStorage.setItem('asap_patron_token', authToken);
-  } else {
-    sessionStorage.removeItem('asap_patron_token');
+  try {
+    if (authToken) {
+      sessionStorage.setItem('asap_patron_token', authToken);
+    } else {
+      sessionStorage.removeItem('asap_patron_token');
+    }
+  } catch {
+    // Persistence is optional; current-page authentication has already changed.
+  }
+}
+
+let rememberedLibraryOrgId;
+export function getRememberedLibraryOrgId() {
+  if (rememberedLibraryOrgId === undefined) {
+    try {
+      rememberedLibraryOrgId = localStorage.getItem('asap_patron_library_org_id') || '';
+    } catch {
+      rememberedLibraryOrgId = '';
+    }
+  }
+  return rememberedLibraryOrgId;
+}
+
+export function rememberLibraryOrgId(orgId) {
+  const clean = String(orgId || '').trim();
+  if (!clean) return;
+  rememberedLibraryOrgId = clean;
+  try {
+    localStorage.setItem('asap_patron_library_org_id', clean);
+  } catch {
+    // Keep the accepted selection in memory when preferences cannot be saved.
   }
 }
 

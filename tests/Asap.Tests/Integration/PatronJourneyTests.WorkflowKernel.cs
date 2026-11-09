@@ -153,7 +153,11 @@ public sealed partial class PatronJourneyTests
             new RecordingEmailSender(),
             new RecipientDomainPolicy(configuration),
             timeProvider!,
-            NullLogger<PatronSuggestionService>.Instance);
+            NullLogger<PatronSuggestionService>.Instance,
+            factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
+            factory.Services.GetRequiredService<StaffEligibilityService>(),
+            provider,
+            new PickupPreferenceMutationService(configuration, provider, timeProvider!));
 
         long requestId;
         byte[] requestVersion;
@@ -245,7 +249,11 @@ public sealed partial class PatronJourneyTests
             new RecordingEmailSender(),
             new RecipientDomainPolicy(configuration),
             timeProvider!,
-            NullLogger<PatronSuggestionService>.Instance);
+            NullLogger<PatronSuggestionService>.Instance,
+            factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
+            factory.Services.GetRequiredService<StaffEligibilityService>(),
+            factory.Services.GetRequiredService<IStaffPolarisProvider>(),
+            new PickupPreferenceMutationService(configuration, provider, timeProvider!));
 
         var identifier = $"978{Random.Shared.NextInt64(1000000000, 9999999999)}";
         long requestId;

@@ -251,7 +251,7 @@ public sealed partial class PatronSuggestionService
         throw new PatronFlowException(
             403,
             configuration.PatronCodeEligibilityMessage,
-            new { code = "patron_ineligible" });
+            new { code = "patron_ineligible", message = configuration.PatronCodeEligibilityMessage });
     }
 
     private static void EnforceStaffPatronEligibility(

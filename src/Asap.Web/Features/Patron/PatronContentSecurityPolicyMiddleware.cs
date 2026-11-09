@@ -6,7 +6,8 @@ namespace Asap.Web.Features.Patron;
 
 public sealed class PatronContentSecurityPolicyMiddleware(
     RequestDelegate next,
-    IDbContextFactory<AsapDbContext> contextFactory)
+    IDbContextFactory<AsapDbContext> contextFactory,
+    IWebHostEnvironment environment)
 {
     private static readonly Regex RequestOriginPattern = new(
         @"^(https?):\/\/([^\/?#]+)",
@@ -26,7 +27,7 @@ public sealed class PatronContentSecurityPolicyMiddleware(
 
     public async Task InvokeAsync(HttpContext httpContext)
     {
-        if (httpContext.Request.Path.StartsWithSegments("/patron"))
+        if (httpContext.Request.Path.StartsWithSegments("/patron") && !IsKnownAsset(httpContext.Request))
         {
             await using var context = await contextFactory.CreateDbContextAsync(
                 httpContext.RequestAborted);
@@ -56,6 +57,26 @@ public sealed class PatronContentSecurityPolicyMiddleware(
         }
 
         await next(httpContext);
+    }
+
+    private bool IsKnownAsset(HttpRequest request)
+    {
+        if (!HttpMethods.IsGet(request.Method) && !HttpMethods.IsHead(request.Method))
+        {
+            return false;
+        }
+
+        var extension = Path.GetExtension(request.Path.Value);
+        if (!string.Equals(extension, ".js", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(extension, ".css", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // Only existing static resources bypass the dynamic document policy.
+        // Default-file rewrites still reach this middleware as HTML.
+        var file = environment.WebRootFileProvider.GetFileInfo(request.Path.Value!);
+        return file.Exists && !file.IsDirectory;
     }
 
     private static string RequestOrigin(HttpRequest request)

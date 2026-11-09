@@ -120,10 +120,10 @@ public sealed partial class PatronSuggestionService(
     RecipientDomainPolicy recipientDomainPolicy,
     TimeProvider timeProvider,
     ILogger<PatronSuggestionService> logger,
-    IDbContextFactory<AsapDbContext>? contextFactory = null,
-    StaffEligibilityService? staffEligibility = null,
-    IStaffPolarisProvider? staffPolaris = null,
-    PickupPreferenceMutationService? pickupMutationService = null)
+    IDbContextFactory<AsapDbContext> contextFactory,
+    StaffEligibilityService staffEligibility,
+    IStaffPolarisProvider staffPolaris,
+    PickupPreferenceMutationService pickupMutations)
 {
     private static readonly CreationActor PatronActor = new(
         "patron",
@@ -156,8 +156,6 @@ public sealed partial class PatronSuggestionService(
         """;
 
     private readonly string connectionString = externalConfiguration.ConnectionStrings.AsapDatabase!;
-    private readonly PickupPreferenceMutationService pickupMutations = pickupMutationService ??
-        new PickupPreferenceMutationService(externalConfiguration, patronProvider, timeProvider);
     private readonly TimeZoneInfo businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(
         externalConfiguration.Application.BusinessTimeZone!);
 
@@ -375,11 +373,6 @@ public sealed partial class PatronSuggestionService(
         StaffSuggestionInput input,
         CancellationToken cancellationToken)
     {
-        if (contextFactory is null || staffEligibility is null)
-        {
-            throw new PatronFlowException(500, "Staff suggestion creation is not configured.");
-        }
-
         var configuration = await configurationService.GetAsync(organizationId, cancellationToken)
             ?? throw new PatronFlowException(404, "The selected servicing library could not be determined.");
         if (!configuration.IsActive)
@@ -650,11 +643,6 @@ public sealed partial class PatronSuggestionService(
         SqlTransaction transaction,
         CancellationToken cancellationToken)
     {
-        if (contextFactory is null || staffEligibility is null)
-        {
-            throw new PatronFlowException(500, "Staff suggestion creation is not configured.");
-        }
-
         await using var context = await PickupPreferenceMutationService.BindContextAsync(
             contextFactory, connection, transaction, cancellationToken);
         var organizationIds = new[]
@@ -849,11 +837,6 @@ public sealed partial class PatronSuggestionService(
                 new { code = "invalid_bib" });
         }
 
-        if (staffPolaris is null)
-        {
-            throw new PatronFlowException(500, "Polaris BIB verification is not configured.");
-        }
-
         BibValidationResult result;
         try
         {
@@ -894,11 +877,6 @@ public sealed partial class PatronSuggestionService(
         int? verifiedBibId,
         CancellationToken cancellationToken)
     {
-        if (contextFactory is null || staffEligibility is null)
-        {
-            throw new PatronFlowException(500, "Staff suggestion creation is not configured.");
-        }
-
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await using var databaseTransaction = await context.Database.BeginTransactionAsync(
             IsolationLevel.Serializable,

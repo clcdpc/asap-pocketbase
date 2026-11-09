@@ -142,6 +142,19 @@ async function until(predicate, message) {
     assert.equal(document.getElementById('step-success').classList.contains('hidden'), false);
     await auth.logout();
     await login('20000000000901');
+    const explanation = 'Please contact <strong>your library</strong> & ask about eligibility.\nThank you.';
+    fillDraft('20000000000901');
+    const ineligible = submit.handleSuggestionSubmit({ preventDefault() {} });
+    await until(() => pendingSubmission !== null, 'Eligibility rejection did not start');
+    pendingSubmission.resolve(response(403, { code: 'patron_ineligible', message: explanation }));
+    pendingSubmission = null;
+    await ineligible;
+    const eligibilityError = document.getElementById('submit-error');
+    assert.equal(eligibilityError.textContent, explanation, 'The shared HTTP helper delivers the configured explanation');
+    assert.equal(eligibilityError.children.length, 0, 'Configured explanations render as text');
+    assert.equal(eligibilityError.classList.contains('hidden'), false);
+    assert.equal(document.getElementById('pickup-branch-container').textContent.includes(
+      'When you submit, this updates your library account’s default pickup location for future holds. Holds already placed will not move.'), true);
     for (const scenario of [
       { name: '201', response: response(201, { id: '9007199254740993', successTitle: 'A', successMessage: 'A' }) },
       { name: '409', response: response(409, { message: 'A conflict', conflictTitle: 'A conflict' }) },

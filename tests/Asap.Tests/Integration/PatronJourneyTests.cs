@@ -10279,15 +10279,20 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         var configuration = TestConfigurationFactory.Create(allowedDomains: allowedDomains);
         configuration.ConnectionStrings.AsapDatabase = databaseConnectionString;
         configuration.ConnectionStrings.HangfireDatabase = databaseConnectionString;
+        var provider = DeterministicJourneyScenario.Create();
         return new PatronSuggestionService(
             configuration,
             factory!.Services.GetRequiredService<PatronConfigurationService>(),
-            DeterministicJourneyScenario.Create(),
+            provider,
             outboxDispatcher,
             emailSender ?? new RecordingEmailSender(),
             new RecipientDomainPolicy(configuration),
             timeProvider!,
-            NullLogger<PatronSuggestionService>.Instance);
+            NullLogger<PatronSuggestionService>.Instance,
+            factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
+            factory.Services.GetRequiredService<StaffEligibilityService>(),
+            factory.Services.GetRequiredService<IStaffPolarisProvider>(),
+            new PickupPreferenceMutationService(configuration, provider, timeProvider!));
     }
 
     private static PatronSuggestionInput Suggestion(string title) =>
