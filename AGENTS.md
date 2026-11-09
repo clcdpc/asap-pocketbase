@@ -34,7 +34,7 @@ misreport cancellation as an ordinary failure.
 ## Data access and configuration
 
 Use direct EF Core for ordinary aggregates and existing feature services. Use
-selective Dapper/ADO.NET and parameterized SQL where the feature boundary
+selective ADO.NET and parameterized raw SQL where the feature boundary
 already requires reporting, queue, reconciliation, or operational recovery.
 Keep authorization, scope predicates, transactions, constraints, rowversion
 checks, and outbox/event writes in the owning data/service layer. Do not use
