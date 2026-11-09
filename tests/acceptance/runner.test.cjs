@@ -437,6 +437,23 @@ test('registered suites match discovered modules and retain their mutation bound
   ]);
 });
 
+test('registry contracts accept reorganized scenario source without historical Git objects', async t => {
+  const root = await temporary(t);
+  const acceptance = path.join(root, 'tests/acceptance');
+  await fs.cp(__dirname, acceptance, { recursive: true });
+  await fs.mkdir(path.join(root, 'tests/browser'), { recursive: true });
+  await fs.copyFile(path.join(repository, 'tests/browser/confirmation.cjs'), path.join(root, 'tests/browser/confirmation.cjs'));
+  const suite = path.join(acceptance, 'suites/pr410.cjs');
+  const source = await fs.readFile(suite, 'utf8');
+  // A module-local scope changes declaration placement without changing the
+  // exported scenario identities, classifications or executable callbacks.
+  await fs.writeFile(suite, '(function () {\n' + source + '\n})();\n');
+  const output = execFileSync(process.execPath, ['--test', '--test-name-pattern', '^registered suites match',
+    path.join(acceptance, 'runner.test.cjs')], { cwd: root, encoding: 'utf8', timeout: 15000 });
+  assert.match(output, /registered suites match discovered modules/);
+  await assert.rejects(fs.stat(path.join(root, '.git')), { code: 'ENOENT' });
+});
+
 test('D1 registers read-only coverage independently of its explicitly authorized close/reopen scenario', () => {
   const suite = require('./suites/d1.cjs');
   assert.equal(suite.id, 'd1');

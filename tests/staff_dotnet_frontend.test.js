@@ -1,6 +1,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const { fixture } = require('./helpers/staff-controller.cjs');
 
 const root = path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend', 'staff');
 const requiredFiles = [
@@ -27,84 +28,13 @@ const analytics = fs.readFileSync(path.join(root, 'js', 'analytics.js'), 'utf8')
 const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
 const all = `${index}\n${app}\n${http}\n${workflow}\n${urlUtils}\n${analytics}`;
 
+// Positive workflow behavior is exercised through imported controllers and the
+// real staff UI (see docs/implementation/test-infrastructure-code-health.md).
+// Retain deliberate architecture/security prohibitions here.
 assert.match(index, /Sign in with Microsoft/);
 assert.match(index, /gridjs\.umd\.js/);
-assert.match(workflow, /\/api\/asap\/config\?libraryOrgId=/, 'staff editor should load scoped public-form configuration');
-assert.doesNotMatch(workflow, /Format code/, 'staff editor should present the configured format selector, not an internal code input');
-assert.match(workflow, /canChangeWorkflowState/, 'workflow controls should honor backend operation capabilities');
-assert.match(styles, /table\.gridjs-table\s*\{[^}]*min-width:\s*\d+px/s, 'queue table should retain readable mobile columns inside its scroll wrapper');
-assert.match(app, /createWorkflowApp/);
-assert.match(workflow, /requestId: String\(request\.id\)/,
-  'Polaris lookup request IDs should stay strings');
-assert.doesNotMatch(workflow, /requestId:\s*Number\(request\.id\)/,
-  'Polaris lookup must not coerce a title-request identity to Number');
-assert.match(http, /X-ASAP-Antiforgery/);
-assert.doesNotMatch(workflow, /\blatestLoads\b/, 'reads belong to disposable controllers');
-assert.match(workflow, /createSessionCoordinator/);
-assert.match(workflow, /createStaffShell/);
-assert.match(workflow, /requestedRequestIdFromUrl/);
-assert.match(workflow, /requestedStatusFromUrl/);
-assert.match(urlUtils, /searchParams\.get\('request'\)/);
-assert.match(urlUtils, /searchParams\.set\('request', normalizedId\)/);
-assert.match(urlUtils, /searchParams\.delete\('request'\)/);
-assert.match(index, /data-view="additional-copies"/);
-assert.match(index, /data-view="analytics"/);
-assert.match(index, /id="analytics-container"/);
-assert.match(workflow, /loadAnalytics/);
-assert.match(workflow, /resetAnalytics/);
-assert.match(analytics, /\/api\/asap\/staff\/analytics\?/);
-assert.match(analytics, /reads\.begin\('analytics'\)/);
-assert.match(index, /id="additional-copy-create-dialog"/);
-assert.match(index, /id="additional-copy-reminder"/);
-assert.match(urlUtils, /searchParams\.set\('stage', 'additional_copies'\)/);
-assert.match(workflow, /\/api\/asap\/staff\/additional-copies\?scope=/);
-assert.match(workflow, /title-requests\/\$\{parent\.request\.id\}\/additional-copy/);
-assert.match(workflow, /title-requests\/\$\{record\.sourceId\}\/additional-copy/);
-for (const operation of ['claim', 'unclaim', 'assign', 'close', 'reopen', 'delete']) {
-  assert.ok(workflow.includes(`operation === '${operation}'`) || workflow.includes(`'${operation}'`),
-    `${operation} should be wired through the AdditionalCopy UI`);
-}
-assert.match(workflow, /claimClearedReason/);
-assert.match(workflow, /createElement/);
-assert.match(workflow, /window\.requestAnimationFrame/);
-assert.equal(
-  [...workflow.matchAll(/\/api\/asap\/staff\/assignment-candidates\?libraryOrgId=/g)].length,
-  2,
-  'both assignment pickers should use the scoped candidate API'
-);
-assert.doesNotMatch(
-  workflow,
-  /authorizedJson\(`\/api\/asap\/staff\/users\?orgId=/,
-  'workflow assignment must not depend on the admin-only Staff Access endpoint'
-);
-assert.match(workflow, /pickup-options/);
-assert.match(workflow, /place-hold/);
-assert.match(workflow, /retry-identifier-check/);
-assert.match(workflow, /hold-operations\/\$\{operation\.id\}\/\$\{action\}/);
-for (const resolutionField of [
-  'requestVersion',
-  'operationSpecificProofAttested',
-  'proofSource',
-  'causalConnection',
-  'provenFinalHoldId',
-  'executorExclusionAttested',
-  'executorExclusionReference',
-  'executorExclusionExplanation'
-]) {
-  assert.ok(workflow.includes(resolutionField), `${resolutionField} should be wired through operator resolution`);
-}
-assert.match(workflow, /serverFenced/);
-assert.match(workflow, /'aria-label': 'Resolution'/);
-assert.match(workflow, /'aria-label': 'Evidence type'/);
-for (const preference of [
-  'weeklyActionSummaryEnabled',
-  'weeklyActionSummaryEmail',
-  'purchaseReminderDefault',
-  'additionalCopyReminderDefault',
-  'defaultMineUnclaimedFilter'
-]) {
-  assert.ok(all.includes(preference), `${preference} should be wired through the staff profile UI`);
-}
+assert.doesNotMatch(workflow, /authorizedJson\(`\/api\/asap\/staff\/users\?orgId=/,
+  'workflow assignment must not depend on the admin-only Staff Access endpoint');
 
 assert.ok(!/pocketbase/i.test(all), 'The .NET staff shell must not use PocketBase browser state');
 assert.ok(!/\.innerHTML\s*=/.test(all), 'Runtime staff UI must use DOM APIs rather than innerHTML assignment');
@@ -146,4 +76,49 @@ for (const name of fs.readdirSync(path.join(root, 'js')).filter(name => name.end
   }
 }
 
-console.log('Staff .NET frontend structure regression checks passed');
+// Exercise both consumers of the assignment API instead of counting URL text.
+(async () => {
+  for (const copy of [false, true]) await fixture(async ({ load, get }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createDetailHost } = await load('detail-host');
+    const { createTitleDetailController } = await load('title-detail');
+    const { createCopyDetailController } = await load('copy-detail');
+    const session = createSessionIdentity();
+    session.accept({ id: '20', tenantId: 'tenant', authenticationEmail: 'staff@example.org', role: 'super_admin', organizationId: 1 });
+    const host = createDetailHost({ root: get('#request-dialog') });
+    const calls = [];
+    const record = { id: '9223372036854775807', libraryOrgId: 2, version: 'v1', title: 'Scoped assignment',
+      status: copy ? 'open' : 'suggestion', format: 'book', customFields: {}, capabilities: { canClaim: true, canAssign: true, allowedActions: [] } };
+    const create = copy ? createCopyDetailController : createTitleDetailController;
+    const controller = create({ host, sessionIdentity: session, announce() {},
+      beforeOpen: () => ({ isCurrent: () => true }), beforeClose: () => true,
+      isNavigationCurrent: () => true, getNavigationGeneration: () => 1,
+      getScope: () => 'all', onAlign: async () => ({ scope: 'all', commit: () => 1 }),
+      onOpened() {}, onClosed() {}, getFocusReturn: () => null,
+      refreshQueue: async () => true, queueSequence: () => 1, rememberOpened() {}, forgetUnavailable() {},
+      onReceipt() {}, clearReceipt() {}, polarisLookup: { close() {}, invalidate() {} },
+      copyCreation: { close: () => true, invalidate() {}, hasPendingMutation: () => false },
+      request: async (url, init = {}) => {
+        calls.push({ url, init });
+        if (url === '/api/asap/staff/assignment-candidates?libraryOrgId=2') return { candidates: [{ id: '9007199254740993', displayName: 'Eligible staff' }] };
+        return record;
+      } });
+    try {
+      await controller.open(record.id);
+      [...get('#request-dialog').querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Assign').click();
+      const deadline = Date.now() + 3000;
+      while (!get('.inline-form select') && Date.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+      const select = get('.inline-form select');
+      assert.ok(select, 'Scoped assignment candidates render');
+      assert.equal(select.querySelector('option[value="9007199254740993"]').textContent, 'Eligible staff');
+      const requests = calls.filter(call => call.url.includes('assignment-candidates'));
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].url, '/api/asap/staff/assignment-candidates?libraryOrgId=2');
+      assert.equal(requests[0].init.method, undefined);
+      assert.equal(requests[0].init.body, undefined);
+      assert.ok(requests[0].init.signal);
+      assert.equal(calls.some(call => call.url.includes('/staff/users')), false);
+    } finally { controller.dispose(); host.dispose(); }
+  });
+  console.log('Staff frontend ownership, safety and both scoped assignment consumers passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });

@@ -17,6 +17,42 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    public async Task StaffSuggestionHttpRejectsMissingAndInvalidAntiforgeryWithoutDurableEffects()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        using var client = factory!.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        var title = $"Antiforgery witness {Guid.NewGuid():N}";
+        var outboxBefore = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];");
+        var eventsBefore = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[TitleRequestEvent];");
+        var input = new
+        {
+            query = (string?)null, libraryOrgId = 2, barcode = "20000000009993", format = "book", title,
+            author = "Staff author", identifier = (string?)null, publication = "Coming soon", notes = "",
+            preferredPickupBranchId = 101, currentPreferredPickupBranchIdAtLoad = 101,
+            currentPreferredPickupBranchObservedAtLoad = true, autohold = false,
+            emailPatronConfirmation = false, customFields = new Dictionary<string, string?>(), verifiedBibId = (string?)null
+        };
+        foreach (var invalidToken in new[] { false, true })
+        {
+            if (invalidToken)
+            {
+                client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", "invalid-token");
+            }
+            foreach (var endpoint in new[] { "/api/asap/staff/patron-lookup", "/api/asap/staff/suggestions" })
+            {
+                using var response = await client.PostAsJsonAsync(endpoint, input, TestContext.CancellationToken);
+                Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.CancellationToken));
+                Assert.AreEqual("antiforgery_failed", body.RootElement.GetProperty("code").GetString());
+            }
+        }
+        await AssertNoStaffBibRequestAsync(title);
+        Assert.AreEqual(outboxBefore, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];"));
+        Assert.AreEqual(eventsBefore, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[TitleRequestEvent];"));
+    }
+
+    [TestMethod]
     public async Task StaffSuggestionMalformedVerifiedBibReturnsInvalidBibBeforeMutation() =>
         await AssertStaffBibFailureAsync("not-a-bib", HttpStatusCode.BadRequest, "invalid_bib", 0);
 
