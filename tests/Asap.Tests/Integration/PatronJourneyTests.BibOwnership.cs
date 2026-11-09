@@ -480,8 +480,14 @@ public sealed partial class PatronJourneyTests
             "duplicate-action-target", action == "edit" ? 9002 : 9001,
             staffVerified: true, status: action == "edit" ? "pending_hold" : "suggestion",
             autoHold: true);
+        var nonmatching = await SeedBibOwnershipRequestAsync(
+            "duplicate-action-other-bib", 9003, staffVerified: true,
+            status: "pending_hold", autoHold: true);
         var blocker = await SeedBibOwnershipRequestAsync(
             "duplicate-action-blocker", 9001, staffVerified: true,
+            status: "pending_hold", autoHold: true);
+        var laterMatch = await SeedBibOwnershipRequestAsync(
+            "duplicate-action-later-match", 9001, staffVerified: true,
             status: "pending_hold", autoHold: true);
         try
         {
@@ -491,6 +497,8 @@ public sealed partial class PatronJourneyTests
                 var targetRow = await setup.TitleRequests.SingleAsync(item => item.Id == target.Id);
                 var blockerRow = await setup.TitleRequests.SingleAsync(item => item.Id == blocker.Id);
                 blockerRow.Barcode = targetRow.Barcode;
+                (await setup.TitleRequests.SingleAsync(item => item.Id == nonmatching.Id)).Barcode = targetRow.Barcode;
+                (await setup.TitleRequests.SingleAsync(item => item.Id == laterMatch.Id)).Barcode = targetRow.Barcode;
                 await setup.SaveChangesAsync();
                 blockerVersion = blockerRow.RowVersion.ToArray();
             }
@@ -509,6 +517,8 @@ public sealed partial class PatronJourneyTests
                 }.ToCommand();
             var result = await factory.Services.GetRequiredService<TitleRequestMutationService>().ActionAsync(
                 actor, target.Id, input, CancellationToken.None);
+            Assert.IsLessThan(blocker.Id, nonmatching.Id, "A lower-ID candidate has a different numeric BIB.");
+            Assert.IsGreaterThan(blocker.Id, laterMatch.Id, "Multiple matching BIBs must select the earliest ID.");
             Assert.AreEqual("duplicate_open_request", result.Code);
             Assert.IsNotNull(result.Duplicate);
             Assert.AreEqual(blocker.Id, result.Duplicate.Id);
@@ -563,7 +573,7 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
-            await DeleteBibOwnershipRequestsAsync([target.Id, blocker.Id]);
+            await DeleteBibOwnershipRequestsAsync([target.Id, nonmatching.Id, blocker.Id, laterMatch.Id]);
         }
     }
 

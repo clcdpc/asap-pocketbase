@@ -216,15 +216,14 @@ public sealed partial class TitleRequestMutationService
         {
             // LockForMutationAsync holds the library Organization row until commit. Patron
             // creation and automatic promotion take the same lock before writing requests.
-            var otherOpenRequests = await context.TitleRequests.AsNoTracking().Where(item =>
+            var duplicate = await context.TitleRequests.AsNoTracking().Where(item =>
                 item.LibraryOrganizationId == request.LibraryOrganizationId &&
                 ((request.PatronIdSnapshot.HasValue && item.PatronIdSnapshot == request.PatronIdSnapshot) ||
-                 (!request.PatronIdSnapshot.HasValue || item.PatronIdSnapshot == null) && item.Barcode == request.Barcode) && item.BibId != null &&
+                 (!request.PatronIdSnapshot.HasValue || item.PatronIdSnapshot == null) && item.Barcode == request.Barcode) && item.BibId == bibAfterMutation &&
                 item.Id != request.Id && item.Status != RequestStatus.Closed)
                 .OrderBy(item => item.Id)
                 .Select(item => new { item.Id, item.Title, item.Status, item.BibId })
-                .ToListAsync(cancellationToken);
-            var duplicate = otherOpenRequests.FirstOrDefault(other => other.BibId == bibAfterMutation);
+                .FirstOrDefaultAsync(cancellationToken);
             if (duplicate is not null)
             {
                 return (new TitleRequestMutationResult("duplicate_open_request", Duplicate:
