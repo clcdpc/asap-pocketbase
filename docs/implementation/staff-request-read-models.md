@@ -44,7 +44,7 @@ No latency improvement is claimed.
 
 | Path | Reader commands, 1 / 12 requests (before → after) | Data reduction |
 | --- | --- | --- |
-| List | 10 / 10 → 10 / 10 | 15 / 180 full 11-column event rows → 1 / 12 two-column phase rows; no activity entities |
+| List | 10 / 10 → 9 / 9 | 15 / 180 full 11-column event rows → one computed phase column in the request query; no activity entities |
 | Detail | 19 / 19 → 19 / 19 | Eight-column activity projection replaces 11-column entities; shared scalar lookups are projected |
 | Related candidates | 1 / 1 → 1 / 1 | 1 / 12 rows, 41 → 6 columns; no candidate request entities |
 | Template lookup | 20 / 20 → 9 / 9 | No request DTO/entities, activity, related candidates, workflow, hold/pickup recovery or email reads |
@@ -57,6 +57,8 @@ context. Detail materializes only its one request plus the two locked organizati
 rows and current staff row. Previously detail materialized 2 / 13 requests, 15
 events, six hold operations and broad organization/workflow/format rows. Template
 lookup now materializes only those authoritative organization/staff lock reads.
+The list's request status and correlated phase value come from the same SQL
+statement, avoiding a second read of possibly changed status during assembly.
 There is no query per displayed request, cache, pagination or similarity redesign.
 
 Shared authorization helpers preserve native ID resolution, preliminary scope,
@@ -70,10 +72,43 @@ validity; only the unused rowversion is excluded.
 
 Related matching retains .NET letter/digit and invariant-case normalization,
 nonempty keys, self exclusion, candidate-ID deduplication, status/library groups
-and their existing sort. Scoped candidates remain a bounded batch of six-column
+and their existing sort. Scoped candidates remain a single batch of six-column
 rows; normalization has not been replaced by SQL collation semantics. Latest
 incomplete hold, latest successful hold and pending pickup remain independent.
 Mixed-history coverage checks incomplete recovery, older-success protection,
 allowed actions, masking and simultaneous pickup visibility. Existing DTO fields,
 UTC precision, versions, custom-field validity, activity ordering and effective
 workflow defaults remain covered by production service/API regressions.
+
+## Action extraction (R17 backend)
+
+ActionAsync retains input validation, receipt replay before BIB preflight, replay
+fallback on preflight failure, locked receipt lookup before final stale-version
+rejection, final SaveChanges and commit. `PrepareActionAsync` owns the existing
+preview/claim-rule reads, stale-preview replay fallback, patron refresh and email
+readiness, outside the mutation transaction. Its typed preparation separates
+provider/transport facts from the locked current state. Operational patron refresh
+failure still logs and follows the existing suppressed-notification path; SQL/email
+readiness failure or an independent timeout still rejects before mutation.
+
+`ApplyLockedActionAsync` uses the caller's context, tracked request and transaction
+for capability/configuration/template validation, local field/status/claim changes,
+additional-copy creation, independent staff/patron outboxes and the accepted receipt.
+Identity-generating SaveChanges calls remain transactional flushes. The outer method
+owns commit; returned failures and exceptions dispose/roll back the whole local
+outcome. `DispatchActionNotifications` runs only afterward and keeps staff/reminder
+and patron outcomes separate. Cancellation or dispatcher failure cannot undo durable
+acceptance or its recoverable outbox. Existing separate receipt/preflight contexts
+and the complete command fingerprint/original actor comparison remain unchanged.
+
+The unused full request-event read in ActionAsync was removed after confirming its
+local had no consumers. No authority or history decision depended on it.
+
+New focused production-entry-point tests cover DMV-observed replay lock waits
+with identity revocation, email/library changes, request reassignment and a different
+authorized actor; they also cover commit followed by cancellation/dispatch failure
+and an exact retry with the original version, without another dispatch or durable
+effect. The retained queue tests already cover provider-unavailable replay,
+changed-command conflicts, failures after intermediate writes, and timeout around
+commit. Existing template, claim, readiness, caller cancellation and distinct
+staff/patron notification regressions remain required.
