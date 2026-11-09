@@ -166,10 +166,16 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
 
         var requestQuery = context.TitleRequests.AsNoTracking()
             .Where(item => organizationId == null || item.LibraryOrganizationId == organizationId);
-        var requests = await requestQuery.ToListAsync(cancellationToken);
+        var rows = await requestQuery.Select(item => new { Request = item, PhaseEnteredAt = context.TitleRequestEvents
+                .Where(entry => entry.TitleRequestId == item.Id && entry.Status == item.Status && PhaseTransitionEvents.Contains(entry.EventType))
+                .OrderByDescending(entry => entry.CreatedUtc).ThenByDescending(entry => entry.Id)
+                .Select(entry => (DateTime?)entry.CreatedUtc).FirstOrDefault() ?? item.CreatedUtc })
+            .ToListAsync(cancellationToken);
+        var requests = rows.Select(item => item.Request).ToArray();
         var items = await BuildDtosAsync(context, requests,
             requests.Select(item => new RelatedRequestRead(item.Id, item.LibraryOrganizationId, item.Status,
-                item.Identifier, item.BibId, item.Title)).ToArray(), staff, includeActivity: false, cancellationToken);
+                item.Identifier, item.BibId, item.Title)).ToArray(), staff, includeActivity: false, cancellationToken,
+            rows.ToDictionary(item => item.Request.Id, item => item.PhaseEnteredAt));
         return new TitleRequestScopeResult(
             items,
             normalizedScope,
@@ -289,7 +295,8 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
         IReadOnlyList<RelatedRequestRead> relatedCandidates,
         CurrentStaff staff,
         bool includeActivity,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<long, DateTime>? phaseEntries = null)
     {
         if (requests.Count == 0)
         {
@@ -337,13 +344,6 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
             .Select(item => new RequestEventRead(item.Id, item.TitleRequestId, item.EventType, item.Status,
                 item.ActorType, item.ActorName, item.Message, item.CreatedUtc))
             .ToListAsync(cancellationToken) : [];
-        var phaseEntries = includeActivity ? null : await context.TitleRequests.AsNoTracking()
-            .Where(item => ids.Contains(item.Id))
-            .Select(item => new { item.Id, EnteredUtc = context.TitleRequestEvents
-                .Where(entry => entry.TitleRequestId == item.Id && entry.Status == item.Status && PhaseTransitionEvents.Contains(entry.EventType))
-                .OrderByDescending(entry => entry.CreatedUtc).ThenByDescending(entry => entry.Id)
-                .Select(entry => (DateTime?)entry.CreatedUtc).FirstOrDefault() ?? item.CreatedUtc })
-            .ToDictionaryAsync(item => item.Id, item => item.EnteredUtc, cancellationToken);
         var eventGroups = events.GroupBy(item => item.TitleRequestId)
             .ToDictionary(item => item.Key, item => item.ToList());
         var emailActivity = includeActivity

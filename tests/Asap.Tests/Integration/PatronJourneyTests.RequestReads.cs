@@ -77,7 +77,7 @@ public sealed partial class PatronJourneyTests
             var relatedReads = detailReads.Reads.Single(item => item.Columns.Contains("Title") &&
                 item.Columns.Contains("Identifier") && !item.Columns.Contains("Barcode"));
             evidence["related"] = relatedReads;
-            Assert.AreEqual(requestCount + 1, relatedReads.ReadCount, "EF counts the final unsuccessful Read call.");
+            Assert.AreEqual(list.Items.Count + 1, relatedReads.ReadCount, "The same authorized scope is read once; EF counts the final unsuccessful Read call.");
             Assert.IsFalse(detailReads.Entities.ContainsKey(nameof(TitleRequestEvent)));
             Assert.IsFalse(detailReads.Entities.ContainsKey(nameof(HoldPlacementOperation)));
             Assert.AreEqual("hold_operation_incomplete", detail.Capabilities.BlockingReason);

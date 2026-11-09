@@ -48,6 +48,7 @@ public sealed partial class PatronJourneyTests
         var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var seeded = await SeedBibOwnershipRequestAsync("phase-promotion", 9001, staffVerified: true,
             isbnCheckStatus: "found", status: "outstanding_purchase", autoHold: autoHold, libraryOrganizationId: scope);
+        long? newerRequestId = null;
         try
         {
             await using (var context = await contexts.CreateDbContextAsync())
@@ -56,6 +57,15 @@ public sealed partial class PatronJourneyTests
                 await context.SaveChangesAsync();
             }
             await PrepareSingleItemCycleAsync(QueueNames.PurchasePromotion, scope, seeded.Id);
+            await using (var context = await contexts.CreateDbContextAsync())
+            {
+                var newer = new TitleRequest { LibraryOrganizationId = scope, Barcode = "phase-order", Title = "Newer creation without a transition",
+                    MaterialFormatId = await context.MaterialFormats.Select(item => item.Id).FirstAsync(), Status = RequestStatus.Suggestion,
+                    CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime.AddTicks(-1), UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime };
+                context.TitleRequests.Add(newer);
+                await context.SaveChangesAsync();
+                newerRequestId = newer.Id;
+            }
             var result = await factory.Services.GetRequiredService<WorkflowProcessingService>()
                 .ProcessWorkflowAsync(scope, CancellationToken.None);
             Assert.AreEqual("completed", result.Code);
@@ -63,10 +73,19 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(autoHold ? RequestStatus.PendingHold : RequestStatus.Closed,
                 await verify.TitleRequests.Where(item => item.Id == seeded.Id).Select(item => item.Status).SingleAsync());
             await AssertTransitionPhaseAsync(seeded.Id, "promoted");
+            var actor = await ReadConfiguredSuperAdminAsync();
+            var list = await factory.Services.GetRequiredService<TitleRequestViewService>()
+                .ListAsync(actor, LibraryScope.ForLibrary(scope), CancellationToken.None);
+            CollectionAssert.AreEqual(new[] { seeded.Id.ToString(), newerRequestId.Value.ToString() }, list!.Items.Select(item => item.Id).ToArray(),
+                "The older request's genuine promotion must sort ahead of a newer creation with no transition.");
         }
         finally
         {
             await DeleteBibOwnershipRequestsAsync([seeded.Id]);
+            if (newerRequestId.HasValue)
+            {
+                await DeleteBibOwnershipRequestsAsync([newerRequestId.Value]);
+            }
             await using var context = await contexts.CreateDbContextAsync();
             await context.WorkflowSettings.Where(item => item.OrganizationId == scope).ExecuteDeleteAsync();
             await DeleteFulfillmentLibraryAsync(scope);
