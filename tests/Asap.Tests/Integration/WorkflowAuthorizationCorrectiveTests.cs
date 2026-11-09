@@ -474,21 +474,31 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(1, details.RootElement.GetProperty("openAdditionalCopyClaimsCleared").GetInt32());
     }
 
-    private static async Task<int> WaitForCorrectiveSqlBlockAsync(int blockerSessionId)
+    private static async Task<int> WaitForCorrectiveSqlBlockAsync(int blockerSessionId, CancellationToken cancellationToken = default)
     {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(7));
         await using var observer = new SqlConnection(databaseConnectionString);
-        await observer.OpenAsync();
-        var elapsed = Stopwatch.StartNew();
-        while (elapsed.Elapsed < TimeSpan.FromSeconds(7))
+        try
         {
-            await using var query = new SqlCommand(
-                "SELECT TOP(1) [session_id] FROM sys.dm_exec_requests WHERE [blocking_session_id] = @blocker AND [database_id] = DB_ID();", observer);
-            query.Parameters.AddWithValue("@blocker", blockerSessionId);
-            var result = await query.ExecuteScalarAsync();
-            if (result is not null && result is not DBNull) return Convert.ToInt32(result);
-            await Task.Delay(20);
+            await observer.OpenAsync(deadline.Token);
+            while (true)
+            {
+                await using var query = new SqlCommand(
+                    "SELECT TOP(1) [session_id] FROM sys.dm_exec_requests WHERE [blocking_session_id] = @blocker AND [database_id] = DB_ID();", observer);
+                query.Parameters.AddWithValue("@blocker", blockerSessionId);
+                var result = await query.ExecuteScalarAsync(deadline.Token);
+                if (result is not null && result is not DBNull)
+                {
+                    return Convert.ToInt32(result);
+                }
+                await Task.Delay(20, deadline.Token);
+            }
         }
-        Assert.Fail($"Expected an actual SQL session waiting behind {blockerSessionId}.");
-        return 0;
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            Assert.Fail($"Expected an actual SQL session waiting behind {blockerSessionId}.");
+            return 0;
+        }
     }
 }
