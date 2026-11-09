@@ -12,10 +12,12 @@ public sealed class BackgroundWorkflowJobs(
     [AutomaticRetry(Attempts = 0)]
     [DisableConcurrentExecution(timeoutInSeconds: 3600)]
     [Queue("asap-workflow")]
-    public Task<WorkflowRunResult> ProcessWorkflowAsync(
+    [ScheduledWorkflow]
+    public async Task<WorkflowRunResult> ProcessWorkflowAsync(
         int? scopeOrganizationId,
         CancellationToken cancellationToken) =>
-        workflow.ProcessWorkflowAsync(scopeOrganizationId, cancellationToken);
+        ScheduledWorkflowAttribute.RequireCompletion(
+            await workflow.ProcessWorkflowAsync(scopeOrganizationId, cancellationToken), cancellationToken);
 
     [AutomaticRetry(Attempts = 0)]
     [DisableConcurrentExecution(timeoutInSeconds: 3600)]
@@ -39,23 +41,30 @@ public sealed class BackgroundWorkflowJobs(
     [AutomaticRetry(Attempts = 0)]
     [DisableConcurrentExecution(timeoutInSeconds: 600)]
     [Queue("asap-identifier")]
-    public Task<WorkflowRunResult> ProcessIdentifierAsync(CancellationToken cancellationToken) =>
-        workflow.ProcessIdentifierAsync(cancellationToken: cancellationToken);
+    [ScheduledWorkflow]
+    public async Task<WorkflowRunResult> ProcessIdentifierAsync(CancellationToken cancellationToken) =>
+        ScheduledWorkflowAttribute.RequireCompletion(
+            await workflow.ProcessIdentifierAsync(cancellationToken: cancellationToken), cancellationToken);
 
     [AutomaticRetry(Attempts = 0)]
     [DisableConcurrentExecution(timeoutInSeconds: 1800)]
     [Queue("asap-admin")]
-    public Task<WorkflowRunResult> RefreshOrganizationsAsync(CancellationToken cancellationToken) =>
-        workflow.RefreshOrganizationsAsync(cancellationToken);
+    [ScheduledWorkflow]
+    public async Task<WorkflowRunResult> RefreshOrganizationsAsync(CancellationToken cancellationToken) =>
+        ScheduledWorkflowAttribute.RequireCompletion(
+            await workflow.RefreshOrganizationsAsync(cancellationToken), cancellationToken);
 
     [AutomaticRetry(Attempts = 0)]
     [DisableConcurrentExecution(timeoutInSeconds: 1800)]
     [Queue("asap-admin")]
-    public Task<WorkflowRunResult> SendWeeklyStaffSummaryAsync(
+    [ScheduledWorkflow]
+    public async Task<WorkflowRunResult> SendWeeklyStaffSummaryAsync(
         Guid? manualRunId,
         int? scopeOrganizationId,
         CancellationToken cancellationToken) =>
-        workflow.SendWeeklyStaffSummaryAsync(manualRunId, scopeOrganizationId, cancellationToken);
+        ScheduledWorkflowAttribute.RequireCompletion(
+            await workflow.SendWeeklyStaffSummaryAsync(manualRunId, scopeOrganizationId, cancellationToken,
+                occurrenceUtc: ScheduledWorkflowAttribute.OccurrenceUtc), cancellationToken);
 
     [AutomaticRetry(Attempts = 0)]
     [DisableConcurrentExecution(timeoutInSeconds: 1800)]
