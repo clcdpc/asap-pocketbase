@@ -161,7 +161,6 @@ public sealed partial class WorkflowProcessingService(
             return new WorkflowRunResult("organization_snapshot_invalid");
         }
 
-        var patronCodes = await referenceProvider.GetPatronCodesAsync(cancellationToken);
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var changed = 0;
         foreach (var snapshot in snapshots.Where(item => item.Id > LibraryScope.SystemOrganizationId))
@@ -210,37 +209,30 @@ public sealed partial class WorkflowProcessingService(
             }
         }
         await context.SaveChangesAsync(cancellationToken);
-        return new WorkflowRunResult("completed", snapshots.Count + patronCodes.Count, changed);
+        return new WorkflowRunResult("completed", snapshots.Count, changed);
     }
 
     public async Task<int> CleanupSessionsAsync(CancellationToken cancellationToken = default)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var now = UtcNow();
-        var rows = await context.PatronSessions
+        return await context.PatronSessions
             .Where(item => item.ExpiresUtc <= now || item.RevokedUtc != null && item.RevokedUtc <= now.AddDays(-1))
-            .ToListAsync(cancellationToken);
-        context.PatronSessions.RemoveRange(rows);
-        await context.SaveChangesAsync(cancellationToken);
-        return rows.Count;
+            .ExecuteDeleteAsync(cancellationToken);
     }
 
     public async Task<int> CleanupEmailPayloadsAsync(CancellationToken cancellationToken = default)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var cutoff = UtcNow().AddDays(-90);
-        var rows = await context.EmailOutbox
-            .Where(item => (item.Status == "sent" && item.SentUtc < cutoff) ||
-                           (item.Status == "suppressed" && item.SuppressedUtc < cutoff))
-            .ToListAsync(cancellationToken);
-        foreach (var row in rows)
-        {
-            row.Subject = null;
-            row.BodyText = null;
-            row.BodyHtml = null;
-        }
-        await context.SaveChangesAsync(cancellationToken);
-        return rows.Count;
+        return await context.EmailOutbox
+            .Where(item => ((item.Status == "sent" && item.SentUtc < cutoff) ||
+                            (item.Status == "suppressed" && item.SuppressedUtc < cutoff)) &&
+                           (item.Subject != null || item.BodyText != null || item.BodyHtml != null))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.Subject, (string?)null)
+                .SetProperty(item => item.BodyText, (string?)null)
+                .SetProperty(item => item.BodyHtml, (string?)null), cancellationToken);
     }
 
     private async Task<WorkflowItemResult> ProcessIdentifierRowAsync(

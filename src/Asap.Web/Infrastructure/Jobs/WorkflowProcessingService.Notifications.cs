@@ -19,7 +19,8 @@ public sealed partial class WorkflowProcessingService
         Guid? manualRunId = null,
         int? scopeOrganizationId = null,
         CancellationToken cancellationToken = default,
-        StaffIdentityEvidence? manualActorEvidence = null)
+        StaffIdentityEvidence? manualActorEvidence = null,
+        DateTime? occurrenceUtc = null)
     {
         using var guard = workflowGuard.TryAcquire(cancellationToken);
         if (guard is null)
@@ -28,7 +29,7 @@ public sealed partial class WorkflowProcessingService
         }
 
         var now = UtcNow();
-        var localNow = TimeZoneInfo.ConvertTime(new DateTimeOffset(now, TimeSpan.Zero), businessTimeZone);
+        var localNow = TimeZoneInfo.ConvertTime(new DateTimeOffset(occurrenceUtc ?? now, TimeSpan.Zero), businessTimeZone);
         var periodEndLocal = localNow.Date.AddDays(1);
         var periodStartLocal = periodEndLocal.AddDays(-7);
         var periodStart = TimeZoneInfo.ConvertTimeToUtc(
