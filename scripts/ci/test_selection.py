@@ -313,6 +313,7 @@ class PopulationIdentityTests(unittest.TestCase):
         (self.root / "scripts/ci").mkdir(parents=True)
         (self.root / "tests").mkdir()
         (self.root / "tests/frontend.test.js").touch()
+        portable_fixture(self.root / "tests")
         self.parts = {key: {key: {"method": "Asap.Tests." + key + ".Case", "name": key}}
                       for key in policy.PARTITIONS}
 
@@ -415,12 +416,26 @@ class PopulationTests(unittest.TestCase):
                 policy.discover()
 
 
+def portable_fixture(directory):
+    declaration = json.loads((policy.ROOT / "tests/frontend-tests.json").read_bytes())
+    (directory / "frontend-tests.json").write_text(json.dumps(declaration))
+    for file in declaration["portable"]:
+        path = directory / file
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("require('node:assert/strict').equal(1, 1);")
+    return declaration["portable"]
+
+
 class FrontendSafetyTests(unittest.TestCase):
+    def runner_fixture(self, root):
+        shutil.copyfile(policy.ROOT / "tests/run_all.js", root / "run_all.js")
+        portable_fixture(root)
+
     @unittest.skipIf(os.name == "nt", "POSIX process-group cancellation contract")
     def test_cancellation_kills_uncooperative_child_and_cannot_emit_passing_evidence(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
-            shutil.copyfile(policy.ROOT / "tests/run_all.js", root / "run_all.js")
+            self.runner_fixture(root)
             (root / "a.test.js").write_text(
                 "const fs=require('fs');process.on('SIGTERM',()=>{});"
                 "fs.writeFileSync('child.pid.pending',String(process.pid));"
@@ -441,7 +456,10 @@ class FrontendSafetyTests(unittest.TestCase):
                 runner.communicate(timeout=12)
                 self.assertNotEqual(runner.returncode, 0)
                 raw = json.loads(results.read_text())
-                self.assertEqual((raw["executed"], raw["passed"], raw["failed"]), (1, 0, 1))
+                self.assertEqual(raw["passed"], 0)
+                self.assertEqual(raw["failed"], len(raw["files"]))
+                with self.assertRaises(reuse.EvidenceError):
+                    reuse.execution_results("frontend", {"files": raw["files"], "minimum": len(raw["files"])}, root)
                 with self.assertRaises(ProcessLookupError):
                     os.kill(child, 0)
             finally:
@@ -461,7 +479,7 @@ class FrontendSafetyTests(unittest.TestCase):
     def test_serial_runner_preserves_all_failures_and_completion_order(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
-            shutil.copyfile(policy.ROOT / "tests/run_all.js", root / "run_all.js")
+            self.runner_fixture(root)
             for own, previous, code in (("a", None, 2), ("b", "a", 0), ("c", "b", 3)):
                 prerequisite = ("if(!fs.existsSync('" + previous + ".done'))process.exit(99);"
                                 if previous else "")
@@ -474,9 +492,9 @@ class FrontendSafetyTests(unittest.TestCase):
             run = subprocess.run(["node", "run_all.js"], cwd=root, env=env, capture_output=True, text=True, timeout=15)
             self.assertEqual(run.returncode, 1)
             raw = json.loads(results.read_text())
-            self.assertEqual((raw["executed"], raw["passed"], raw["failed"]), (3, 1, 2))
+            self.assertEqual((raw["executed"], raw["passed"], raw["failed"]), (5, 3, 2))
             self.assertEqual(raw["workers"], 1)
-            self.assertEqual([row["code"] for row in raw["file_results"]], [2, 0, 3])
+            self.assertEqual([row["code"] for row in raw["file_results"]], [2, 0, 0, 0, 3])
             self.assertLess(run.stdout.index("a output"), run.stdout.index("b output"))
             self.assertLess(run.stdout.index("b output"), run.stdout.index("c output"))
 
@@ -484,8 +502,9 @@ class FrontendSafetyTests(unittest.TestCase):
     def test_safety_runs_once_before_remaining_tests_and_reports_complete_union(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
-            shutil.copyfile(policy.ROOT / "tests/run_all.js", root / "run_all.js")
-            files = ["ci_workflow_contract.test.js", "test_iis_deployment_contract.test.js", "ordinary.test.js"]
+            self.runner_fixture(root)
+            files = ["ci_workflow_contract.test.js", "test_iis_deployment_contract.test.js", "ordinary.test.js",
+                     *json.loads((root / "frontend-tests.json").read_bytes())["portable"]]
             marker = root / "executed"
             for file in files:
                 (root / file).write_text("require('fs').appendFileSync(process.env.FIXTURE_MARKER, __filename + '\\n');")
@@ -494,16 +513,44 @@ class FrontendSafetyTests(unittest.TestCase):
             subprocess.run(["node", "run_all.js", "--ci-safety"], cwd=root, env=env, capture_output=True, check=True)
             env.update(ASAP_CI_FRONTEND_RESULTS=str(results), ASAP_CI_FRONTEND_SAFETY=str(safety))
             subprocess.run(["node", "run_all.js", "--ci-remaining"], cwd=root, env=env, capture_output=True, check=True)
-            self.assertEqual(len(marker.read_text().splitlines()), 3)
+            self.assertEqual(len(marker.read_text().splitlines()), len(files))
+            self.assertEqual(len(set(marker.read_text().splitlines())), len(files))
             raw = json.loads(results.read_bytes())
             self.assertEqual(raw["files"], sorted(files))
-            self.assertEqual(raw["passed"], 3)
+            self.assertEqual(raw["passed"], len(files))
             self.assertEqual(raw["filter"], "")
             bad = json.loads(safety.read_bytes())
-            for mutation in ({"failed": 1}, {"skipped": 1}, {"files": []}, {"passed": 0}):
+            for mutation in ({"failed": 1}, {"skipped": 1}, {"files": []}, {"passed": 0},
+                             {"file_results": []}, {"file_results": [bad["file_results"][0]] * 2}):
                 safety.write_text(json.dumps({**bad, **mutation}))
                 run = subprocess.run(["node", "run_all.js", "--ci-remaining"], cwd=root, env=env, capture_output=True)
                 self.assertNotEqual(run.returncode, 0)
+
+    def test_normal_discovery_failure_filter_and_missing_portable_file_fail_qualification(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            tests = root / "tests"
+            tests.mkdir()
+            self.runner_fixture(tests)
+            selected = {"files": policy.frontend_files(root)}
+            selected.update(minimum=len(selected["files"]), expected=len(selected["files"]))
+            env = {**os.environ, "ASAP_CI_FRONTEND_RESULTS": str(tests / "frontend-results.json")}
+            def run(*args):
+                return subprocess.run(["node", "run_all.js", *args], cwd=tests, env=env,
+                                      capture_output=True, timeout=15)
+            self.assertEqual(run().returncode, 0)
+            self.assertEqual(reuse.execution_results("frontend", selected, tests)["passed"], len(selected["files"]))
+            self.assertEqual(run("authentication").returncode, 0)
+            with self.assertRaises(reuse.EvidenceError):
+                reuse.execution_results("frontend", selected, tests)
+            (tests / "acceptance/runner.test.cjs").write_text("require('node:assert/strict').equal(1, 2);")
+            self.assertNotEqual(run().returncode, 0)
+            with self.assertRaises(reuse.EvidenceError):
+                reuse.execution_results("frontend", selected, tests)
+            (tests / "acceptance/runner.test.cjs").unlink()
+            self.assertNotEqual(run().returncode, 0)
+            with self.assertRaises(policy.SelectionError):
+                policy.frontend_files(root)
 
 
 if __name__ == "__main__":

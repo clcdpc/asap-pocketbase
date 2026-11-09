@@ -226,13 +226,25 @@ def population(selected, root=ROOT):
         suites[suite] = {"filter": expression, "minimum": len(tests), "expected": len(tests),
                          "identities": sorted(digest(uid) for uid in tests),
                          "population": digest({uid: catalog[uid] for uid in tests})}
-    files = sorted(p.name for p in (root / "tests").glob("*.test.js"))
+    files = frontend_files(root)
     require(files, "Frontend discovery is empty")
-    suites["frontend"] = {"filter": "npm test (all root *.test.js files)", "minimum": len(files),
+    suites["frontend"] = {"filter": "npm test (root *.test.js and declared portable acceptance files)", "minimum": len(files),
                            "expected": len(files), "files": files}
     members = {key: [{"uid": uid, **value} for uid, value in sorted(tests.items())]
                for key, tests in partitions.items()}
     return suites, round(time.monotonic() - started, 3), members
+
+
+def frontend_files(root=ROOT):
+    declared = json.loads((root / "tests/frontend-tests.json").read_bytes())
+    portable = declared["portable"]
+    require(isinstance(portable, list) and portable and all(
+        isinstance(name, str) and re.fullmatch(r"acceptance/[a-z_]+\.test\.cjs", name) for name in portable),
+        "Invalid portable frontend declaration")
+    files = sorted([p.name for p in (root / "tests").glob("*.test.js")] + portable)
+    require(len(files) == len(set(files)) and all((root / "tests" / name).is_file() for name in files),
+            "Missing or duplicate frontend file")
+    return files
 
 
 def prepare(root=ROOT, directory=DIRECTORY):
