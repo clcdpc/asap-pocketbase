@@ -102,7 +102,7 @@ public sealed partial class WorkflowProcessingService
         var staffUrl = systemSettings?.StaffApplicationUrl;
         var createdCount = 0;
         var visited = 0;
-        var summaries = new Dictionary<int, WeeklySummaryData>();
+        var summariesByDataScope = new Dictionary<int, WeeklySummaryData>();
         foreach (var recipientSnapshot in staff)
         {
             visited++;
@@ -112,10 +112,14 @@ public sealed partial class WorkflowProcessingService
                 continue;
             }
 
-            if (!summaries.TryGetValue(authorizationOrganizationId, out var summary))
+            // A selected-library super-admin shares that library's prepared data,
+            // while retaining system authorization and its own recipient checks below.
+            var dataScopeOrganizationId = authorizationOrganizationId == LibraryScope.SystemOrganizationId
+                ? scopeOrganizationId ?? LibraryScope.SystemOrganizationId : authorizationOrganizationId;
+            if (!summariesByDataScope.TryGetValue(dataScopeOrganizationId, out var summary))
             {
-                summary = PrepareWeeklySummary(titleRequests, copyRequests, authorizationOrganizationId);
-                summaries.Add(authorizationOrganizationId, summary);
+                summary = PrepareWeeklySummary(titleRequests, copyRequests, dataScopeOrganizationId);
+                summariesByDataScope.Add(dataScopeOrganizationId, summary);
             }
             if (summary.Submissions.Count == 0 && summary.Purchases.Count == 0 && summary.Copies.Count == 0)
             {

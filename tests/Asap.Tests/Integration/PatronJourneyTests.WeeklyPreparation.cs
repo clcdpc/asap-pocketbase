@@ -114,6 +114,9 @@ public sealed partial class PatronJourneyTests
                 Assert.HasCount(scope.HasValue ? 3 : 4, rows);
                 var firstA = rows.Single(row => row.RecipientStaffUserId == staffA.Id);
                 var otherA = rows.Single(row => row.RecipientStaffUserId == secondA.Id);
+                Assert.AreEqual(libraryA, firstA.AuthorizationOrganizationId);
+                Assert.AreEqual($"weekly-summary-force:{run:N}:{staffA.Id}", firstA.BusinessKey);
+                Assert.AreEqual($"weekly-summary-force:{run:N}:{secondA.Id}", otherA.BusinessKey);
                 Assert.AreEqual(firstA.Subject, otherA.Subject);
                 Assert.AreEqual(firstA.BodyText, otherA.BodyText, "Recipients sharing a data scope render the same prepared report.");
                 Assert.AreNotEqual(firstA.ToAddress, otherA.ToAddress, "Addresses remain recipient-specific.");
@@ -128,8 +131,13 @@ public sealed partial class PatronJourneyTests
                 Assert.IsFalse(firstA.BodyText.Contains("Excluded", StringComparison.Ordinal));
                 var global = rows.Single(row => row.RecipientStaffUserId == superAdmin.Id);
                 Assert.AreEqual(1, global.AuthorizationOrganizationId);
+                Assert.AreEqual($"weekly-summary-force:{run:N}:{superAdmin.Id}", global.BusinessKey);
+                Assert.AreEqual($"weekly-preparation-{superAdmin.Id}@example.org", global.ToAddress);
+                Assert.AreNotEqual(firstA.BusinessKey, global.BusinessKey,
+                    "Sharing prepared data must retain independent recipient occurrences and system authorization.");
                 if (scope.HasValue)
                 {
+                    Assert.AreEqual(firstA.Subject, global.Subject);
                     Assert.AreEqual(firstA.BodyText, global.BodyText, "Selected-library super-admin data remains limited to the selected library.");
                     Assert.IsFalse(rows.Any(row => row.RecipientStaffUserId == staffB.Id));
                     // EF's reader counter includes the terminal ReadAsync returning false.
