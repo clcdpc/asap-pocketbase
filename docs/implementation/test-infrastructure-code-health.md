@@ -45,7 +45,13 @@ target exit, cancellation or loss of its parent triggers cleanup. Cleanup uses
 that ownership even after the requested launcher exits.
 
 Exit plus concurrent stdout/stderr drains share the operation deadline (four
-minutes by default). Cancellation remains `OperationCanceledException` with the
+minutes by default). Staff presentation explicitly allows six minutes: the
+[November 9 #494 browser receipt](https://github.com/clcdpc/asap-pocketbase/actions/runs/42621243813/artifacts/13678350517)
+at reviewed head `14601b863a2a96e402a68540f1f10a9ed7e1c117` on the three-worker
+hosted topology recorded 4m08s for that case. The four-minute default stopped it
+at 4m00s during this qualification. Other callers keep their
+defaults/explicit deadlines; CI job limits are unchanged.
+Cancellation remains `OperationCanceledException` with the
 caller token; expiry becomes `TimeoutException` retaining the triggering error.
 Termination/reaping/drains have a separate ten-second budget. Partial captured
 output and cleanup failure accompany the original failure. Capture retains up

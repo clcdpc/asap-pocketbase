@@ -90,8 +90,9 @@ frontend worker through npm test. Other acceptance checks are described in
 pass does not claim those separate commands ran.
 
 The .NET browser launch sites and publication/cache wrapper use
-OwnedTestProcess: a four-minute complete-operation deadline (Campaign 2 retains
-its explicit four minutes), concurrent bounded-memory output capture and a
+OwnedTestProcess: a four-minute default complete-operation deadline (Campaign 2
+retains four minutes; staff presentation explicitly allows six minutes based on
+its qualified 4m08s #494 receipt), concurrent bounded-memory output capture and a
 separate ten-second terminate/reap/drain budget. Caller cancellation stays
 cancellation. Windows job ownership and a dedicated Linux Python 3 subreaper
 survive target exit, including Chromium's detached process groups; partial

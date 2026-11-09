@@ -31,8 +31,11 @@ public sealed partial class PatronJourneyTests
             var root = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
             var artifacts = Path.Combine(root, ".artifacts", "browser", $"staff-presentation-{Guid.NewGuid():N}");
             Directory.CreateDirectory(artifacts);
+            // The qualified #494 Linux receipt took 4m08s for this journey.
+            // Give its complete browser operation headroom within a bounded call.
             var (exitCode, stdout, stderr) = await RunBrowserScriptAsync(root, "staff-presentation.cjs",
                 client.BaseAddress!.GetLeftPart(UriPartial.Authority), artifacts,
+                TimeSpan.FromMinutes(6),
                 actor.Id.ToString(CultureInfo.InvariantCulture), actor.EntraTenantId.ToString(), actor.AuthenticationEmail);
             Assert.AreEqual(0, exitCode, $"{artifacts}{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
         }

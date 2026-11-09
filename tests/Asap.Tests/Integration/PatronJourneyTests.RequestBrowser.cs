@@ -441,11 +441,23 @@ public sealed partial class PatronJourneyTests
         await RunNativeSnapshotBrowserJourneyAsync();
     }
 
+    private Task<(int ExitCode, string Stdout, string Stderr)> RunBrowserScriptAsync(
+        string repositoryRoot,
+        string scriptName,
+        string baseOrigin,
+        string artifactDirectory,
+        params string[] additionalArguments)
+    {
+        return RunBrowserScriptAsync(repositoryRoot, scriptName, baseOrigin, artifactDirectory,
+            TimeSpan.FromMinutes(4), additionalArguments);
+    }
+
     private async Task<(int ExitCode, string Stdout, string Stderr)> RunBrowserScriptAsync(
         string repositoryRoot,
         string scriptName,
         string baseOrigin,
         string artifactDirectory,
+        TimeSpan timeout,
         params string[] additionalArguments)
     {
         var startInfo = new ProcessStartInfo
@@ -465,6 +477,6 @@ public sealed partial class PatronJourneyTests
             startInfo.ArgumentList.Add(argument);
         }
 
-        return await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken);
+        return await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken, timeout);
     }
 }
