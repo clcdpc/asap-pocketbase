@@ -65,13 +65,13 @@ public sealed partial class PatronJourneyTests
                 var first = new TitleRequest
                 {
                     LibraryOrganizationId = 2, Barcode = "20000000009341", Title = title,
-                    Identifier = "978-0000-09341", MaterialFormatId = formatId,
+                    Identifier = "978-0000-09341", BibId = 9341, MaterialFormatId = formatId,
                     Status = "suggestion", CreatedUtc = now, UpdatedUtc = now
                 };
                 var second = new TitleRequest
                 {
                     LibraryOrganizationId = 2, Barcode = "20000000009342", Title = title,
-                    Identifier = "978000009341", MaterialFormatId = formatId,
+                    Identifier = "978000009341", BibId = 9341, MaterialFormatId = formatId,
                     Status = "pending_hold", CreatedUtc = now, UpdatedUtc = now
                 };
                 var foreign = new TitleRequest
@@ -139,6 +139,10 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue((await titles.ListAsync(superAdmin, LibraryScope.All, CancellationToken.None))!
                 .Items.Any(item => item.Id == foreignId.ToString()));
             Assert.IsNotNull(await titles.GetAsync(superAdmin, foreignId.ToString(), CancellationToken.None, LibraryScope.All));
+            Assert.IsNull(await titles.GetAsync(superAdmin, foreignId.ToString(), CancellationToken.None, LibraryScope.ForLibrary(otherLibraryId)));
+            Assert.IsNull(await titles.GetAsync(superAdmin, foreignId.ToString(), CancellationToken.None, LibraryScope.All, searchResult: true));
+            Assert.IsNotNull(await titles.GetRejectionTemplatesAsync(superAdmin, foreignId.ToString(), CancellationToken.None));
+            Assert.IsNull(await titles.GetRejectionTemplatesAsync(libraryStaff, foreignId.ToString(), CancellationToken.None));
         }
         finally
         {

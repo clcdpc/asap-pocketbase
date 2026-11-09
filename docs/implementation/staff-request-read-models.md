@@ -30,3 +30,50 @@ Before extraction, 68 retained queue/action/template/patron-email/post-commit te
 passed on real local SQL Server 2022, using deterministic providers. These include
 the named replay, timeout-around-commit, intermediate-flush rollback and distinct
 notification outcome gates in the task.
+
+## Read measurements and retained contracts (R09)
+
+`RequestReadQueryEvidenceAndMixedRecoveryHistory` captures actual EF commands,
+selected column names, reader calls and materialized entity types against SQL
+Server 2022. The same fixtures were run before changing the reads and afterward:
+one request and twelve requests, each with 15 notes and six hold attempts (an
+older success, four failures and a newer incomplete attempt). Reader calls include
+the final unsuccessful Read; reported row counts below exclude it. Related matching
+is measured separately as the candidate command within detail, not as a new API.
+No latency improvement is claimed.
+
+| Path | Reader commands, 1 / 12 requests (before → after) | Data reduction |
+| --- | --- | --- |
+| List | 10 / 10 → 10 / 10 | 15 / 180 full 11-column event rows → 1 / 12 two-column phase rows; no activity entities |
+| Detail | 19 / 19 → 19 / 19 | Eight-column activity projection replaces 11-column entities; shared scalar lookups are projected |
+| Related candidates | 1 / 1 → 1 / 1 | 1 / 12 rows, 41 → 6 columns; no candidate request entities |
+| Template lookup | 20 / 20 → 9 / 9 | No request DTO/entities, activity, related candidates, workflow, hold/pickup recovery or email reads |
+| Hold summaries (list) | 1 / 1 → 1 / 1 | 6 / 72 rows × 36 columns → 2 / 24 rows × 15 columns; no operation entities |
+| Hold summaries (detail) | 1 / 1 → 1 / 1 | 6 rows × 36 columns → 2 rows × 15 columns |
+
+List materializes only the displayed request entities (1 / 12), whose 41-column
+shape is substantially consumed by the public DTO, workflow policy and research
+context. Detail materializes only its one request plus the two locked organization
+rows and current staff row. Previously detail materialized 2 / 13 requests, 15
+events, six hold operations and broad organization/workflow/format rows. Template
+lookup now materializes only those authoritative organization/staff lock reads.
+There is no query per displayed request, cache, pagination or similarity redesign.
+
+Shared authorization helpers preserve native ID resolution, preliminary scope,
+serializable organization locks, post-wait current identity/role/library checks,
+request-to-organization consistency and classification. Search and selected-library
+details still require active libraries; authorized all-scope recovery and template
+reads retain inactive-library access. Template reads keep the same cancellation
+normalization as detail. The template policy consumes identity, source/override
+links, custom/hidden flags, sort order, display names and nonblank subject/body
+validity; only the unused rowversion is excluded.
+
+Related matching retains .NET letter/digit and invariant-case normalization,
+nonempty keys, self exclusion, candidate-ID deduplication, status/library groups
+and their existing sort. Scoped candidates remain a bounded batch of six-column
+rows; normalization has not been replaced by SQL collation semantics. Latest
+incomplete hold, latest successful hold and pending pickup remain independent.
+Mixed-history coverage checks incomplete recovery, older-success protection,
+allowed actions, masking and simultaneous pickup visibility. Existing DTO fields,
+UTC precision, versions, custom-field validity, activity ordering and effective
+workflow defaults remain covered by production service/API regressions.
