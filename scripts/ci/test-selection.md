@@ -36,8 +36,8 @@ frontend source fingerprint. Changes to those consumed inputs invalidate reuse.
 After authoritative category discovery, selection.py assigns each method using
 `SHA256("asap-method-v1-116\n" + fullyQualifiedMethod)[0] % 2` (0 = A, 1 = B).
 The seed is frozen from PR #504 and the first partition run TRX timings:
-projected PR #504 workloads are 680.02/674.41 seconds non-browser and
-679.32/655.80 seconds browser; the newer run projects 500.22/483.04 and
+projected PR #504 workloads are 678.61/675.82 seconds non-browser and
+679.32/655.80 seconds browser; the newer run projects 498.87/484.39 and
 584.93/618.63 seconds respectively. Counts did not determine balance.
 All data rows of one method stay together.
 `WeeklySummaryRetainsCommittedOutboxWhenImmediateDispatchFails` uses
@@ -45,7 +45,9 @@ All data rows of one method stay together.
 as its method anchor, keeping both in native order in the same process. The
 ordinary summary establishes durable global-recipient dedupe consumed by the
 dispatch-failure test; splitting them exposes the fixture's opted-in global
-admin as an extra recipient. METHOD_ANCHORS is explicit, fingerprinted and
+admin as an extra recipient. The malformed patron-hold BIB lookup also stays
+with its preceding holdings-failure lookup, which establishes the authenticated
+Polaris session assumed by its request-count assertion. METHOD_ANCHORS is explicit, fingerprinted and
 verified against discovery; a partial/cross-category group fails closed. Individual browser scenarios retain
 their internal ordering; fixture initialization/cleanup runs independently in
 each process. The large PatronJourneyTests partial class cannot stay on one

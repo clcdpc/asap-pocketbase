@@ -409,7 +409,7 @@ class PopulationTests(unittest.TestCase):
         for category, kind in (("core", "dotnet"), ("browser", "browser")):
             self.assertEqual(set(workers[kind + "_a"]) | set(workers[kind + "_b"]), set(self.partitions[category]))
 
-    def test_weekly_recipient_state_group_stays_together_and_cannot_lose_its_anchor(self):
+    def test_state_dependent_groups_stay_together_and_cannot_lose_their_anchors(self):
         workers = policy.worker_populations(self.partitions)
         for method, anchor in policy.METHOD_ANCHORS.items():
             methods = {value["method"] for value in self.catalog.values()}

@@ -25,23 +25,26 @@ timings are runtime inputs. New methods and parameter rows are discovered and
 assigned automatically; all rows of a method stay together. The large partial
 PatronJourneyTests class is split by method, with fixture initialization repeated
 inside each independent process/database. Internal browser scenario order is
-unchanged. One existing state dependency must remain together: the dispatch-failure
+unchanged. Two existing state dependencies must remain together. First, the dispatch-failure
 weekly summary method hashes using the preceding NormalWeeklySummary method
 as its anchor. The ordinary summary establishes global-recipient dedupe that
 the following method consumes. Both retain native ordering in one process; no
-test behavior/assertions are changed. Missing or cross-category anchors fail
+test behavior/assertions are changed. Second, the malformed patron-hold BIB
+lookup uses the preceding holdings-failure BIB lookup as its anchor. The first
+lookup establishes the authenticated Polaris session; the second expects it
+to be cached when asserting transport request counts. Missing or cross-category anchors fail
 discovery, and the anchor definitions are fingerprinted.
 
 | Population | A cases | B cases | Baseline A test time | Baseline B test time |
 | --- | ---: | ---: | ---: | ---: |
-| Non-browser | 793 | 844 | 680.02 s | 674.41 s |
+| Non-browser | 792 | 845 | 678.61 s | 675.82 s |
 | Browser | 16 | 43 | 679.32 s | 655.80 s |
 
 These counts describe the discovered baseline, not expected-count constants.
 The estimates omit repeated setup, runner variation and queuing; they do not
 prove a 15–18 minute completion time. The first partition execution exposed
 the weekly fixture dependency and uneven timing; one focused rebalance also
-uses that run's TRX durations, projecting 500.22/483.04 seconds non-browser and
+uses that run's TRX durations, projecting 498.87/484.39 seconds non-browser and
 584.93/618.63 seconds browser. Both evidence sets stay balanced. Final hosted
 measurements are required to confirm the revised split.
 

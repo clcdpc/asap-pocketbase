@@ -24,10 +24,13 @@ APPLICATION = "tests/Asap.Tests/bin/Release/net10.0/Asap.Tests.dll"
 PARTITION_SEED = "asap-method-v1-116"
 NATIVE_SUITES = ("dotnet_a", "dotnet_b", "browser_a", "browser_b")
 # The ordinary summary creates global-recipient dedupe evidence consumed by the
-# following dispatch-failure test. Preserve their native order in one process.
+# following dispatch-failure test. The first protected BIB lookup authenticates
+# the session reused by the next lookup. Preserve both pairs' native ordering.
 METHOD_ANCHORS = {
     "Asap.Tests.Integration.PatronJourneyTests.WeeklySummaryRetainsCommittedOutboxWhenImmediateDispatchFails":
         "Asap.Tests.Integration.PatronJourneyTests.NormalWeeklySummaryUsesBusinessPeriodAndQueuesOnlyOnceForCurrentRecipient",
+    "Asap.Tests.Integration.PatronJourneyTests.StaffBibLookupReturnsVerifiedDetailWithUnknownPatronHoldWhenHoldResponseIsMalformed":
+        "Asap.Tests.Integration.PatronJourneyTests.StaffBibLookupReturnsVerifiedDetailWhenHoldingsFailAndStillReadsPatronHolds",
 }
 
 
