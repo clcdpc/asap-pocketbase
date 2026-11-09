@@ -16,6 +16,10 @@ ephemeral credentials, loopback port and unconditional cleanup. Commands remain
 serial within each worker; reused native suites prepare no SQL/Chromium runtime.
 Evidence reuse remains independent for all three suites. Draft validation also
 uses Ubuntu 24.04; DEVWEB/IIS deployment retains its existing local runner.
+The frontend worker owns root Node contracts and the declared portable
+acceptance authentication/runner files. Discovery, per-file execution receipts
+and fingerprints cover that same population; additional acceptance runtime,
+launcher, layout and TLS tests retain their separate prerequisites.
 Full-worker 120-minute limits and serial commands remain unchanged. GitHub's public
 standard tier advertises 4 vCPUs, 16 GB RAM and 14 GB SSD; capacity logs and actual
 CPU/memory/disk samples establish observed headroom rather than assuming it fits.

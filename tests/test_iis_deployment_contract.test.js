@@ -34,8 +34,7 @@ childProcess.execFileSync(
 );
 
 assert.ok(workflow.includes("tags:\n      - 'v*.*.*'"), 'all release tags must qualify every category');
-assert.ok(workflow.includes('- codex/csharp-port'), 'integration-branch push trigger is required');
-assert.ok(workflow.includes('- codex/slice-08-test-deployment'), 'candidate push trigger is required');
+assert.deepEqual(YAML.parse(workflow).on.push.branches, ['main'], 'only the supported main branch has push qualification');
 assert.ok(workflow.includes('  workflow_dispatch:\n'), 'manual dispatch should be declared');
 assert.ok(
   workflow.includes(

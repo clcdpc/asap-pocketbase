@@ -1,5 +1,38 @@
 # ASAP automated acceptance
 
+## Portable contracts in normal qualification
+
+`npm test` runs every root `tests/*.test.js` file and exactly the portable
+`authentication.test.cjs` / `runner.test.cjs` subset declared in
+`tests/frontend-tests.json`. `npm test -- acceptance` filters to those two files;
+a filtered run cannot qualify the full frontend suite. The CI frontend/package
+worker runs the two mandatory safety files fresh, then executes only the
+remaining files when frontend execution is needed. Aggregated file receipts
+must cover current discovery exactly once. File counts are distinct from the
+node:test subtests printed inside each file.
+
+These contracts use deterministic doubles and disposable files; they do not
+run a review runtime or imply browser/provider/human acceptance. They preserve
+registry agreement, required scenario identities/write boundaries, runtime and
+reviewer verification, mutation guards, safe diagnostics, cleanup reporting,
+and PASS/FAIL/BLOCKED/NOT RUN/human distinctions without old Git objects.
+
+Other acceptance development checks remain separate. Invoke named files with
+`node --test --test-concurrency=1 tests/acceptance/<name>.test.cjs`:
+
+| Files | Additional prerequisites |
+| --- | --- |
+| `launcher` | PowerShell 7 and Git; launcher fixture scripts exercise actual PowerShell |
+| `infrastructure` | Release Web and review-provider build output, .NET SDK, installed Playwright Chromium and its native dependencies |
+| `direct-actions`, `format-rules`, `workflow-settings` | Installed Playwright Chromium, native zoom extension support and native browser dependencies |
+| `transport` | .NET SDK/TLS probe project, generated disposable review TLS material, Playwright Chromium and native browser dependencies |
+
+Do not recursively add every acceptance test to the portable subset. Live
+scenario suites below additionally need the disposable review runtime and
+their declared SQL/fixture/browser prerequisites. Neither the separate checks
+nor those runtime suites are claimed by a normal portable-contract pass.
+
+
 The focused `i467` suite checks Search ASAP against a pinned application in a
 fresh disposable SQL Server 2022 runtime with the normal reviewer cookie:
 
@@ -536,38 +569,17 @@ The runner test derives its expected registry from sorted suite modules, checks
 exact JSON/export coverage, and keeps the individual suites' scenario and write
 invariants. Adding a suite does not require editing an expected suite count/list.
 
-## PR #420 and #421 integration contract
+## Historical integration record
 
-PR #420 merged into `main` as `50f1483a30e2b738b0082e91c452081011f502c6`.
-PR #421 integrates that actual base into its existing branch. Preserve this
-combined content during qualification and any later updates:
+PRs [#420](https://github.com/clcdpc/asap-pocketbase/pull/420) and
+[#421](https://github.com/clcdpc/asap-pocketbase/pull/421) completed the earlier
+combined acceptance/native-zoom integration. Their merge-conflict instructions,
+pinned registry list and rollout-specific CI deferral are historical. They do
+not prescribe another merge or override current required qualification.
 
-| Shared file | Required combined result |
-| --- | --- |
-| `suites/registry.json` | `["d1", "i390", "i403", "i471", "pr410", "q1", "s1", "smoke"]`, each once, sorted |
-| `runner.test.cjs` | Dynamic module discovery and exact registry coverage; all i390 assertions (four read-only scenarios), all i403 assertions (six scenarios, only keyboard/guarded dispatch writes), and every existing suite invariant; current discovery-based CI/browser guards |
-| `README.md` | Both issue-suite descriptions, commands, evidence and authorization limits |
-| `../browser/staff-native-zoom.cjs` | Both Format-rule and action helper imports; collapsed/expanded Format rules scans plus direct/overflow action geometry, sole Reopen and full offscreen-focus restoration at native 200%, scoped axe, Escape/focus and full table scans; verify all nine named states at each of 1280/1440 physical pixels (18 checkpoints) in both JS and SQL browser assertions |
-| `../../dev/review/src/Asap.ReviewInit/AcceptanceFixtures.sql` | Both idempotent i390 custom fields/rules (`i390_note`, `i390_retired`), all 16 original `ACCEPTANCE-I403-*` rows and five read-only workflow rows plus the blocked hold journal; preserve existing book/claimant identities and every prior fixture |
-
-The textual conflicts include the registry, adjacent issue documentation,
-native-zoom imports, and both C#/JS checkpoint assertions. Retain both additions.
-Review runner assertions, SQL fixture blocks and CSS even when Git merges them
-automatically. Do not duplicate fixture keys, replace another suite's data, or
-broaden runtime/scenario/endpoint/rowversion write authorization. Keep the
-format/field collision and persisted-rule preservation regressions alongside the
-actual-200% offscreen-focus regression.
-
-Run `i390,i403,s1,d1,q1,pr410` sequentially against one pinned integrated head,
-with separate evidence, plus targeted controller/Chromium/real-SQL integration
-checks. Return the qualified checkpoint for independent Luna review before
-merging #421.
-
-For this authorized dev rollout, the user deferred the full CI suite to the
-actual deployment qualification and requested cancellation of redundant rollout
-runs. This does not change workflow policy or branch protection. The deployment
-run must force fresh full CI (`force_full_ci=true`) and must not be cancelled as
-redundant. The existing workflow completes tests, packaging and its required
-reporting gate before deployment activation; it cannot deploy first and run full
-CI afterward without a separate workflow change. Human visual/screen-reader
-acceptance remains tracked by #398.
+Keep tooling and application identities distinct, use the current suite
+registry/discovery and declared prerequisites, and retain fixture identity,
+read-only/mutation guards, native zoom, scoped axe and persisted-state checks.
+Current three-worker hosted qualification and evidence policy are described in
+[the CI contract](../../scripts/ci/test-selection.md). Human visual and
+screen-reader acceptance remain tracked separately by #398.

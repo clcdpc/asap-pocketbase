@@ -1,8 +1,16 @@
 # Test IIS Deployment Setup
 
-This guide prepares a clean Windows Server as the nonproduction/test IIS host
-for ASAP. Activation remains `test_cd_activation: pending_runner_setup` until a
-real deployment completes and its evidence is recorded.
+Initial test-IIS activation is verified (`test_cd_activation: active`). The
+[deployment receipt](https://github.com/clcdpc/asap-pocketbase/actions/runs/42135741938/job/127625203451)
+records `v1.0.0-test.32`, commit `46c60a8cdb1218f34622620cbf0b31cc92e6bd07`,
+on November 5, 2026 at 7:23 p.m. Eastern (`2026-11-06T00:23:12Z`). The log
+explicitly records activation, HTTPS readiness and deployment-state recording;
+this was an actual deployment, not a safely skipped job. This historical receipt
+does not establish current-main deployment, today's host health, production
+readiness, live-provider validation or human acceptance.
+
+The provisioning instructions below apply to a clean or rebuilt Windows Server.
+Further host access, activation and deployment require separate authorization.
 
 After host/runner activation and the administrator configuration below, each
 push to `main` automatically deploys its exact tested package to DEVWEB after
@@ -554,8 +562,9 @@ identify the last successful installation, and follow its run URL to CI
 evidence. After a failed mutation, inspect SQL and web files too; the last
 successful state is not proof that those files remain installed or healthy.
 
-That evidence supports changing `test_cd_activation` from
-`pending_runner_setup` to `active`. Re-running the exact recorded artifact is
+Initial activation is already recorded above. A newer installation claim needs
+its own exact receipt with actual activation/readiness/state recording.
+Re-running the exact recorded artifact is
 idempotent when readiness is healthy. Backups are not automatically pruned.
 
 ## Failure Behavior

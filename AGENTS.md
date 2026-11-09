@@ -157,6 +157,11 @@ atomically, and clean up containers even after interruption. Keep generated
 acceptance artifacts out of Git. Automation does not complete human visual or
 screen-reader acceptance. See `tests/acceptance/README.md`.
 
+Normal frontend qualification additionally runs exactly the portable acceptance
+authentication/runner contracts declared in `tests/frontend-tests.json`, with
+matching discovery, per-file receipts and reuse inputs. Other acceptance tests
+retain their separate launcher/runtime/browser/TLS prerequisites and invocation.
+
 ## Deployment boundaries
 
 The test-IIS workflow builds the exact tested commit, publishes Web/DACPAC, validates ZIP identity and digest before
@@ -165,7 +170,9 @@ activation. The deployment script's `-ValidateOnly` must not mutate a host. Do n
 on IIS, activate a runner, contact a host, create a production tag, deploy
 production, or merge the draft PR as part of ordinary implementation.
 
-`test_cd_activation: pending_runner_setup` remains the documented state until
-a separately authorized task records a real successful test-IIS deployment.
+Initial test-IIS activation is recorded as `test_cd_activation: active`: the
+[November 5, 2026 receipt](https://github.com/clcdpc/asap-pocketbase/actions/runs/42135741938/job/127625203451)
+verifies `v1.0.0-test.32` at `46c60a8cdb1218f34622620cbf0b31cc92e6bd07`.
+This historical receipt does not establish current-main deployment or host health.
 Production readiness, live providers, cutover, backup/recovery rehearsal, and
 repository rename remain deferred.

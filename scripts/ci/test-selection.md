@@ -17,8 +17,18 @@ The Browser partition includes Chromium journeys and frontend asset,
 publication and cache contracts. Every Chromium consumer belongs there.
 PolarisProtocolTests retains real SQL configuration/protected-credential reads
 while constructing providers directly, without a web host or Hangfire.
-Shared-database fixtures remain serial. Every root frontend test file remains
-mandatory; counts are derived from current discovery.
+Shared-database fixtures remain serial. Every root frontend test file and the
+two portable acceptance files in tests/frontend-tests.json remain mandatory.
+The shared declaration is consumed by both local execution and CI discovery;
+other acceptance tests keep their separate prerequisites/invocation. Counts
+represent files, separately from node:test subtests.
+
+The frontend safety/remaining split executes each selected file exactly once.
+Qualification verifies the exact discovered file list, complete per-file
+passing receipts and integer counters; filtered, interrupted, missing,
+duplicated or failed execution cannot qualify. Portable acceptance helpers,
+suite modules/registry and tests/browser/confirmation.cjs participate in the
+frontend source fingerprint. Changes to those consumed inputs invalidate reuse.
 
 ## Execution and required gate
 
@@ -188,7 +198,9 @@ A separate closure review examined the completed implementation:
 Exact-commit cold and evidence-reuse Actions receipts, per-stage timings,
 observed CPU/memory, runner-slot accounting and final closure findings are
 maintained in [PR #427](https://github.com/clcdpc/asap-pocketbase/pull/427).
-That historical record distinguishes runner allocation from execution and the
-parallel reference from the sequential run. Current issue #488 qualification
-requires fresh and fully reused receipts on the final reviewed effective inputs;
-it does not authorize a merge or deployment.
+That completed historical record distinguishes runner allocation from execution
+and the parallel reference from the sequential run. Issue #488's hosted
+three-worker implementation completed in merged PR #490, including cold
+42521798025 and reused 42523788479 receipts on its final reviewed inputs.
+Those dated measurements do not qualify later changed inputs or authorize
+a merge or deployment.

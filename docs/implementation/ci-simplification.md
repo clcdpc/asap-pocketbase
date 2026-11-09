@@ -22,9 +22,10 @@ acquisition without changing the request rowversion.
 
 ## Coverage and ownership
 
-Native discovery currently finds 1,445 .NET cases: 1,402 non-browser and 43 in
-Browser. Frontend discovery finds 67 root test files. These are a dated census,
-never thresholds in an executor or gate. Discovery partitions the entire native
+Use `python -B scripts/ci/selection.py prepare` after a Release build to discover
+the current native partitions and frontend file population; `catalog.json` and
+`selection.json` under `.artifacts/test-selection` record them. File counts are
+distinct from node:test subtest counts. Discovery partitions the entire native
 population, rejects overlaps/omissions, and verifies every executed test identity
 against TRX, including duplicate, skipped, and same-count substitution failures.
 
@@ -55,7 +56,9 @@ against TRX, including duplicate, skipped, and same-count substitution failures.
 
 The retained acceptance runner uses native fixture keys and successful current
 hold journals. Run smoke, s1, d1 and q1 against the desired committed source with
-scripts/review/Invoke-AsapReview.ps1. It remains independent of ordinary CI tests.
+scripts/review/Invoke-AsapReview.ps1. These runtime suites remain separately
+invoked; the portable authentication/runner contracts are part of normal npm
+and frontend qualification via `tests/frontend-tests.json`.
 
 ## Execution and evidence
 
@@ -108,7 +111,9 @@ children; incomplete/cancelled populations cannot become passing evidence.
 Deployment still waits for the required gate and existing explicit authorization.
 Build/test/package remains isolated from self-hosted activation. No IIS
 activation, production tag, production deployment, runner provisioning
-or merge is part of this work. test_cd_activation: pending_runner_setup.
+or merge is part of this work. Initial test-IIS activation already succeeded
+November 5, 2026 for `v1.0.0-test.32` at `46c60a8cdb1218f34622620cbf0b31cc92e6bd07`;
+[that receipt](test-iis-activation.md) does not establish current deployment or health.
 
 ## Reproducible measurements
 

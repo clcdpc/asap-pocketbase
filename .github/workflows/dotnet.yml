@@ -6,8 +6,6 @@ on:
   push:
     branches:
       - main
-      - codex/csharp-port
-      - codex/slice-08-test-deployment
     tags:
       - 'v*.*.*'
   workflow_dispatch:

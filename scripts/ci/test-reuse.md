@@ -5,6 +5,11 @@ and dependency audit. Schema 6 is the only supported evidence schema; earlier
 populations and former single-/two-executor workflows cannot qualify current tests.
 
 Reuse is per suite (dotnet, browser, frontend), never a reduced passing count.
+Frontend selection includes root *.test.js files and the explicit portable
+acceptance declaration in tests/frontend-tests.json. File receipts must match
+discovery exactly once with zero failures/skips; node:test subtest counts do not
+replace file identities. Acceptance helpers/suites/registry and the consumed
+browser confirmation helper invalidate frontend evidence when changed.
 An original qualification must belong to the trusted repository/workflow,
 correct execution job, exact Ubuntu 24.04 label and GitHub Actions runner group
 (name and ID 0). Checkout logs, Git commit/tree/blob
