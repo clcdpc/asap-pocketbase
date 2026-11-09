@@ -16,29 +16,19 @@ const { JSDOM } = require('jsdom');
     fs.copyFileSync(path.join(root, 'shared', 'html.js'), path.join(temporary, 'shared', 'html.js'));
     fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
     global.document = dom.window.document;
-    global.DOMParser = dom.window.DOMParser;
 
     const patron = await import(pathToFileURL(path.join(temporary, 'patron', 'js', 'html.js')));
     const shared = await import(pathToFileURL(path.join(temporary, 'shared', 'html.js')));
-    const html = '<p>Library collection</p><a href="https://example.org/help">Learn more</a><script>window.patronHtmlScriptRan = true</script><a href="javascript:alert(1)">Unsafe link</a><span onclick="alert(1)">Plain text</span>';
-    const sanitized = patron.sanitizeHtml(html);
-    assert.equal(sanitized, shared.sanitizeHtml(html), 'patron and staff must share the sanitizer');
-    const fragment = shared.sanitizedHtmlFragment(html);
+    assert.equal(patron.renderPatronText, shared.renderPatronText, 'patron and staff share the live text renderer');
     const container = document.createElement('div');
-    container.append(fragment);
-    assert.equal(container.querySelector('p').textContent, 'Library collection');
-    assert.equal(container.querySelector('a').getAttribute('href'), 'https://example.org/help');
-    assert.equal(container.querySelector('script'), null);
-    assert.equal(dom.window.patronHtmlScriptRan, undefined);
-    assert.equal(container.querySelectorAll('a')[1].hasAttribute('href'), false);
-    assert.equal(container.querySelector('span').hasAttribute('onclick'), false);
 
-    const plain = '<img src=x onerror="alert(1)"> & é\nOne line\n\nParagraph\nhttps://help.libbyapp.com/en-us/6260.htm\n(https://example.org/a?x=1&y=2). javascript:alert(1)';
+    const plain = '<img src=x onerror="alert(1)"> & é\nOne line\n\nParagraph\nhttps://help.libbyapp.com/en-us/6260.htm\n(https://example.org/a?x=1&y=2). http://example.org/help! javascript:alert(1)';
     patron.renderPatronText(container, plain);
     assert.equal(container.textContent, plain, 'Every newline, special character and literal tag must survive.');
     assert.equal(container.querySelector('img, script, p, span'), null);
-    assert.equal(container.querySelectorAll('a').length, 2);
+    assert.equal(container.querySelectorAll('a').length, 3);
     assert.equal(container.querySelectorAll('a')[1].getAttribute('href'), 'https://example.org/a?x=1&y=2');
+    assert.equal(container.querySelectorAll('a')[2].getAttribute('href'), 'http://example.org/help');
     for (const link of container.querySelectorAll('a')) {
       assert.equal(link.target, '_blank'); assert.equal(link.rel, 'noopener noreferrer');
     }
@@ -50,5 +40,5 @@ const { JSDOM } = require('jsdom');
     dom.window.close();
     fs.rmSync(temporary, { recursive: true, force: true });
   }
-  console.log('Patron and staff configured HTML sanitizer checks passed');
+  console.log('Patron and staff plain-text message rendering checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

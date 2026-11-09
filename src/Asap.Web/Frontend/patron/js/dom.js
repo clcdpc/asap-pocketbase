@@ -17,23 +17,6 @@ export function setDisabled(id, disabled) {
   if (el) el.disabled = Boolean(disabled);
 }
 
-export function setFieldValue(id, value) {
-  const el = typeof id === 'string' ? byId(id) : id;
-  if (el) el.value = value == null ? '' : String(value);
-}
-
-export function getFieldValue(id, fallback = '') {
-  const el = typeof id === 'string' ? byId(id) : id;
-  return el ? el.value : fallback;
-}
-
-export function setFieldRequired(id, required) {
-  const el = typeof id === 'string' ? byId(id) : id;
-  if (!el) return;
-  el.required = Boolean(required);
-  el.setAttribute('aria-required', required ? 'true' : 'false');
-}
-
 export function replaceChildren(idOrElement, ...children) {
   const el = typeof idOrElement === 'string' ? byId(idOrElement) : idOrElement;
   if (el) el.replaceChildren(...children);

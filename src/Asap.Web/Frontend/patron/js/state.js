@@ -10,10 +10,6 @@ export const formatSelect = document.getElementById('format');
 export const physicalFields = document.getElementById('physical-fields');
 export const econtentFields = document.getElementById('econtent-fields');
 
-export const authorInput = document.getElementById('author');
-export const titleInput = document.getElementById('title');
-export const publicationInput = document.getElementById('publication');
-
 export const defaultPublicationOptions = ['Already published', 'Coming soon', 'Published a while back'];
 export const formatKeys = ['book', 'audiobook_cd', 'dvd', 'music_cd', 'ebook', 'eaudiobook'];
 export const fieldKeys = ['title', 'author', 'identifier', 'publication'];
