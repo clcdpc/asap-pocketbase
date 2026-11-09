@@ -25,6 +25,7 @@ verified initial test-IIS activation and its evidence limits are recorded below.
 - .NET SDK 10.0.303 or the compatible SDK selected by `global.json`.
 - SQL Server 2022 for development and real-SQL tests.
 - Node.js 24 for frontend tests; installed Chromium for browser suites.
+- Python 3 on Linux for owned test subprocess cleanup (hosted CI supplies it).
 - An Entra test identity/configuration for local authenticated journeys.
 
 ## Local development

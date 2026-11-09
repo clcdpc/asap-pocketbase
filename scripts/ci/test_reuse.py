@@ -433,11 +433,28 @@ class DependencyTests(unittest.TestCase):
                      "tests/acceptance/run.cjs", "tests/acceptance/helpers/authentication.cjs",
                      "tests/acceptance/helpers/environment.cjs", "tests/acceptance/helpers/reporting.cjs",
                      "tests/acceptance/helpers/accessibility.cjs", "tests/acceptance/suites/pr410.cjs",
-                     "tests/acceptance/suites/registry.json", "tests/browser/confirmation.cjs", "tests/frontend-tests.json"):
+                     "tests/acceptance/suites/registry.json", "tests/browser/confirmation.cjs",
+                     "tests/browser/settings-format-rule-drafts.cjs", "tests/browser/settings-inheritance-interactions.cjs",
+                     "tests/browser/settings-draft-blockers.cjs", "tests/frontend-tests.json"):
             for suite in fp.SUITES:
                 before = fp.source_fingerprint([[path, "100644", "blob", "a"]], suite, config)
                 after = fp.source_fingerprint([[path, "100644", "blob", "b"]], suite, config)
                 self.assertEqual(before != after, suite in ("browser", "frontend"), (path, suite))
+
+    def test_actual_portable_runner_imports_all_have_frontend_ownership(self):
+        # Observe the bounded real module load, rather than parsing source or
+        # maintaining a second inventory of its transitive imports.
+        script = """
+            const path = require('node:path');
+            require('./tests/acceptance/run.cjs');
+            console.log(JSON.stringify(Object.keys(require.cache).map(file =>
+              path.relative(process.cwd(), file).split(path.sep).join('/'))));
+        """
+        paths = json.loads(subprocess.check_output(["node", "-e", script], cwd=fp.ROOT, text=True, timeout=15))
+        self.assertIn("tests/browser/settings-format-rule-drafts.cjs", paths)
+        config = fp.configuration()
+        for path in paths:
+            self.assertIn("frontend", fp.source_suites(path, config), "Unfingerprinted portable import: " + path)
 
     def test_frontend_only_contract_edits_preserve_native_sources_but_still_run_frontend(self):
         config = fp.configuration()

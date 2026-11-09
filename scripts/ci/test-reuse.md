@@ -9,7 +9,7 @@ Frontend selection includes root *.test.js files and the explicit portable
 acceptance declaration in tests/frontend-tests.json. File receipts must match
 discovery exactly once with zero failures/skips; node:test subtest counts do not
 replace file identities. Acceptance helpers/suites/registry and the consumed
-browser confirmation helper invalidate frontend evidence when changed.
+browser confirmation/Settings helpers invalidate frontend evidence when changed.
 An original qualification must belong to the trusted repository/workflow,
 correct execution job, exact Ubuntu 24.04 label and GitHub Actions runner group
 (name and ID 0). Checkout logs, Git commit/tree/blob

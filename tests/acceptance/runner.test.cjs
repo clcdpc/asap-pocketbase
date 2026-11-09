@@ -441,8 +441,7 @@ test('registry contracts accept reorganized scenario source without historical G
   const root = await temporary(t);
   const acceptance = path.join(root, 'tests/acceptance');
   await fs.cp(__dirname, acceptance, { recursive: true });
-  await fs.mkdir(path.join(root, 'tests/browser'), { recursive: true });
-  await fs.copyFile(path.join(repository, 'tests/browser/confirmation.cjs'), path.join(root, 'tests/browser/confirmation.cjs'));
+  await fs.cp(path.join(repository, 'tests/browser'), path.join(root, 'tests/browser'), { recursive: true });
   const suite = path.join(acceptance, 'suites/pr410.cjs');
   const source = await fs.readFile(suite, 'utf8');
   // A module-local scope changes declaration placement without changing the

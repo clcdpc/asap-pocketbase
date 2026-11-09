@@ -19,8 +19,9 @@ in addition to counters and current discovery. Disposable executable probes in
 `scripts/ci/test_selection.py` demonstrate normal discovery, exactly-once split
 execution, deliberate assertion failure, missing files, filtered execution and
 interruption. `test_reuse.py` rejects omitted/duplicate/nonpassing receipts and
-fingerprints changed acceptance helpers, suites/registry, the consumed browser
-confirmation helper and the discovery declaration. Native source separation is
+fingerprints changed acceptance helpers, suites/registry, all four consumed
+browser helpers and the discovery declaration. An actual runner module-load
+witness checks every loaded local module's frontend ownership. Native source separation is
 retained. No dependency-graph system or new evidence schema is introduced.
 
 Acceptance runner tests check exported current behavior/metadata, not historical
@@ -36,9 +37,12 @@ runtime, layout and TLS checks retain the separate prerequisites documented in
 `OwnedTestProcess` is shared by the nine unbounded browser launch sites,
 Campaign 2's explicit four-minute launch and the publication/cache wrapper.
 The requested executable, argument array, working directory and environment
-pass through a gated Node launcher. Windows assigns its job before releasing
-the gate. Linux establishes a session/process group and adopts/reaps orphaned
-group members. Cleanup uses that ownership even after launcher exit.
+pass through an owned launcher. Windows assigns its job before releasing the
+Node gate. Linux uses a dedicated Python 3 subreaper that owns only this command's
+descendants, including Chromium's detached process groups, without changing the
+test application's adoption policy. It exits only after reaping every child;
+target exit, cancellation or loss of its parent triggers cleanup. Cleanup uses
+that ownership even after the requested launcher exits.
 
 Exit plus concurrent stdout/stderr drains share the operation deadline (four
 minutes by default). Cancellation remains `OperationCanceledException` with the
@@ -48,12 +52,12 @@ output and cleanup failure accompany the original failure. Capture retains up
 to four Mi characters per stream while continuing to drain excess output.
 Existing America/New_York overrides stay at their callers.
 
-Eight deterministic native process cases cover argument/environment/timezone,
+Twelve deterministic native process cases cover argument/environment/timezone,
 working directory, normal/nonzero/startup failure, both streams beyond pipe
-capacity, cancellation, deadline and three-generation PID cleanup. The fixture
-has independent final cleanup. Linux proves inherited-pipe expiry after root
-exit; Windows Node can close its pipe endpoint at root exit, in which case
-successful completion must still remove every remaining job member.
+capacity, cancellation, deadline and three-generation PID cleanup in attached
+and detached groups. The fixture has independent final cleanup. An exited
+target can complete cleanup before its deadline, including descendants holding
+redirected handles; successful return must still remove every observed PID.
 
 Both named staff races keep their actors, input versions, blockers and outcome,
 state/event/audit assertions. Each of four scenarios observes
@@ -67,7 +71,7 @@ were changed. TRX stdout records each observed chain.
 
 | Removed source assertion family | Observable retained/replacement proof |
 | --- | --- |
-| Historical file equality, parsed old scenarios and incidental totals | Current runner behavior, registry/discovery agreement, unique callable scenarios, independent report IDs/write classifications, completeness/status tests, reorganized disposable module probe in `acceptance/runner.test.cjs` |
+| Historical file equality, parsed old scenarios and incidental totals | Current runner behavior, registry/discovery agreement, unique callable scenarios, independent report IDs/write classifications, completeness/status tests, reorganized disposable module probe with its complete imported browser modules in `acceptance/runner.test.cjs` |
 | Frontend helper names, expression spelling and URL-literal counts | `staff_dotnet_frontend.test.js` imports both detail controllers and captures one scoped candidate GET each; `staff_research.test.js` captures the exact bigint request ID sent to BIB lookup |
 | Workflow controls, routes, refresh, dialogs and profile property names | `staff_request_details`, `staff_request_actions_ui`, `staff_navigation_drafts_ui`, `staff_copy_controllers`, `staff_analytics_race_dotnet`, `staff_profile_controller`, `staff_operations_controller` and real browser journeys exercise capability restrictions, actions, scoped reads, body fields, focus, history, recovery and preferences |
 | Suggestion service/frontend function names and implementation expressions | `staff_suggestion_contract` captures lookup/configuration/create methods, paths, numeric serving scope, body, read/write cancellation ownership and exact/invalid acknowledgement IDs; retained suggestion controller/full-app tests cover stale identities, duplicate and pickup recovery, configuration races and verified BIBs |

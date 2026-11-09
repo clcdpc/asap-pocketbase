@@ -70,16 +70,20 @@ public sealed class OwnedTestProcessTests
     }
 
     [TestMethod]
-    [DataRow(false, false)]
-    [DataRow(true, false)]
-    [DataRow(false, true)]
-    [DataRow(true, true)]
-    public async Task DeadlineAndCancellationReapDescendantsIncludingExitedLaunchers(bool cancel, bool exitLauncher)
+    [DataRow(false, false, false)]
+    [DataRow(true, false, false)]
+    [DataRow(false, true, false)]
+    [DataRow(true, true, false)]
+    [DataRow(false, false, true)]
+    [DataRow(true, false, true)]
+    [DataRow(false, true, true)]
+    [DataRow(true, true, true)]
+    public async Task DeadlineAndCancellationReapDescendantsIncludingExitedLaunchers(bool cancel, bool exitLauncher, bool detached)
     {
         var directory = Directory.CreateTempSubdirectory("asap-process-regression-");
         var marker = Path.Combine(directory.FullName, "pids");
         using var cancellation = new CancellationTokenSource();
-        var command = Node(Tree, marker, "0", exitLauncher ? "exit" : "hang");
+        var command = Node(Tree, marker, "0", exitLauncher ? "exit" : "hang", detached ? "detach" : "attached");
         var elapsed = Stopwatch.StartNew();
         var running = OwnedTestProcess.RunAsync(command, cancellation.Token, TimeSpan.FromSeconds(5));
         var pids = Array.Empty<int>();
@@ -88,8 +92,12 @@ public sealed class OwnedTestProcessTests
             using var startup = new CancellationTokenSource(TimeSpan.FromSeconds(4));
             while (pids.Length != 3)
             {
-                Assert.IsFalse(running.IsCompleted, "Fixture must establish all three independently observed PIDs before expiry.");
                 pids = ReadPids(marker);
+                if (pids.Length == 3)
+                {
+                    break;
+                }
+                Assert.IsFalse(running.IsCompleted, "Fixture must establish all three independently observed PIDs before expiry.");
                 await Task.Delay(20, startup.Token);
             }
             if (exitLauncher)
@@ -98,14 +106,10 @@ public sealed class OwnedTestProcessTests
                 {
                     await Task.Delay(20, startup.Token);
                 }
-                if (OperatingSystem.IsLinux())
-                {
-                    Assert.IsFalse(running.IsCompleted, "A descendant still owns both redirected output handles.");
-                }
             }
-            // Windows Node may close its inherited pipe endpoint on launcher
-            // exit. Even on that path, successful return must kill all remaining
-            // job members. Linux retains the handles and exercises drain expiry.
+            // An exited target can be cleaned up before cancellation/deadline.
+            // The Linux reaper also owns detached groups such as Chromium's;
+            // successful return still requires every observed PID to be gone.
             if (cancel)
             {
                 cancellation.Cancel();
@@ -113,7 +117,7 @@ public sealed class OwnedTestProcessTests
             try
             {
                 var result = await running;
-                Assert.IsTrue(exitLauncher && OperatingSystem.IsWindows(), "A hanging process or retained Linux pipe must reach cancellation/deadline.");
+                Assert.IsTrue(exitLauncher, "A hanging target must reach cancellation/deadline.");
                 Assert.AreEqual(0, result.ExitCode);
                 StringAssert.Contains(result.Stdout, "partial stdout");
                 StringAssert.Contains(result.Stderr, "partial stderr");
@@ -206,12 +210,12 @@ public sealed class OwnedTestProcessTests
     private const string Tree = """
         (function tree() {
           const fs = require('node:fs'), {spawn} = require('node:child_process');
-          const [marker, depth, mode] = process.argv.slice(1);
+          const [marker, depth, mode, ownership] = process.argv.slice(1);
           fs.writeFileSync(marker+depth+'.pending', String(process.pid));
           fs.renameSync(marker+depth+'.pending', marker+depth+'.pid');
           console.log('partial stdout'); console.error('partial stderr');
-          if (Number(depth)<2) spawn(process.execPath, ['-e', '('+tree.toString()+')()', marker, String(Number(depth)+1), mode],
-            {stdio:['ignore','inherit','inherit'],windowsHide:true});
+          if (Number(depth)<2) spawn(process.execPath, ['-e', '('+tree.toString()+')()', marker, String(Number(depth)+1), mode, ownership],
+            {stdio:['ignore','inherit','inherit'],windowsHide:true,detached:ownership==='detach' && depth==='0'});
           setInterval(()=>{
             if(depth==='0' && mode==='exit' && fs.existsSync(marker+'2.pid')) process.exit(0);
           },20);

@@ -93,8 +93,10 @@ The .NET browser launch sites and publication/cache wrapper use
 OwnedTestProcess: a four-minute complete-operation deadline (Campaign 2 retains
 its explicit four minutes), concurrent bounded-memory output capture and a
 separate ten-second terminate/reap/drain budget. Caller cancellation stays
-cancellation. Windows job ownership and a Linux process group/subreaper survive
-launcher exit; partial output and cleanup errors remain in failure diagnostics.
+cancellation. Windows job ownership and a dedicated Linux Python 3 subreaper
+survive target exit, including Chromium's detached process groups; partial
+output and cleanup errors remain in failure diagnostics. Linux test execution
+requires Python 3 as supplied by hosted CI.
 Caller-specific environments, including America/New_York where configured,
 are retained. Deterministic child-process regressions run in the native core
 partition without Chromium or SQL.

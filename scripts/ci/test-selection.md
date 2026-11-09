@@ -27,7 +27,8 @@ The frontend safety/remaining split executes each selected file exactly once.
 Qualification verifies the exact discovered file list, complete per-file
 passing receipts and integer counters; filtered, interrupted, missing,
 duplicated or failed execution cannot qualify. Portable acceptance helpers,
-suite modules/registry and tests/browser/confirmation.cjs participate in the
+suite modules/registry, browser confirmation and the three imported Settings
+browser helpers participate in the
 frontend source fingerprint. Changes to those consumed inputs invalidate reuse.
 
 ## Execution and required gate

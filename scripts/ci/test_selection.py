@@ -440,7 +440,7 @@ class FrontendSafetyTests(unittest.TestCase):
                 "const fs=require('fs');process.on('SIGTERM',()=>{});"
                 "fs.writeFileSync('child.pid.pending',String(process.pid));"
                 "fs.renameSync('child.pid.pending','child.pid');setInterval(()=>{},1000);")
-            results = root / "results.json"
+            results = root / "frontend-results.json"
             env = {**os.environ, "ASAP_CI_FRONTEND_RESULTS": str(results)}
             runner = subprocess.Popen(["node", "run_all.js"], cwd=root, env=env,
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

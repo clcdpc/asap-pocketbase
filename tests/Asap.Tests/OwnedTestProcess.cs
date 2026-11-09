@@ -7,9 +7,9 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Asap.Tests;
 
-// Test environments are Windows and Linux. A gated Node launcher establishes
-// ownership before it can create the requested executable or any descendants.
-// Node is already a prerequisite of the browser/publication test population.
+// Windows gates a Node launcher until its job is assigned. Linux uses a
+// dedicated Python subreaper, so detached Chromium groups remain owned without
+// changing the test application's process-wide child/adoption policy.
 internal static class OwnedTestProcess
 {
     private const string Launcher = """
@@ -23,6 +23,60 @@ internal static class OwnedTestProcess
         });
         """;
     private static readonly TimeSpan CleanupBudget = TimeSpan.FromSeconds(10);
+    private const string LinuxLauncher = """
+        import ctypes, json, os, signal, subprocess, sys, time
+
+        stopping = False
+        def stop(_signal, _frame):
+            global stopping
+            stopping = True
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(36, 1, 0, 0, 0) != 0: # PR_SET_CHILD_SUBREAPER
+            raise OSError(ctypes.get_errno(), 'Could not establish owned child reaping')
+        signal.signal(signal.SIGTERM, stop)
+        signal.signal(signal.SIGINT, stop)
+        parent = os.getppid()
+        os.setsid()
+
+        def main():
+            if sys.stdin.readline().strip() != 'start' or stopping:
+                return 125
+            executable, arguments = json.loads(sys.argv[1])
+            try:
+                target = subprocess.Popen([executable, *arguments], stdin=subprocess.DEVNULL)
+            except OSError as error:
+                print(str(error), file=sys.stderr, flush=True)
+                return 127
+            root_code = None
+            while True:
+                # This process creates only the requested target. Every adopted
+                # child belongs to that tree, regardless of session/group changes.
+                while True:
+                    try:
+                        pid, status = os.waitpid(-1, os.WNOHANG)
+                    except ChildProcessError:
+                        return root_code if root_code is not None else 125
+                    if pid == 0:
+                        break
+                    if pid == target.pid:
+                        root_code = os.waitstatus_to_exitcode(status)
+                        target.returncode = root_code
+                if stopping or root_code is not None or os.getppid() != parent:
+                    with open('/proc/self/task/' + str(os.getpid()) + '/children') as children:
+                        owned = [int(pid) for pid in children.read().split()]
+                    for pid in owned:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    # Killing an intermediate owner adopts its descendants here.
+                    # Continue until waitpid explicitly reports no children.
+                time.sleep(0.02)
+
+        code = main()
+        sys.exit(code if code >= 0 else 128 - code)
+        """;
 
     internal static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(
         ProcessStartInfo command, CancellationToken cancellationToken = default, TimeSpan? timeout = null)
@@ -32,18 +86,12 @@ internal static class OwnedTestProcess
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         using var stopDrains = new CancellationTokenSource();
         using var job = OperatingSystem.IsWindows() ? CreateJob() : null;
-        if (OperatingSystem.IsLinux())
-        {
-            // Adopt orphaned descendants so this test process can reap its own
-            // process group, including children whose launcher exited first.
-            CheckNative(prctl(36, 1, 0, 0, 0) == 0);
-        }
-        else if (!OperatingSystem.IsWindows())
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsWindows())
         {
             throw new PlatformNotSupportedException("Owned test processes require Windows or Linux.");
         }
 
-        var start = new ProcessStartInfo(OperatingSystem.IsWindows() ? "node" : "/usr/bin/setsid")
+        var start = new ProcessStartInfo(OperatingSystem.IsWindows() ? "node" : "python3")
         {
             WorkingDirectory = command.WorkingDirectory, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
@@ -53,12 +101,8 @@ internal static class OwnedTestProcess
         {
             start.Environment[entry.Key] = entry.Value;
         }
-        if (OperatingSystem.IsLinux())
-        {
-            start.ArgumentList.Add("node");
-        }
-        start.ArgumentList.Add("-e");
-        start.ArgumentList.Add(Launcher);
+        start.ArgumentList.Add(OperatingSystem.IsWindows() ? "-e" : "-c");
+        start.ArgumentList.Add(OperatingSystem.IsWindows() ? Launcher : LinuxLauncher);
         if (!string.IsNullOrEmpty(command.Arguments))
         {
             throw new ArgumentException("Owned test commands must use ArgumentList.", nameof(command));
@@ -103,15 +147,23 @@ internal static class OwnedTestProcess
             using var cleanup = new CancellationTokenSource(CleanupBudget);
             try
             {
+                process.StandardInput.Close();
                 if (job is not null)
                 {
                     CheckNative(TerminateJobObject(job, 1));
                 }
-                else
+                else if (!process.HasExited)
                 {
-                    // Group ownership survives the root exiting. HasExited and
-                    // Process.Kill(entireProcessTree) cannot establish that fact.
-                    CheckNative(kill(-process.Id, 9) == 0 || Marshal.GetLastPInvokeError() == 3);
+                    CheckNative(kill(process.Id, 15) == 0 || Marshal.GetLastPInvokeError() == 3);
+                    try
+                    {
+                        await process.WaitForExitAsync(cleanup.Token).WaitAsync(TimeSpan.FromSeconds(5));
+                    }
+                    catch (TimeoutException)
+                    {
+                        cleanupFailure = "Linux child reaper did not finish; forcing its remaining process tree to stop.";
+                        process.Kill(entireProcessTree: true);
+                    }
                 }
                 if (!process.HasExited)
                 {
@@ -125,7 +177,10 @@ internal static class OwnedTestProcess
                     }
                 }
                 await process.WaitForExitAsync(cleanup.Token);
-                while (HasOwnedProcesses(job, process.Id))
+                // Linux's dedicated reaper exits only after waitpid reports
+                // ECHILD for its complete tree, including detached/adopted PIDs.
+                // A forced fallback above is always reported as cleanup failure.
+                while (job is not null && HasOwnedProcesses(job))
                 {
                     await Task.Delay(20, cleanup.Token);
                 }
@@ -201,21 +256,10 @@ internal static class OwnedTestProcess
         }
     }
 
-    private static bool HasOwnedProcesses(SafeFileHandle? job, int group)
+    private static bool HasOwnedProcesses(SafeFileHandle job)
     {
-        if (job is not null)
-        {
-            CheckNative(QueryInformationJobObject(job, 1, out var accounting, Marshal.SizeOf<JobAccounting>(), IntPtr.Zero));
-            return accounting.ActiveProcesses != 0;
-        }
-        // The root has been reaped by Process.WaitForExitAsync. Reap only
-        // adopted descendants in this owned group, never other test children.
-        while (waitpid(-group, out _, 1) > 0)
-        {
-        }
-        var result = kill(-group, 0);
-        CheckNative(result == 0 || Marshal.GetLastPInvokeError() == 3);
-        return result == 0;
+        CheckNative(QueryInformationJobObject(job, 1, out var accounting, Marshal.SizeOf<JobAccounting>(), IntPtr.Zero));
+        return accounting.ActiveProcesses != 0;
     }
 
     private static SafeFileHandle CreateJob()
@@ -283,8 +327,4 @@ internal static class OwnedTestProcess
     private static extern bool TerminateJobObject(SafeFileHandle job, uint exitCode);
     [DllImport("libc", SetLastError = true)]
     private static extern int kill(int pid, int signal);
-    [DllImport("libc", SetLastError = true)]
-    private static extern int waitpid(int pid, out int status, int options);
-    [DllImport("libc", SetLastError = true)]
-    private static extern int prctl(int option, ulong arg2, ulong arg3, ulong arg4, ulong arg5);
 }
