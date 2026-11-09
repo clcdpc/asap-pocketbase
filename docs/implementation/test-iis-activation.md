@@ -153,11 +153,21 @@ the IIS site. Use narrow ACLs rather than broad inherited access.
 | `D:\Sites\ASAP` | Read and execute | Modify |
 | `Config\application.json` | Read | Read |
 | `Config\deployment.json` | None | Read |
-| `Config\deployment-state.json` | None | Create and modify |
+| `Config\deployment-state.json` and its unique `.tmp`/`.bak` siblings | None | Read, write, delete/rename; replacement sibling also needs WRITE_DAC |
 | `DataProtection-Keys` | Read, create, and modify | Read/traverse for preflight |
 | `Logs` | Create and modify | As required for diagnostics |
 | `Staging` | None | Create, modify, and delete |
 | `Backups` | None | Create and modify |
+
+Receipt publication needs create-file/list/traverse rights in its parent and
+delete rights on the receipt and its temporary/backup siblings. Keep unrelated
+configuration files explicitly read-only, with protected ACLs when parent
+inheritance grants sibling file rights. Do not grant parent DeleteChild or broad
+Modify over `Config`: that could permit deleting the read-only configuration.
+The replacement file needs WRITE_DAC to preserve the existing receipt DACL;
+metadata/ACL merge errors remain fatal. The deployment script does not change
+host ACLs. `tests/test_deployment_receipts.ps1` verifies this layout with a native
+Windows disposable ACL fixture under the current deployment-like token.
 
 Restrict configuration-file modification to administrators. Grant the
 deployment identity permission to query the `ASAP` site and app pool and to
@@ -576,7 +586,9 @@ idempotent when readiness is healthy. Backups are not automatically pruned.
   issue, use a permitted intentional dispatch after checking the recorded state.
 - For failed activation, inspect the failing Actions step, uploaded SQL plan
   (seven-day retention), retained host plan/backup paths and last successful
-  `deployment-state.json`. No failed/skipped run writes a successful state.
+  `deployment-state.json` and any reported receipt recovery candidates. A failed
+  run or uncertain publication cannot establish deployment success from a
+  receipt alone; a skipped run leaves previous state untouched.
 - Package, configuration, path, IIS, SQL, or pointer preflight failures occur
   before the app pool is stopped and leave the live site untouched.
 - A failed backup leaves the pool untouched. A stop failure before any schema
@@ -588,6 +600,19 @@ idempotent when readiness is healthy. Backups are not automatically pruned.
   Inspect SQL/files and confirm compatibility before separately authorizing recovery.
 - A readiness or state-write failure also stops the pool, retains new files and
   the prior web backup for repair-forward, and does not report deployment success.
+  State writing serializes the complete UTF-8 (no BOM) receipt, flushes/closes a
+  unique sibling temporary file, then renames it for initial creation or uses
+  same-volume `File.Replace` with a unique backup for an existing receipt. Only
+  confirmed publication permits disposal of that previous-receipt backup.
+  Publication errors retain every remaining temporary/backup/destination
+  candidate and identify their paths. Windows replacement can fail after renaming
+  the old destination; do not delete candidates or automatically retry activation.
+  Inspect the candidates and installed SQL/web state under operator review.
+  See [ReplaceFileW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew)
+  and [File.Replace](https://learn.microsoft.com/en-us/dotnet/api/system.io.file.replace?view=net-10.0)
+  for partial-failure and ACL semantics. This does not make Web/database deployment
+  atomic, provide rollback, or guarantee power-loss durability. An older receipt
+  is historical evidence and cannot establish installed contents or current health.
 - Recovery failures report uncertain pool state while retaining the original
   deployment error and backup path. A terminated/killed runner cannot guarantee
   catch/finally recovery. This implementation does not inspect or repair a pool

@@ -32,6 +32,11 @@ childProcess.execFileSync(
   ['-NoLogo', '-NoProfile', '-File', path.join(__dirname, 'test_deployment_automatic.ps1')],
   { stdio: 'inherit' }
 );
+childProcess.execFileSync(
+  'pwsh',
+  ['-NoLogo', '-NoProfile', '-File', path.join(__dirname, 'test_deployment_receipts.ps1')],
+  { stdio: 'inherit' }
+);
 
 assert.ok(workflow.includes("tags:\n      - 'v*.*.*'"), 'all release tags must qualify every category');
 assert.deepEqual(YAML.parse(workflow).on.push.branches, ['main'], 'only the supported main branch has push qualification');

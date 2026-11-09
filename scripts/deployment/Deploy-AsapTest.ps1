@@ -1232,6 +1232,20 @@ function Test-Ready {
     return $false
 }
 
+function Publish-DeploymentStateFile {
+    param([string] $TemporaryPath, [string] $Path, [string] $BackupPath)
+
+    if ([IO.File]::Exists($Path)) {
+        # All three siblings are on the same volume. Do not ignore ACL/metadata
+        # errors. A backup is essential for ReplaceFile's partial-failure states.
+        [IO.File]::Replace($TemporaryPath, $Path, $BackupPath, $false)
+    }
+    else {
+        # First publication must not overwrite a concurrently created receipt.
+        [IO.File]::Move($TemporaryPath, $Path)
+    }
+}
+
 function Write-DeploymentState {
     param(
         [Parameter(Mandatory = $true)]
@@ -1263,7 +1277,31 @@ function Write-DeploymentState {
         } else { $null }
     }
     $json = $state | ConvertTo-Json -Depth 3
-    [IO.File]::WriteAllText($Path, $json, [Text.UTF8Encoding]::new($false))
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($json)
+    $Path = [IO.Path]::GetFullPath($Path)
+    $suffix = [guid]::NewGuid().ToString('N')
+    $temporaryPath = "$Path.$suffix.tmp"
+    $backupPath = "$Path.$suffix.bak"
+    $operation = 'write/flush temporary receipt'
+    try {
+        $stream = [IO.FileStream]::new($temporaryPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try {
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        }
+        finally { $stream.Dispose() }
+        $operation = 'publish receipt'
+        Publish-DeploymentStateFile -TemporaryPath $temporaryPath -Path $Path -BackupPath $backupPath
+    }
+    catch {
+        # ReplaceFile can leave the destination absent or renamed. Retain every
+        # candidate, even when the result is uncertain; never retry activation.
+        throw [IO.IOException]::new("Could not $operation at '$Path'. Retained recovery candidates (if present): '$temporaryPath', '$backupPath', '$Path'. Publication outcome may be uncertain; a historical receipt does not establish installed contents or host health. $($_.Exception.Message)", $_.Exception)
+    }
+    if ([IO.File]::Exists($backupPath)) {
+        try { [IO.File]::Delete($backupPath) }
+        catch { Write-Warning "Receipt published at '$Path'; could not remove previous-receipt backup '$backupPath': $($_.Exception.Message)" }
+    }
 }
 
 function Invoke-TestDeployment {

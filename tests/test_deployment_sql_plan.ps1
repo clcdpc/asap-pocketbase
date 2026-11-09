@@ -166,7 +166,7 @@ try {
     $archive = [pscustomobject]@{
         DacpacPath = $dacpac; DacpacHash = (Get-FileHash $dacpac).Hash.ToLowerInvariant()
         StagingPath = Join-Path $fixture 'staging'; WebRoot = Join-Path $fixture 'staging/web'
-        Manifest = [pscustomobject]@{ commitSha = 'a' * 40; versionOrLabel = 'fixture' }; ZipHash = 'b' * 64
+        Manifest = [pscustomobject]@{ commitSha = 'a' * 40; versionOrLabel = 'fixture'; dacpacSha256 = 'd' * 64 }; ZipHash = 'b' * 64
         HangfireScriptPath = Join-Path $fixture 'hangfire.sql'
     }
     $script:nativeCalls.Clear()
@@ -335,6 +335,7 @@ $ReadinessTimeoutSeconds = 1; $ReadinessPollSeconds = 1
 
     # Recovery tests exercise the real activation control flow with narrow host
     # boundaries. No IIS module, SQL connection or real application is used.
+    $script:receiptWriter = (Get-Command Write-DeploymentState).ScriptBlock
     $script:events = [Collections.Generic.List[string]]::new()
     $script:fault = ''; $script:poolState = 'Started'; $script:stopCalls = 0
     function Get-WebAppPoolState { [CmdletBinding()] param([string] $Name) [pscustomobject]@{ Value = $script:poolState } }
@@ -354,11 +355,23 @@ $ReadinessTimeoutSeconds = 1; $ReadinessPollSeconds = 1
     function Get-HangfireSchemaVersion { param($SqlCmdPath, $ConnectionString) if ($script:fault -eq 'version') { return 8 }; return 9 }
     function Replace-WebPayload { param($StagedWebRoot, $DeploymentPath) $script:events.Add('replace'); if ($script:fault -eq 'replace') { throw 'fixture replace failure' } }
     function Test-Ready { param($Uri, $TimeoutSeconds, $PollSeconds) $script:events.Add('ready'); return $script:fault -ne 'ready' }
-    function Write-DeploymentState { param($Path, $Manifest, $ZipHash, $Source) $script:events.Add('state'); if ($script:fault -eq 'state') { throw 'fixture state failure' } }
+    function Write-DeploymentState {
+        param($Path, $Manifest, $ZipHash, $Source)
+        $script:events.Add('state')
+        if ($script:fault -eq 'state') {
+            # Exercise a real writer filesystem failure after readiness, then
+            # verify the owning activation path stops the mutated host.
+            try {
+                & $script:receiptWriter -Path (Join-Path $fixture 'missing-parent/state.json') `
+                    -Manifest $Manifest -ZipHash $ZipHash -Source $Source
+            }
+            catch { $script:receiptFailureMessage = $_.Exception.Message; throw }
+        }
+    }
     $activation = @{ Config = $config; Archive = $archive; NeedsDacpac = $true; NeedsHangfire = $true; TimeoutSeconds = 1; PollSeconds = 1 }
     foreach ($initial in @('Started', 'Stopped')) {
         foreach ($fault in @('', 'backup', 'stop', 'dacpac', 'hangfire', 'version', 'replace', 'ready', 'state')) {
-            $script:poolState = $initial; $script:fault = $fault; $script:events.Clear(); $script:stopCalls = 0
+            $script:poolState = $initial; $script:fault = $fault; $script:events.Clear(); $script:stopCalls = 0; $script:receiptFailureMessage = ''
             if ($fault -eq '') {
                 Invoke-TestDeployment @activation
                 Assert-True (($script:events -join ',') -eq 'backup,stop,dacpac,hangfire,replace,start,ready,state') 'Success requires ordered schema/web activation, readiness and durable state.'
@@ -370,6 +383,11 @@ $ReadinessTimeoutSeconds = 1; $ReadinessPollSeconds = 1
                 Assert-True ($script:poolState -eq $expectedState) "Unsafe recovery for initial=$initial, fault=$fault."
                 if ($fault -in @('backup', 'stop')) { Assert-True (-not $script:events.Contains('dacpac')) 'No SQL mutation may follow a backup/stop failure.' }
                 if ($fault -notin @('ready', 'state')) { Assert-True (-not $script:events.Contains('state')) 'A failed deployment must not record success.' }
+                if ($fault -eq 'state') {
+                    Assert-True ($script:receiptFailureMessage -like '*Could not write/flush temporary receipt*') 'The state fault must exercise the real filesystem writer failure.'
+                    Assert-True (($script:events -join ',') -eq 'backup,stop,dacpac,hangfire,replace,start,ready,state,stop') 'A receipt write failure after readiness must stop once, without repeated activation.'
+                    Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture 'missing-parent/state.json'))) 'Writer failure must not claim a complete success receipt.'
+                }
             }
         }
     }
