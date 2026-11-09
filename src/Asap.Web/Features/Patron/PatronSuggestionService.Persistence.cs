@@ -729,7 +729,7 @@ public sealed partial class PatronSuggestionService
         }
 
         throw new PatronFlowException(403, policy.PatronCodeEligibilityMessage,
-            new { code = "patron_ineligible" });
+            new { code = "patron_ineligible", message = policy.PatronCodeEligibilityMessage });
     }
 
     private async Task EnforceLimitAsync(
