@@ -34,18 +34,27 @@ frontend source fingerprint. Changes to those consumed inputs invalidate reuse.
 ## Stable worker partitions
 
 After authoritative category discovery, selection.py assigns each method using
-`SHA256("asap-method-v1-33\n" + fullyQualifiedMethod)[0] % 2` (0 = A, 1 = B).
-The seed is frozen from PR #504 TRX timings: approximately 675.54/678.89 seconds
-non-browser and 673.34/661.77 seconds browser. Counts did not determine balance.
-All data rows of one method stay together. Individual browser scenarios retain
+`SHA256("asap-method-v1-116\n" + fullyQualifiedMethod)[0] % 2` (0 = A, 1 = B).
+The seed is frozen from PR #504 and the first partition run TRX timings:
+projected PR #504 workloads are 680.02/674.41 seconds non-browser and
+679.32/655.80 seconds browser; the newer run projects 500.22/483.04 and
+584.93/618.63 seconds respectively. Counts did not determine balance.
+All data rows of one method stay together.
+`WeeklySummaryRetainsCommittedOutboxWhenImmediateDispatchFails` uses
+`NormalWeeklySummaryUsesBusinessPeriodAndQueuesOnlyOnceForCurrentRecipient`
+as its method anchor, keeping both in native order in the same process. The
+ordinary summary establishes durable global-recipient dedupe consumed by the
+dispatch-failure test; splitting them exposes the fixture's opted-in global
+admin as an extra recipient. METHOD_ANCHORS is explicit, fingerprinted and
+verified against discovery; a partial/cross-category group fails closed. Individual browser scenarios retain
 their internal ordering; fixture initialization/cleanup runs independently in
 each process. The large PatronJourneyTests partial class cannot stay on one
-worker without preserving the old bottleneck. Its methods use independent
-per-test state; shared fixture setup is repeated in each isolated SQL container.
+worker without preserving the old bottleneck. Shared fixture setup is repeated in each isolated SQL container; the documented
+weekly-recipient state group remains together.
 
 New methods/rows enter the discovered population automatically. Each pair must
 be nonempty, disjoint and cover its entire category. Full selection schema 3
-binds sorted UIDs, exact identities, population digest, algorithm, seed and bucket.
+binds sorted UIDs, exact identities, population digest, algorithm, seed, anchor-definition digest and bucket.
 Non-browser execution passes MTP `--filter-uid` through an SDK response file
 (one token per line); browser execution uses the same selected native UIDs.
 Every worker rediscovers all categories at verification and checks its exact

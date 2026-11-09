@@ -18,23 +18,32 @@ state is introduced.
 
 Authoritative MTP discovery and the reviewed category contract first establish
 the complete disjoint non-browser/browser populations. Within each category,
-`SHA256("asap-method-v1-33\n" + fullyQualifiedMethod)[0] % 2` assigns A/B.
-This frozen seed was selected using summed method durations in PR #504's
-successful native TRX files, rather than counts. No historical artifacts or
+`SHA256("asap-method-v1-116\n" + fullyQualifiedMethod)[0] % 2` assigns A/B.
+This frozen seed was selected using summed method durations from PR #504 and
+the first full partition execution, rather than counts. No historical artifacts or
 timings are runtime inputs. New methods and parameter rows are discovered and
 assigned automatically; all rows of a method stay together. The large partial
 PatronJourneyTests class is split by method, with fixture initialization repeated
 inside each independent process/database. Internal browser scenario order is
-unchanged. Each method owns its test state.
+unchanged. One existing state dependency must remain together: the dispatch-failure
+weekly summary method hashes using the preceding NormalWeeklySummary method
+as its anchor. The ordinary summary establishes global-recipient dedupe that
+the following method consumes. Both retain native ordering in one process; no
+test behavior/assertions are changed. Missing or cross-category anchors fail
+discovery, and the anchor definitions are fingerprinted.
 
 | Population | A cases | B cases | Baseline A test time | Baseline B test time |
 | --- | ---: | ---: | ---: | ---: |
-| Non-browser | 831 | 806 | 675.54 s | 678.89 s |
-| Browser | 34 | 25 | 673.34 s | 661.77 s |
+| Non-browser | 793 | 844 | 680.02 s | 674.41 s |
+| Browser | 16 | 43 | 679.32 s | 655.80 s |
 
 These counts describe the discovered baseline, not expected-count constants.
 The estimates omit repeated setup, runner variation and queuing; they do not
-prove a 15–18 minute completion time.
+prove a 15–18 minute completion time. The first partition execution exposed
+the weekly fixture dependency and uneven timing; one focused rebalance also
+uses that run's TRX durations, projecting 500.22/483.04 seconds non-browser and
+584.93/618.63 seconds browser. Both evidence sets stay balanced. Final hosted
+measurements are required to confirm the revised split.
 
 Execution selects exact native UIDs with MTP `--filter-uid`. The .NET selector
 uses a token-per-line SDK response file to avoid command length limits.
@@ -46,8 +55,8 @@ overlapping, changed, interrupted, skipped or substituted populations fail.
 
 Evidence schema 7 has fixed `dotnet_a`, `dotnet_b`, `browser_a`, `browser_b` and
 `frontend` suite/executor identities. Native selection schema 3 binds each
-partition's sorted UIDs, hashed identities, population digest, algorithm, seed
-and bucket. Old whole-suite evidence and opposite-partition evidence cannot
+partition's sorted UIDs, hashed identities, population digest, algorithm, seed,
+anchor-definition digest and bucket. Old whole-suite evidence and opposite-partition evidence cannot
 qualify a partition. Source inputs and the full workflow execution contract
 continue to invalidate incompatible originals. Every reused partition is
 independently revalidated at its worker's gate; all 32 fresh/reused combinations

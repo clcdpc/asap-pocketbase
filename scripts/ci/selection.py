@@ -19,10 +19,16 @@ ALL = ["core"]
 FILTERS = {key: f"TestCategory={value}" for key, value in CATEGORIES.items()}
 FILTERS["core"] = "&".join(f"TestCategory!={value}" for value in CATEGORIES.values())
 APPLICATION = "tests/Asap.Tests/bin/Release/net10.0/Asap.Tests.dll"
-# Frozen after balancing PR #504's native TRX durations (not test counts).
+# Frozen after balancing PR #504 and the first partition run's native TRX durations.
 # All data rows of a method share a worker; newly discovered methods are assigned automatically.
-PARTITION_SEED = "asap-method-v1-33"
+PARTITION_SEED = "asap-method-v1-116"
 NATIVE_SUITES = ("dotnet_a", "dotnet_b", "browser_a", "browser_b")
+# The ordinary summary creates global-recipient dedupe evidence consumed by the
+# following dispatch-failure test. Preserve their native order in one process.
+METHOD_ANCHORS = {
+    "Asap.Tests.Integration.PatronJourneyTests.WeeklySummaryRetainsCommittedOutboxWhenImmediateDispatchFails":
+        "Asap.Tests.Integration.PatronJourneyTests.NormalWeeklySummaryUsesBusinessPeriodAndQueuesOnlyOnceForCurrentRecipient",
+}
 
 
 class SelectionError(ValueError):
@@ -212,10 +218,16 @@ def validate_partitions(catalog, partitions, reviewed):
 
 
 def worker_partition(method):
-    return hashlib.sha256((PARTITION_SEED + "\n" + method).encode("utf-8")).digest()[0] % 2
+    identity = METHOD_ANCHORS.get(method, method)
+    return hashlib.sha256((PARTITION_SEED + "\n" + identity).encode("utf-8")).digest()[0] % 2
 
 
 def worker_populations(partitions):
+    categories = {value["method"]: category for category, tests in partitions.items() for value in tests.values()}
+    for method, anchor in METHOD_ANCHORS.items():
+        require((method not in categories and anchor not in categories) or
+                (method in categories and anchor in categories and categories[method] == categories[anchor]),
+                "A state-dependent test group is incomplete or crosses categories")
     workers = {}
     for category, suite in (("core", "dotnet"), ("browser", "browser")):
         tests = partitions[category]
@@ -245,7 +257,8 @@ def population(selected, root=ROOT):
         # The full disjoint union is validated above on every invocation. Its
         # unrelated partition must not become an input to this suite's reuse key.
         suites[suite] = {"filter": FILTERS[category], "minimum": len(tests), "expected": len(tests),
-                         "uids": tests, "partition": {"algorithm": "sha256-method-v1", "seed": PARTITION_SEED,
+                         "uids": tests, "partition": {"algorithm": "sha256-method-anchor-v1", "seed": PARTITION_SEED,
+                                                       "anchors": digest(METHOD_ANCHORS),
                                                        "bucket": 0 if suite.endswith("_a") else 1},
                          "identities": sorted(digest(uid) for uid in tests),
                          "population": digest({uid: catalog[uid] for uid in tests})}

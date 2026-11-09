@@ -372,6 +372,13 @@ class PopulationIdentityTests(unittest.TestCase):
         with mock.patch.object(policy, "worker_partition", return_value=0), self.assertRaises(policy.SelectionError):
             self.population()
 
+    def test_group_definition_changes_invalidate_every_partition_identity(self):
+        before = self.population()
+        with mock.patch.dict(policy.METHOD_ANCHORS, {"Asap.Tests.core.Case0": "Asap.Tests.core.Case1"}):
+            changed = self.population()
+        for suite in policy.NATIVE_SUITES:
+            self.assertNotEqual(before[suite]["partition"], changed[suite]["partition"])
+
 
 class PopulationTests(unittest.TestCase):
     @classmethod
@@ -401,6 +408,19 @@ class PopulationTests(unittest.TestCase):
         self.assertEqual(owned, set(self.catalog))
         for category, kind in (("core", "dotnet"), ("browser", "browser")):
             self.assertEqual(set(workers[kind + "_a"]) | set(workers[kind + "_b"]), set(self.partitions[category]))
+
+    def test_weekly_recipient_state_group_stays_together_and_cannot_lose_its_anchor(self):
+        workers = policy.worker_populations(self.partitions)
+        for method, anchor in policy.METHOD_ANCHORS.items():
+            methods = {value["method"] for value in self.catalog.values()}
+            self.assertTrue({method, anchor} <= methods)
+            self.assertEqual(policy.worker_partition(method), policy.worker_partition(anchor))
+            owner = next(tests for tests in workers.values() if any(value["method"] == method for value in tests.values()))
+            self.assertIn(anchor, {value["method"] for value in owner.values()})
+            parts = copy.deepcopy(self.partitions)
+            parts["core"] = {uid: value for uid, value in parts["core"].items() if value["method"] != anchor}
+            with self.assertRaises(policy.SelectionError):
+                policy.worker_populations(parts)
 
     def test_native_uid_filter_executes_the_exact_selected_population(self):
         workers = policy.worker_populations(self.partitions)
