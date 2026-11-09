@@ -12,16 +12,16 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
   getNavigationGeneration = () => 0, refreshCurrentStaff = async () => null, request: send = authorizedJson }) {
   const reads = createLatestLoad();
   let lease = null, current = null, actor = null, returnFocus = null, activeAttempt = null;
-  let drafts = createDraftScope(), forms = new WeakMap(), disposed = false, targetGeneration = 0;
+  let drafts = createDraftScope(), assignmentEditor = null, disposed = false, targetGeneration = 0;
 
   function isPresentationCurrent(mounted, owner) { return !disposed && mounted?.isCurrent() && sessionIdentity.isCurrent(owner); }
   function isCurrentDialogSelection(request) {
     return isPresentationCurrent(lease, actor) && host.isOpen() && current?.id === request.id;
   }
   function isCurrentDialogRequest(request) { return isCurrentDialogSelection(request) && current.version === request.version; }
-  function invalidate() { targetGeneration++; reads.begin('detail-target').abort(); reads.begin('detail').abort(); reads.begin('assignment-candidates').abort(); }
+  function invalidate() { targetGeneration++; reads.begin('detail-target').abort(); reads.begin('detail').abort(); reads.begin('assignment-candidates').abort(); retireAssignmentEditor(); }
   function resetDrafts() {
-    reads.begin('assignment-candidates').abort(); drafts.dispose(); drafts = createDraftScope(); forms = new WeakMap();
+    reads.begin('assignment-candidates').abort(); retireAssignmentEditor(); drafts.dispose(); drafts = createDraftScope();
   }
   function disposeMounted() {
     invalidate(); drafts.dispose(); current = null; actor = null; returnFocus = null; activeAttempt = null; lease = null;
@@ -101,12 +101,16 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
   function trackDialogFormDraft(form) {
     const baseline = [...form.querySelectorAll('input, select, textarea')].map(control => ({ control, value: control.value }));
     const draft = drafts.register({ root: form, isDirty: () => baseline.some(item => item.control.value !== item.value) });
-    forms.set(form, draft); return draft;
+    return draft;
   }
-  function cancelDialogFormDraft(form, target) {
-    if (!form.isConnected || activeAttempt || !isPresentationCurrent(lease, actor)) return;
-    drafts.release(forms.get(form)); form.remove(); if (target?.isConnected) target.focus();
-    announce('Unsaved request changes discarded.');
+  function isAssignmentEditorCurrent(editor) {
+    return assignmentEditor === editor && editor.scope === drafts && editor.mounted === lease &&
+      isCurrentDialogRequest(editor.request) && lease.content.contains(editor.form) && drafts.owns(editor.draft);
+  }
+  function retireAssignmentEditor() {
+    const editor = assignmentEditor;
+    assignmentEditor = null;
+    if (editor) { editor.scope.release(editor.draft); editor.form.remove(); }
   }
   function disableControls(mounted) {
     const controls = [...mounted.content.querySelectorAll('input, select, textarea, button')].map(control => ({ control, disabled: control.disabled }));
@@ -299,13 +303,16 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
 
   async function showAdditionalCopyAssignment(request, returnFocus) {
     if (!isCurrentDialogRequest(request, 'additional_copy') || activeAttempt) return;
+    if (assignmentEditor && !isAssignmentEditorCurrent(assignmentEditor)) retireAssignmentEditor();
+    if (!allowRequestMutation(request, { consumes: assignmentEditor?.draft ?? null })) return;
+    if (assignmentEditor) { assignmentEditor.select.focus(); return; }
     const load = reads.begin('assignment-candidates');
     announce('Loading eligible staff...');
     try {
       const result = await send(`/api/asap/staff/assignment-candidates?libraryOrgId=${request.libraryOrgId}`, {
         signal: load.signal
       });
-      if (!load.isCurrent() || !isCurrentDialogRequest(request, 'additional_copy') || activeAttempt) return;
+      if (!load.isCurrent() || !allowRequestMutation(request, { consumes: null })) return;
       const select = element('select', { 'aria-label': 'Assign additional-copy task' });
       const candidates = byDisplayLabel(result.candidates, item => item.displayName || item.userPrincipalName || `Staff ${item.id}`);
       for (const candidate of candidates) {
@@ -318,11 +325,18 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
         labeledInput('Assign task', select),
         element('button', { type: 'submit', className: 'primary-button', disabled: candidates.length === 0 }, [icon('user-plus'), 'Assign'])
       ]);
-      form.append(commandButton('Cancel', 'times', () => cancelDialogFormDraft(form, returnFocus)));
       const draft = trackDialogFormDraft(form);
+      const editor = { form, select, draft, request, scope: drafts, mounted: lease };
+      assignmentEditor = editor;
+      form.append(commandButton('Cancel', 'times', () => {
+        if (activeAttempt || !isAssignmentEditorCurrent(editor)) return;
+        retireAssignmentEditor();
+        if (returnFocus?.isConnected && lease.content.contains(returnFocus)) returnFocus.focus();
+        announce('Unsaved request changes discarded.');
+      }));
       form.addEventListener('submit', async event => {
         event.preventDefault();
-        if (!form.isConnected || !isCurrentDialogRequest(request, 'additional_copy')) return;
+        if (!isAssignmentEditorCurrent(editor)) return;
         await mutateAdditionalCopy(request, 'assign', 'Additional-copy task assigned.', {
           assigneeId: select.value
         }, draft);
