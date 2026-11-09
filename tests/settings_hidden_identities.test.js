@@ -1,19 +1,10 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { pathToFileURL } = require('node:url');
-const { JSDOM } = require('jsdom');
+const { fixture } = require('./helpers/staff-controller.cjs');
 
-(async () => {
-  const frontend = path.resolve(__dirname, '../src/Asap.Web/Frontend');
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-hidden-identities-'));
-  fs.cpSync(path.join(frontend, 'staff'), path.join(temporary, 'staff'), { recursive: true });
-  fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}\n');
+fixture(async ({ load }) => {
+  let editors;
   try {
-    const { createSettingsDomainEditors } = await import(pathToFileURL(path.join(temporary, 'staff/js/settings-domains.js')));
-    const dom = new JSDOM(fs.readFileSync(path.join(frontend, 'staff/index.html'), 'utf8'), { url: 'https://localhost/staff/' });
-    global.window = dom.window; global.document = dom.window.document; global.Node = dom.window.Node;
+    const { createSettingsDomainEditors } = await load('settings-domains');
     const root = document.getElementById('settings-view');
     const uuid = number => number.toString(16).padStart(32, '0');
     const empty = { exists: false, values: [] };
@@ -31,7 +22,7 @@ const { JSDOM } = require('jsdom');
       formatRules: [{ code: format.code, customFields: { [field.key]: { mode: 'required', labelOverride: 'Saved rule' } } }],
       origins: [], autoClaimRules: [] }, effective: { formats: [format], externalSearchProviders: [], customFields: [field] },
       patronCodeChoices: [], autoClaimStaff: [] };
-    const editors = createSettingsDomainEditors({ root });
+    editors = createSettingsDomainEditors({ root });
     const click = id => root.querySelector('#' + id).click();
     const last = id => root.querySelector('#' + id).lastElementChild;
     const change = (control, value) => { control.value = value; control.dispatchEvent(new window.Event('input', { bubbles: true })); };
@@ -110,10 +101,8 @@ const { JSDOM } = require('jsdom');
       root.querySelector(selector).remove();
       assert.throws(() => editors.collect(), /incomplete/, 'Missing explicit controls cannot silently shift/default serialized fields.');
     }
-    editors.dispose();
-    dom.window.close();
     console.log('Hidden editor identities, forced collisions, stable retries, rename/reorder, delete/re-add and reset/discard passed');
   } finally {
-    fs.rmSync(temporary, { recursive: true, force: true });
+    editors?.dispose();
   }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+}).catch(error => { console.error(error); process.exitCode = 1; });

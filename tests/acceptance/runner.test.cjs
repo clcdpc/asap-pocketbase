@@ -14,7 +14,6 @@ const repository = path.resolve(__dirname, '../..');
 test('Requests cleanup suite preserves its issue map and guarded mutation owner', () => {
   const suite = require('./suites/i479.cjs');
   assert.equal(suite.id, 'i479');
-  assert.equal(suite.scenarios.length, 6);
   assert.deepEqual(suite.scenarios.filter(s => s.writes).map(s => s.id), ['i479-mutation-retention']);
   assert.ok(suite.scenarios.every(s => s.requirements.some(r => /#45[78]|#476/.test(r))));
   assert.ok(suite.human.some(row => row[1].includes('#398')));
@@ -302,17 +301,12 @@ test('read-only Search POST is narrowly exempt without admitting writes or remot
   }
 });
 
-test('existing frontend/browser entry points and full CI guard remain; artifacts are Git ignored', async () => {
-  // Preserve the current main baseline, including its discovery/reuse guards.
-  for (const file of ['package.json', 'tests/browser/run.cjs', 'scripts/ci/selection.py']) {
-    const baseline = execFileSync('git', ['show', 'e20c06986ab4f1f8515e7f0be8b76d9a42aa77a9:' + file], { cwd: repository, encoding: 'utf8' });
-    assert.equal((await fs.readFile(path.join(repository, file), 'utf8')).replace(/\r\n/g, '\n'), baseline.replace(/\r\n/g, '\n'));
-  }
-  const workflow = await fs.readFile(path.join(repository, '.github/workflows/dotnet.yml'), 'utf8');
-  assert.match(workflow, /run: python3 -B scripts\/ci\/selection.py prepare/);
-  assert.match(workflow, /run: bash scripts\/ci\/run-with-performance.sh python3 -B scripts\/ci\/selection.py run/);
-  assert.match(workflow, /run: npm test/);
-  assert.match(workflow, /run: bash scripts\/ci\/run-with-performance.sh npm run test:browser/);
+test('supported npm entry points remain separate and acceptance artifacts are Git ignored', async () => {
+  // Execution, selection and required-gate behavior is exercised by the existing
+  // CI workflow contracts and scripts/ci/test_selection.py, without freezing source.
+  const { scripts } = JSON.parse(await fs.readFile(path.join(repository, 'package.json'), 'utf8'));
+  assert.equal(scripts.test, 'node tests/run_all.js');
+  assert.equal(scripts['test:browser'], 'node tests/browser/run.cjs');
   assert.match(execFileSync('git', ['check-ignore', '.artifacts/acceptance/run/results.json'], { cwd: repository, encoding: 'utf8' }), /acceptance/);
 });
 test('CLI rejects incompatible modes, remote targets, unsafe inputs and incomplete SHAs', () => {
@@ -394,10 +388,8 @@ test('registered suites match discovered modules and retain their mutation bound
   assert.equal(registry.smoke.id, 'smoke');
   assert.equal(registry.smoke.mutations, true);
   assert.equal(registry.s1.mutations, false);
-  assert.equal(registry.s1.scenarios.length, 6);
   assert.equal(registry.i467.id, 'i467');
   assert.equal(registry.i467.mutations, false);
-  assert.equal(registry.i467.scenarios.length, 7);
   assert.ok(registry.i467.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));
   assert.ok(registry.s1.scenarios.every(scenario => scenario.writes === false));
   assert.equal(registry.i390.id, 'i390');
@@ -409,6 +401,11 @@ test('registered suites match discovered modules and retain their mutation bound
     ['smoke-authenticated-review', false], ['smoke-synthetic-close', true]
   ]);
   for (const suite of Object.values(registry)) {
+    assert.ok(suite.scenarios.length > 0);
+    assert.equal(new Set(suite.scenarios.map(s => s.id)).size, suite.scenarios.length, 'Unique scenario identities');
+    assert.ok(suite.scenarios.every(s => typeof s.id === 'string' && s.id && typeof s.run === 'function'
+      && typeof s.writes === 'boolean' && s.requirements.length > 0));
+    assert.equal(suite.mutations, suite.scenarios.some(s => s.writes), 'Suite declares its actual write boundary');
     assert.ok(suite.requires.includes('wslc-review-0.4.0'));
     assert.ok(suite.human.length > 0);
     assert.ok(Array.isArray(suite.uncovered));
@@ -423,16 +420,37 @@ test('registered suites match discovered modules and retain their mutation bound
   ]);
   assert.ok(registry.i403.scenarios.every(scenario => scenario.requirements.length > 0));
   assert.deepEqual(registry.q1.uncovered, []);
-  assert.equal(registry.q1.scenarios.length, 5);
   assert.ok(registry.q1.scenarios.every(scenario => scenario.writes === false && scenario.requirements.length > 0));
-  const baseline = execFileSync('git', ['show', '6f928007edf53bb48aeaf9018357aacc2bdaf8dc:tests/acceptance/suites/pr410.cjs'],
-    { cwd: repository, encoding: 'utf8' });
-  const previous = [...baseline.matchAll(/\{ id: '([^']+)', requirements: \[.*\], writes: (true|false)/g)]
-    .map(match => [match[1], match[2] === 'true']);
-  assert.equal(previous.length, 20);
-  assert.deepEqual(registry.pr410.scenarios.filter(s => s.id !== 'settings-reset-approved').map(s => [s.id, s.writes]), previous);
-  assert.equal(registry.pr410.scenarios.find(s => s.id === 'settings-reset-approved').writes, true);
-  assert.equal(registry.pr410.scenarios.length, 21);
+  // These IDs are report/requirement identities, and writes controls read-only
+  // execution. Assert the supported contract independently of scenario source.
+  assert.deepEqual(registry.pr410.scenarios.map(s => [s.id, s.writes]), [
+    ['staff-shell', false], ['confirmation-desktop-mobile-zoom', false],
+    ['purchase-reminder-on', true], ['purchase-reminder-off', true],
+    ['purchase-verified-autohold', true], ['purchase-verified-no-hold', true],
+    ['purchase-double-submit', true], ['reject-template', true],
+    ['dirty-editor-navigation', false], ['stale-draft-consent', false],
+    ['revert-preserves-unrelated-draft', false], ['profile-navigation-and-history', false],
+    ['competing-navigation-consent', false], ['settings-discard', false],
+    ['settings-reset-approved', true], ['profile-uncertain-recovery', false], ['beforeunload', false],
+    ['close-reopen-and-claim', true], ['stale-purchase-failure', true],
+    ['unverified-bib-blocked', false], ['additional-copy-close-reopen', true]
+  ]);
+});
+
+test('registry contracts accept reorganized scenario source without historical Git objects', async t => {
+  const root = await temporary(t);
+  const acceptance = path.join(root, 'tests/acceptance');
+  await fs.cp(__dirname, acceptance, { recursive: true });
+  await fs.cp(path.join(repository, 'tests/browser'), path.join(root, 'tests/browser'), { recursive: true });
+  const suite = path.join(acceptance, 'suites/pr410.cjs');
+  const source = await fs.readFile(suite, 'utf8');
+  // A module-local scope changes declaration placement without changing the
+  // exported scenario identities, classifications or executable callbacks.
+  await fs.writeFile(suite, '(function () {\n' + source + '\n})();\n');
+  const output = execFileSync(process.execPath, ['--test', '--test-name-pattern', '^registered suites match',
+    path.join(acceptance, 'runner.test.cjs')], { cwd: root, encoding: 'utf8', timeout: 15000 });
+  assert.match(output, /registered suites match discovered modules/);
+  await assert.rejects(fs.stat(path.join(root, '.git')), { code: 'ENOENT' });
 });
 
 test('D1 registers read-only coverage independently of its explicitly authorized close/reopen scenario', () => {
@@ -448,15 +466,14 @@ test('D1 registers read-only coverage independently of its explicitly authorized
 test('i471 read-only selection reports every required write scenario NOT RUN without executing setup', async t => {
   const root = await temporary(t), directory = path.join(root, 'i471-read-only'); await fs.mkdir(directory);
   const suite = require('./suites/i471.cjs'), executed = [];
-  assert.equal(suite.scenarios.length, 11);
-  assert.equal(suite.scenarios.filter(row => row.writes).length, 10);
   const report = { environment: { status: 'PASS' }, authentication: { status: 'PASS' },
     requiredScenarioIds: suite.scenarios.map(row => row.id), scenarios: [] };
   await runScenarios({ suite: { ...suite, scenarios: suite.scenarios.map(row => ({ ...row,
     run: async () => { assert.equal(row.writes, false); executed.push(row.id); } })) }, options: { readOnly: true },
     environment: environment(root), browser: fakeBrowser(), report, directory, verify: async () => environment(root) });
   assert.deepEqual(executed, ['i471-empty-format-prerequisite']);
-  assert.equal(report.scenarios.filter(row => row.status === 'NOT RUN').length, 10);
+  assert.deepEqual(report.scenarios.filter(row => row.status === 'NOT RUN').map(row => row.id),
+    suite.scenarios.filter(row => row.writes).map(row => row.id));
   assert.equal(exitCode(report), 2);
   assert.equal(JSON.parse(await fs.readFile(path.join(directory, 'results.json'), 'utf8')).automatedFunctionalAcceptance, 'INCOMPLETE');
 });

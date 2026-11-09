@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const sourcePath = path.join(
   __dirname,
@@ -12,22 +12,7 @@ const sourcePath = path.join(
   'js',
   'url-utils.js'
 );
-const constPattern = new RegExp('ex' + 'port const ', 'g');
-const functionPattern = new RegExp('ex' + 'port function ', 'g');
-const source = fs.readFileSync(sourcePath, 'utf8')
-  .replace(constPattern, 'const ')
-  .replace(functionPattern, 'function ');
-const holder = {};
-new Function('holder', `${source}\nholder.result = {
-  requestedStatusFromUrl,
-  requestedRequestIdFromUrl,
-  requestedSettingsPanelFromUrl,
-  requestedOperationsContextFromUrl,
-  replaceRequestUrl,
-  replaceStageUrl,
-  requestUrl,
-  statusStages
-};`)(holder);
+(async () => {
 const {
   requestedStatusFromUrl,
   requestedRequestIdFromUrl,
@@ -37,7 +22,7 @@ const {
   replaceStageUrl,
   requestUrl,
   statusStages
-} = holder.result;
+} = await import(pathToFileURL(sourcePath).href);
 
 const origin = 'https://staff.example.test';
 const url = (query) => `${origin}/staff/${query}`;
@@ -123,3 +108,4 @@ for (const stage of ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold
 }
 
 console.log('Staff legacy-link URL contract checks passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });

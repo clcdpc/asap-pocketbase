@@ -1,20 +1,10 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
-const { pathToFileURL } = require('node:url');
-const { JSDOM } = require('jsdom');
+const { fixture } = require('./helpers/staff-controller.cjs');
 
-(async () => {
-  const frontend = path.resolve(__dirname, '../src/Asap.Web/Frontend');
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-direct-inheritance-'));
-  fs.cpSync(path.join(frontend, 'staff'), path.join(temporary, 'staff'), { recursive: true });
-  fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
-  let dom, editors;
+fixture(async ({ load }) => {
+  let editors;
   try {
-    const { createSettingsDomainEditors } = await import(pathToFileURL(path.join(temporary, 'staff/js/settings-domains.js')));
-    dom = new JSDOM(fs.readFileSync(path.join(frontend, 'staff/index.html'), 'utf8'), { url: 'https://localhost/staff/' });
-    global.window = dom.window; global.document = dom.window.document; global.Node = dom.window.Node;
+    const { createSettingsDomainEditors } = await load('settings-domains');
     const root = document.getElementById('settings-view'); root.hidden = false;
     document.getElementById('common-authors-options').hidden = false;
     document.getElementById('common-authors-options').disabled = false;
@@ -184,5 +174,5 @@ const { JSDOM } = require('jsdom');
       'Adding a System provider omits untouched raw nullable display text.');
     assert.deepEqual(systemWrites.rules, [{ code: 'book' }], 'Unchanged effective rule defaults are never materialized.');
     console.log('Direct scalar-independent inheritance: nullable pins, per-field templates/rules, group resets, owned records, discard and retired targets passed');
-  } finally { editors?.dispose(); dom?.window.close(); fs.rmSync(temporary, { recursive: true, force: true }); }
-})().catch(error => { console.error(error); process.exit(1); });
+  } finally { editors?.dispose(); }
+}).catch(error => { console.error(error); process.exitCode = 1; });

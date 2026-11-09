@@ -58,13 +58,7 @@ public sealed partial class PatronJourneyTests
             startInfo.ArgumentList.Add(actor.AuthenticationEmail);
             startInfo.ArgumentList.Add("system-format-rule");
 
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Could not start the focused settings browser runner.");
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
-            var stderrTask = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
+            var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken);
             var reportPath = Path.Combine(artifactDirectory, "settings-browser-results.json");
             Assert.IsTrue(File.Exists(reportPath), $"The focused browser runner did not write its report. {stdout}{Environment.NewLine}{stderr}");
 
@@ -101,7 +95,7 @@ public sealed partial class PatronJourneyTests
                 Assert.HasCount(2, root.GetProperty("states").EnumerateArray().ToArray());
             }
 
-            Assert.AreEqual(0, process.ExitCode, $"{stdout}{Environment.NewLine}{stderr}");
+            Assert.AreEqual(0, exitCode, $"{stdout}{Environment.NewLine}{stderr}");
             var savedFormat = await ReadSystemFormatEvidenceAsync("book");
             Assert.AreEqual("message", savedFormat.MessageBehavior);
             Assert.AreEqual("System format-rule integration witness", savedFormat.Message);
@@ -407,13 +401,7 @@ public sealed partial class PatronJourneyTests
                 startInfo.ArgumentList.Add(libraryId.ToString());
                 startInfo.ArgumentList.Add(formatCode);
 
-                using var process = Process.Start(startInfo)
-                    ?? throw new InvalidOperationException("Could not start the focused library settings browser runner.");
-                var stdoutTask = process.StandardOutput.ReadToEndAsync();
-                var stderrTask = process.StandardError.ReadToEndAsync();
-                await process.WaitForExitAsync();
-                var stdout = await stdoutTask;
-                var stderr = await stderrTask;
+                var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken);
                 var reportPath = Path.Combine(artifactDirectory, "settings-browser-results.json");
                 if (!File.Exists(reportPath))
                 {
@@ -452,9 +440,9 @@ public sealed partial class PatronJourneyTests
                     {
                         failures.Add("The browser did not remove the complete rendered row backed by the saved target rule.");
                     }
-                    if (process.ExitCode != 0)
+                    if (exitCode != 0)
                     {
-                        failures.Add($"The focused browser runner exited {process.ExitCode}. {stdout}{Environment.NewLine}{stderr}");
+                        failures.Add($"The focused browser runner exited {exitCode}. {stdout}{Environment.NewLine}{stderr}");
                     }
                 }
 

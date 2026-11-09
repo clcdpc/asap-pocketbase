@@ -434,7 +434,7 @@ accessibility, layout, image, page-error and external-traffic guards.
 ## Closure validation contract
 
 Issue #365's execution-state evidence records actual final-SHA results and CI.
-Closure requires all 49 current frontend files (including 239 navigation/draft
+The historical campaign's closure required all 49 then-discovered frontend files (including 239 navigation/draft
 journeys and nine genuine Grid focus cases), a zero-warning Release build,
 the unchanged 784-test non-browser minimum and all three real-SQL Kestrel
 browser journeys with zero skips. The .NET gates include migration import,
@@ -447,7 +447,11 @@ win-x64 migration executable. Publish exclusions, vendor hashes, native
 the actual packaged deployment script's `-ValidateOnly` are verified. Final PR
 CI must pass its complete build/test/package job before #365 and #351 close.
 
-`test_cd_activation: pending_runner_setup` remains unchanged. No IIS host,
+At that campaign checkpoint, `test_cd_activation: pending_runner_setup` was
+recorded. Initial activation subsequently succeeded on November 5, 2026; see
+the [dated receipt and current evidence limits](test-iis-activation.md).
+The preceding migration/package criteria are historical; use
+[current qualification](../../scripts/ci/test-selection.md). No IIS host,
 runner activation, live Polaris/Postmark calls, production readiness/tag/
 deployment, cutover, backup/recovery rehearsal, repository rename or merge is
 authorized by this campaign. #345 remains open for the overall PR #344 closure

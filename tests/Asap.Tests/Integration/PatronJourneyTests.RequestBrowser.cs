@@ -441,11 +441,23 @@ public sealed partial class PatronJourneyTests
         await RunNativeSnapshotBrowserJourneyAsync();
     }
 
-    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunBrowserScriptAsync(
+    private Task<(int ExitCode, string Stdout, string Stderr)> RunBrowserScriptAsync(
         string repositoryRoot,
         string scriptName,
         string baseOrigin,
         string artifactDirectory,
+        params string[] additionalArguments)
+    {
+        return RunBrowserScriptAsync(repositoryRoot, scriptName, baseOrigin, artifactDirectory,
+            TimeSpan.FromMinutes(4), additionalArguments);
+    }
+
+    private async Task<(int ExitCode, string Stdout, string Stderr)> RunBrowserScriptAsync(
+        string repositoryRoot,
+        string scriptName,
+        string baseOrigin,
+        string artifactDirectory,
+        TimeSpan timeout,
         params string[] additionalArguments)
     {
         var startInfo = new ProcessStartInfo
@@ -465,11 +477,6 @@ public sealed partial class PatronJourneyTests
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Could not start the {scriptName} browser runner.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        return (process.ExitCode, await stdoutTask, await stderrTask);
+        return await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken, timeout);
     }
 }

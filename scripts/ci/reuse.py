@@ -151,6 +151,12 @@ def execution_results(suite, selection, directory=DIRECTORY):
         require(raw.get("filter") == "" and raw.get("failed") == 0 and raw.get("skipped") == 0,
                 "Frontend run was filtered or incomplete")
         require(raw["files"] == selection["files"], "Frontend discovery changed during execution")
+        receipts = raw.get("file_results")
+        require(isinstance(receipts, list) and len(receipts) == len(raw["files"])
+                and sorted(row["file"] for row in receipts) == raw["files"]
+                and all(row.get("passed") is True and type(row.get("code")) is int and row["code"] == 0
+                        and row.get("signal") is None for row in receipts),
+                "Missing, duplicate or non-passing frontend file outcomes")
         results = {"total": len(raw["files"]), "executed": raw["executed"], "passed": raw["passed"],
                    "failed": raw["failed"], "skipped": raw["skipped"],
                    "identities": [fp.digest(name) for name in raw["files"]]}

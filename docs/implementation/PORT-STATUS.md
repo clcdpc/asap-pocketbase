@@ -25,7 +25,8 @@ Current .NET/SQL tests, browser and frontend-serving contracts, the complete
 frontend suite, and current-commit publication/package/ValidateOnly checks
 remain mandatory. Exact native test discovery and outcome identities qualify
 the complete population. Browser and non-browser jobs own independent SQL
-containers and credentials; the required gate waits for both.
+containers and credentials; the required gate waits for all three qualification
+workers and validated packaging.
 
 Polaris protocol cases run in a hostless fixture with real protected-credential
 configuration. Shared mutable SQL fixtures remain serial. The separate
@@ -37,9 +38,13 @@ and reviews are historical evidence in Git; they are not current test inventory.
 
 ## Deployment boundary
 
-test_cd_activation: pending_runner_setup
+`test_cd_activation: active` records the verified initial activation of
+`v1.0.0-test.32` at `46c60a8cdb1218f34622620cbf0b31cc92e6bd07` on November 5,
+2026 at approximately 7:23 p.m. Eastern. See the
+[exact deployment receipt and its limits](test-iis-activation.md).
+Current installed source and host health have not been verified by this work.
 
 Repository qualification does not activate IIS, provision runners, create
-production tags, deploy production or merge PR #422. Live Polaris/Postmark,
+production tags, deploy production or merge implementation PRs. Live Polaris/Postmark,
 production release/cutover, backup/recovery rehearsal and repository rename
 remain separately authorized future work.

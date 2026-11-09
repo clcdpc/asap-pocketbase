@@ -6,11 +6,21 @@ const assert = require("node:assert/strict");
 
 const testDir = __dirname;
 const mode = process.argv[2] || "";
-const safetyFiles = ["ci_workflow_contract.test.js", "test_iis_deployment_contract.test.js"];
+const { safety: safetyFiles, portable } = require("./frontend-tests.json");
 const isSafety = mode === "--ci-safety";
 const isRemaining = mode === "--ci-remaining";
 const filterArg = isSafety || isRemaining ? "" : mode.toLowerCase();
-const allFiles = fs.readdirSync(testDir).filter((name) => name.endsWith(".test.js")).sort();
+const allFiles = [...fs.readdirSync(testDir).filter((name) => name.endsWith(".test.js")), ...portable].sort();
+assert.equal(new Set(allFiles).size, allFiles.length, "Duplicate frontend identity");
+for (const file of allFiles) assert.ok(fs.statSync(path.join(testDir, file)).isFile(), "Missing frontend test: " + file);
+function completeReceipts(report, expected) {
+  assert.deepEqual(report.file_results.map(row => row.file).sort(), expected);
+  for (const row of report.file_results) {
+    assert.equal(row.passed, true);
+    assert.equal(row.code, 0);
+    assert.equal(row.signal, null);
+  }
+}
 let prior = { executed: 0, passed: 0, failed: 0, skipped: 0 };
 if (isRemaining) {
   prior = JSON.parse(fs.readFileSync(process.env.ASAP_CI_FRONTEND_SAFETY, "utf8"));
@@ -20,11 +30,10 @@ if (isRemaining) {
   assert.equal(prior.passed, safetyFiles.length);
   assert.equal(prior.failed, 0);
   assert.equal(prior.skipped, 0);
+  completeReceipts(prior, safetyFiles);
 }
 const files = allFiles
   .filter((name) => {
-    const isTest = name.endsWith(".test.js") && name !== "run_all.js";
-    if (!isTest) return false;
     if (isSafety) return safetyFiles.includes(name);
     if (isRemaining) return !safetyFiles.includes(name);
     if (filterArg) {

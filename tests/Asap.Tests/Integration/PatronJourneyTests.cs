@@ -385,14 +385,8 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         startInfo.ArgumentList.Add(baseAddress.GetLeftPart(UriPartial.Authority));
         startInfo.ArgumentList.Add(artifactDirectory);
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start the patron browser runner.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-        Assert.AreEqual(0, process.ExitCode, $"{stdout}{Environment.NewLine}{stderr}");
+        var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken);
+        Assert.AreEqual(0, exitCode, $"{stdout}{Environment.NewLine}{stderr}");
 
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "browser-results.json"))))
@@ -554,14 +548,8 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         startInfo.ArgumentList.Add(seeded.StaleCopyBId.ToString());
         startInfo.ArgumentList.Add(seeded.StaleCreateSourceId.ToString());
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start the staff browser runner.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-        Assert.AreEqual(0, process.ExitCode, $"{stdout}{Environment.NewLine}{stderr}");
+        var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken);
+        Assert.AreEqual(0, exitCode, $"{stdout}{Environment.NewLine}{stderr}");
 
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
@@ -3071,7 +3059,8 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 Assert.AreEqual(metadataFirst.TargetId, Convert.ToInt64(await blockTarget.ExecuteScalarAsync()));
             }
 
-            var update = lifecycleService.UpdateMetadataAsync(
+            var (update, deactivate) = await RunObservedStaffRaceAsync(blockerConnection, blockerTransaction,
+                cancellationToken => lifecycleService.UpdateMetadataAsync(
                 metadataFirstActor,
                 metadataFirst.TargetId,
                 new StaffMetadataInput(
@@ -3079,21 +3068,14 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                     "metadata-first.updated@example.org",
                     "Metadata First Updated",
                     "metadata-first.notice@example.org"),
-                CancellationToken.None);
-            await Task.Delay(250);
-            Assert.IsFalse(update.IsCompleted, "Metadata should be waiting on the target StaffUser serialization row.");
-            var deactivate = lifecycleService.DeactivateAsync(
+                cancellationToken),
+                cancellationToken => lifecycleService.DeactivateAsync(
                 superAdmin,
                 metadataFirst.ActorId,
                 new StaffDeactivateInput(StaffVersion.Encode(metadataFirst.ActorVersion)),
-                CancellationToken.None);
-            await Task.Delay(250);
-            var lifecycleWaitedForMetadata = !deactivate.IsCompleted;
-            await blockerTransaction.CommitAsync();
-
-            Assert.AreEqual("updated", (await update).Code);
-            Assert.AreEqual("updated", (await deactivate).Code);
-            Assert.IsTrue(lifecycleWaitedForMetadata, "Actor deactivation must serialize after an authorized metadata update already holding the lifecycle lock.");
+                cancellationToken));
+            Assert.AreEqual("updated", update.Code);
+            Assert.AreEqual("updated", deactivate.Code);
         }
         await AssertStaffMetadataStateAsync(metadataFirst.TargetId, "Metadata First Updated", 1);
 
@@ -3112,14 +3094,13 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 Assert.AreEqual(lifecycleFirst.ActorId, Convert.ToInt64(await blockActor.ExecuteScalarAsync()));
             }
 
-            var demote = lifecycleService.ChangeRoleAsync(
+            var (demote, update) = await RunObservedStaffRaceAsync(blockerConnection, blockerTransaction,
+                cancellationToken => lifecycleService.ChangeRoleAsync(
                 superAdmin,
                 lifecycleFirst.ActorId,
                 new StaffRoleInput(StaffVersion.Encode(lifecycleFirst.ActorVersion), "staff", 2),
-                CancellationToken.None);
-            await Task.Delay(250);
-            Assert.IsFalse(demote.IsCompleted, "Actor demotion should be waiting on the actor StaffUser serialization row.");
-            var update = lifecycleService.UpdateMetadataAsync(
+                cancellationToken),
+                cancellationToken => lifecycleService.UpdateMetadataAsync(
                 lifecycleFirstActor,
                 lifecycleFirst.TargetId,
                 new StaffMetadataInput(
@@ -3127,14 +3108,9 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                     "lifecycle-first.updated@example.org",
                     "Lifecycle First Updated",
                     "lifecycle-first.notice@example.org"),
-                CancellationToken.None);
-            await Task.Delay(250);
-            var metadataWaitedForLifecycle = !update.IsCompleted;
-            await blockerTransaction.CommitAsync();
-
-            Assert.AreEqual("updated", (await demote).Code);
-            Assert.AreEqual("staff_scope_forbidden", (await update).Code);
-            Assert.IsTrue(metadataWaitedForLifecycle, "Metadata must wait for and observe an actor lifecycle change that already owns the lifecycle lock.");
+                cancellationToken));
+            Assert.AreEqual("updated", demote.Code);
+            Assert.AreEqual("staff_scope_forbidden", update.Code);
         }
         await AssertStaffMetadataStateAsync(
             lifecycleFirst.TargetId,
@@ -3238,24 +3214,19 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 Assert.AreEqual(assignmentFirst.RequestId, Convert.ToInt64(await blockRequest.ExecuteScalarAsync()));
             }
 
-            var assign = assignmentService.AssignAsync(
+            var (assign, deactivate) = await RunObservedStaffRaceAsync(blockerConnection, blockerTransaction,
+                cancellationToken => assignmentService.AssignAsync(
                 actor,
                 assignmentFirst.RequestId,
                 new AssignTitleRequestInput(StaffVersion.Encode(assignmentFirst.RequestVersion), assignmentFirst.StaffId),
-                CancellationToken.None);
-            await Task.Delay(250);
-            Assert.IsFalse(assign.IsCompleted, "Assignment should be waiting on the request serialization row.");
-            var deactivate = lifecycleService.DeactivateAsync(
+                cancellationToken),
+                cancellationToken => lifecycleService.DeactivateAsync(
                 actor,
                 assignmentFirst.StaffId,
                 new StaffDeactivateInput(StaffVersion.Encode(assignmentFirst.StaffVersion)),
-                CancellationToken.None);
-            await Task.Delay(250);
-            Assert.IsFalse(deactivate.IsCompleted, "Lifecycle should be waiting behind the assignment's organization lock.");
-            await blockerTransaction.CommitAsync();
-
-            Assert.AreEqual("updated", (await assign).Code);
-            Assert.AreEqual("updated", (await deactivate).Code);
+                cancellationToken));
+            Assert.AreEqual("updated", assign.Code);
+            Assert.AreEqual("updated", deactivate.Code);
         }
         await AssertLifecycleRaceStateAsync(
             assignmentFirst,
@@ -3276,24 +3247,19 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 Assert.AreEqual(lifecycleFirst.StaffId, Convert.ToInt64(await blockStaff.ExecuteScalarAsync()));
             }
 
-            var deactivate = lifecycleService.DeactivateAsync(
+            var (deactivate, assign) = await RunObservedStaffRaceAsync(blockerConnection, blockerTransaction,
+                cancellationToken => lifecycleService.DeactivateAsync(
                 actor,
                 lifecycleFirst.StaffId,
                 new StaffDeactivateInput(StaffVersion.Encode(lifecycleFirst.StaffVersion)),
-                CancellationToken.None);
-            await Task.Delay(250);
-            Assert.IsFalse(deactivate.IsCompleted, "Lifecycle should be waiting on the target StaffUser serialization row.");
-            var assign = assignmentService.AssignAsync(
+                cancellationToken),
+                cancellationToken => assignmentService.AssignAsync(
                 actor,
                 lifecycleFirst.RequestId,
                 new AssignTitleRequestInput(StaffVersion.Encode(lifecycleFirst.RequestVersion), lifecycleFirst.StaffId),
-                CancellationToken.None);
-            await Task.Delay(250);
-            Assert.IsFalse(assign.IsCompleted, "Assignment should be waiting behind the lifecycle organization lock.");
-            await blockerTransaction.CommitAsync();
-
-            Assert.AreEqual("updated", (await deactivate).Code);
-            Assert.AreEqual("assignee_ineligible", (await assign).Code);
+                cancellationToken));
+            Assert.AreEqual("updated", deactivate.Code);
+            Assert.AreEqual("assignee_ineligible", assign.Code);
         }
         await AssertLifecycleRaceStateAsync(
             lifecycleFirst,

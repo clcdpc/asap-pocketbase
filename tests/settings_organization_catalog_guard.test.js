@@ -1,9 +1,5 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { pathToFileURL } = require('node:url');
-const { JSDOM } = require('jsdom');
+const { fixture } = require('./helpers/staff-controller.cjs');
 
 const response = (status, body) => ({
   ok: status < 400,
@@ -46,23 +42,10 @@ function settingsSnapshot(systemSettings = { enabledLibraryOrgIds: [2], libraryO
 }
 
 async function runInvalidCatalogCase(settings, organizationBody, expectedMessage) {
-  const repositoryRoot = path.join(__dirname, '..');
-  const frontendRoot = path.join(repositoryRoot, 'src', 'Asap.Web', 'Frontend');
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'asap-organization-catalog-guard-'));
-  let dom;
+  await fixture(async ({ load, dom }) => {
+  let controller;
   try {
-    fs.cpSync(path.join(frontendRoot, 'staff'), path.join(temporary, 'staff'), { recursive: true });
-    fs.cpSync(path.join(frontendRoot, 'shared'), path.join(temporary, 'shared'), { recursive: true });
-    fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}\n');
-    const { createSettingsController } = await import(pathToFileURL(path.join(temporary, 'staff', 'js', 'settings.js')).href);
-    dom = new JSDOM(fs.readFileSync(path.join(frontendRoot, 'staff', 'index.html'), 'utf8'), {
-      url: 'https://localhost/staff/'
-    });
-    Object.assign(global, {
-      window: dom.window, document: dom.window.document, FormData: dom.window.FormData,
-      Node: dom.window.Node, Event: dom.window.Event
-    });
-    require('./helpers/confirmation.cjs').answerConfirmations(dom.window, () => true);
+    const { createSettingsController } = await load('settings');
 
     let settingsPosts = 0;
     global.fetch = async (url, init = {}) => {
@@ -80,7 +63,7 @@ async function runInvalidCatalogCase(settings, organizationBody, expectedMessage
       throw new Error(`Unexpected request: ${requestUrl}`);
     };
 
-    const controller = createSettingsController({
+    controller = createSettingsController({
       root: document.getElementById('settings-view'),
       tab: document.getElementById('settings-view-tab'),
       announce: () => {},
@@ -97,11 +80,10 @@ async function runInvalidCatalogCase(settings, organizationBody, expectedMessage
     document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     await Promise.resolve();
     assert.equal(settingsPosts, 0, 'a malformed successful catalog response must not allow a settings POST');
-    controller.dispose();
   } finally {
-    dom?.window.close();
-    fs.rmSync(temporary, { recursive: true, force: true });
+    controller?.dispose();
   }
+  });
 }
 
 (async () => {

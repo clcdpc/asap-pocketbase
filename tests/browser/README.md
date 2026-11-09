@@ -84,6 +84,24 @@ TRX identity verification determine the current population. Several methods own
 more than one Node runner.
 Counts refer to discovered .NET cases, not scanned states or assertions.
 
+Portable acceptance authentication/runner contracts execute separately in the
+frontend worker through npm test. Other acceptance checks are described in
+[the acceptance prerequisites](../acceptance/README.md); a Browser-category
+pass does not claim those separate commands ran.
+
+The .NET browser launch sites and publication/cache wrapper use
+OwnedTestProcess: a four-minute default complete-operation deadline (Campaign 2
+retains four minutes; staff presentation explicitly allows eight minutes based
+on its 4m08s Linux and 5m54s Windows receipts), concurrent bounded-memory output capture and a
+separate ten-second terminate/reap/drain budget. Caller cancellation stays
+cancellation. Windows job ownership and a dedicated Linux Python 3 subreaper
+survive target exit, including Chromium's detached process groups; partial
+output and cleanup errors remain in failure diagnostics. Linux test execution
+requires Python 3 as supplied by hosted CI.
+Caller-specific environments, including America/New_York where configured,
+are retained. Deterministic child-process regressions run in the native core
+partition without Chromium or SQL.
+
 Each integration journey provisions its isolated SQL fixture, starts the Testing app with
 deterministic providers, and tears down the host and browser in test cleanup.
 The runners reject external requests, page errors, serious or critical axe

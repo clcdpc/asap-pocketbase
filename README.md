@@ -17,14 +17,15 @@ The development-ready .NET port includes staff/patron parity from
 Use `main` for subsequent development. See the
 [current status](docs/implementation/PORT-STATUS.md) and the original
 [completion record](docs/implementation/final-development-completion.md) for
-validation and accepted history. Production readiness and test-IIS runner
-activation remain separate deferred work.
+validation and accepted history. Production readiness remains deferred; the
+verified initial test-IIS activation and its evidence limits are recorded below.
 
 ## Prerequisites
 
 - .NET SDK 10.0.303 or the compatible SDK selected by `global.json`.
 - SQL Server 2022 for development and real-SQL tests.
-- Node.js 24 and Chromium for the frontend and browser test suites.
+- Node.js 24 for frontend tests; installed Chromium for browser suites.
+- Python 3 on Linux for owned test subprocess cleanup (hosted CI supplies it).
 - An Entra test identity/configuration for local authenticated journeys.
 
 ## Local development
@@ -60,8 +61,11 @@ npm ci
 npm test
 ```
 
-The Node suite discovers the retained frontend regression files under
-`tests/*.test.js`. The complete .NET suite uses real SQL Server and deterministic
+The Node suite discovers `tests/*.test.js` plus the explicit portable acceptance
+files in `tests/frontend-tests.json` (authentication and runner contracts).
+File receipts and node:test subtest counts are separate. See the
+[acceptance prerequisites](tests/acceptance/README.md) for other, separately invoked suites.
+The complete .NET suite uses real SQL Server and deterministic
 Polaris/Postmark boundaries:
 
 ```powershell
@@ -98,21 +102,24 @@ and the test-IIS ZIP. The package uses the
 exact tested commit and a digest-before-extract gate. The deployment script's
 `-ValidateOnly` mode checks extraction and manifest integrity without mutating
 an IIS host. See [test-IIS activation](docs/implementation/test-iis-activation.md)
-for the separately pending runner/host task. The IIS job requires
+for host provisioning and the dated initial-activation receipt. The IIS job requires
 `ASAP_TEST_DEPLOYMENT_ENABLED=true` and an explicit deployment dispatch or a
 matching test-tag push, or a current `main` push after successful Full CI.
 Main snapshots use `test-<first 12 lowercase commit characters>`; explicit
 `vX.Y.Z-test.N` tags keep their exact labels. These deployment identities do
 not change application versions or create Git tags. The environment must allow
 the `main` branch and permit unattended jobs before automatic CD can run.
-This integration leaves deployment activation settings unchanged. The documented
-`test_cd_activation: pending_runner_setup` contract requires a separate
-authorized operational task to update its deployment evidence.
+`test_cd_activation: active` records the verified initial deployment of
+`v1.0.0-test.32` at `46c60a8cdb1218f34622620cbf0b31cc92e6bd07` on November 5,
+2026 at approximately 7:23 p.m. Eastern. That receipt proves activation, HTTPS
+readiness and state recording then; it does not identify today's installed
+commit or establish current host health. Further deployment/infrastructure work
+requires separate authorization.
 
 ## Scope and release boundary
 
 Production provider validation, live Polaris/Postmark mutations, production
-tagging, cutover, backup/recovery rehearsal, and IIS activation are deferred.
+tagging, cutover and backup/recovery rehearsal remain deferred.
 The temporary email transport is a deterministic development/test boundary,
 not production evidence.
 

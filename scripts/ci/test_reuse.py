@@ -253,7 +253,9 @@ class GitIdentityTests(unittest.TestCase):
         self.git("checkout", "-qb", "pr")
         files = {fixture.config["workflow"]: fixture.workflow_bytes,
                  "scripts/ci/policy.py": b"# CI input\n", "docs/ci.md": b"Qualification documentation\n",
-                 "tests/a.test.js": b"", "tests/b.test.js": b""}
+                 "tests/a.test.js": b"", "tests/b.test.js": b"",
+                 "tests/frontend-tests.json": fp.canonical({"portable": ["acceptance/runner.test.cjs"]}),
+                 "tests/acceptance/runner.test.cjs": b""}
         partitions = {key: {str(i): {"method": "Asap.Tests." + key + ".Case" + str(i), "name": str(i)}
                             for i in values} for key, values in (("core", (1, 2)), ("browser", (3, 4)))}
         reviewed = {"Browser": [value["method"] for value in partitions["browser"].values()]}
@@ -425,6 +427,35 @@ class GitIdentityTests(unittest.TestCase):
 
 
 class DependencyTests(unittest.TestCase):
+    def test_portable_contract_transitive_inputs_invalidate_frontend_but_preserve_native_separation(self):
+        config = fp.configuration()
+        for path in ("tests/acceptance/authentication.test.cjs", "tests/acceptance/runner.test.cjs",
+                     "tests/acceptance/run.cjs", "tests/acceptance/helpers/authentication.cjs",
+                     "tests/acceptance/helpers/environment.cjs", "tests/acceptance/helpers/reporting.cjs",
+                     "tests/acceptance/helpers/accessibility.cjs", "tests/acceptance/suites/pr410.cjs",
+                     "tests/acceptance/suites/registry.json", "tests/browser/confirmation.cjs",
+                     "tests/browser/settings-format-rule-drafts.cjs", "tests/browser/settings-inheritance-interactions.cjs",
+                     "tests/browser/settings-draft-blockers.cjs", "tests/frontend-tests.json"):
+            for suite in fp.SUITES:
+                before = fp.source_fingerprint([[path, "100644", "blob", "a"]], suite, config)
+                after = fp.source_fingerprint([[path, "100644", "blob", "b"]], suite, config)
+                self.assertEqual(before != after, suite in ("browser", "frontend"), (path, suite))
+
+    def test_actual_portable_runner_imports_all_have_frontend_ownership(self):
+        # Observe the bounded real module load, rather than parsing source or
+        # maintaining a second inventory of its transitive imports.
+        script = """
+            const path = require('node:path');
+            require('./tests/acceptance/run.cjs');
+            console.log(JSON.stringify(Object.keys(require.cache).map(file =>
+              path.relative(process.cwd(), file).split(path.sep).join('/'))));
+        """
+        paths = json.loads(subprocess.check_output(["node", "-e", script], cwd=fp.ROOT, text=True, timeout=15))
+        self.assertIn("tests/browser/settings-format-rule-drafts.cjs", paths)
+        config = fp.configuration()
+        for path in paths:
+            self.assertIn("frontend", fp.source_suites(path, config), "Unfingerprinted portable import: " + path)
+
     def test_frontend_only_contract_edits_preserve_native_sources_but_still_run_frontend(self):
         config = fp.configuration()
         for path in (".github/workflows/issue-triage.yml", "tests/issue_triage_workflow.test.js",
@@ -1376,10 +1407,17 @@ class NativeResultsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
             selection = {"minimum": 2, "expected": 2, "files": ["a.test.js", "b.test.js"]}
-            data = {"filter": "", "files": selection["files"], "executed": 2, "passed": 2, "failed": 0, "skipped": 0}
+            receipts = [{"file": name, "passed": True, "code": 0, "signal": None} for name in selection["files"]]
+            data = {"filter": "", "files": selection["files"], "executed": 2, "passed": 2, "failed": 0, "skipped": 0,
+                    "file_results": receipts}
             reuse.write_json(directory / "frontend-results.json", data)
             self.assertEqual(reuse.execution_results("frontend", selection, directory)["passed"], 2)
-            for key, value in (("filter", "one-test"), ("files", ["a.test.js"]), ("failed", 1), ("skipped", 1)):
+            for key, value in (("filter", "one-test"), ("files", ["a.test.js"]), ("failed", 1), ("skipped", 1),
+                               ("executed", 1), ("file_results", []), ("file_results", receipts[:1]),
+                               ("file_results", [receipts[0], receipts[0]]),
+                               ("file_results", [receipts[0], {**receipts[1], "signal": "SIGTERM"}]),
+                               ("file_results", [receipts[0], {**receipts[1], "code": 1}]),
+                               ("file_results", [receipts[0], {**receipts[1], "passed": False}])):
                 reuse.write_json(directory / "frontend-results.json", {**data, key: value})
                 with self.subTest(key=key), self.assertRaises(ValueError):
                     reuse.execution_results("frontend", selection, directory)

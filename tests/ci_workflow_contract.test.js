@@ -130,7 +130,7 @@ async function main() {
 
   await check('explicit PR events and existing push/manual triggers', () => {
     assert.deepEqual(workflow.on.pull_request.types, ['opened', 'reopened', 'synchronize', 'ready_for_review', 'converted_to_draft']);
-    assert.deepEqual(workflow.on.push.branches, ['main', 'codex/csharp-port', 'codex/slice-08-test-deployment']);
+    assert.deepEqual(workflow.on.push.branches, ['main']);
     assert.deepEqual(workflow.on.push.tags, ['v*.*.*']);
     assert.equal(workflow.on.workflow_dispatch.inputs.force_full_ci.default, false);
     assert.equal(workflow.on.workflow_dispatch.inputs.deploy_test_iis.default, false);

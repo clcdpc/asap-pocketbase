@@ -110,18 +110,7 @@ public sealed class FrontendPublishTests
         {
             startInfo.ArgumentList.Add(argument);
         }
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {executable}.");
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
-        try
-        {
-            await process.WaitForExitAsync(cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw;
-        }
-        Assert.AreEqual(0, process.ExitCode, string.Join(' ', arguments) + Environment.NewLine + await stdout + Environment.NewLine + await stderr);
+        var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, cancellationToken);
+        Assert.AreEqual(0, exitCode, string.Join(' ', arguments) + Environment.NewLine + stdout + Environment.NewLine + stderr);
     }
 }
