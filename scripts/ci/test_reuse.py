@@ -1407,7 +1407,9 @@ class NativeResultsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
             selection = {"minimum": 2, "expected": 2, "files": ["a.test.js", "b.test.js"]}
-            receipts = [{"file": name, "passed": True, "code": 0, "signal": None} for name in selection["files"]]
+            receipts = [{"file": name, "passed": True, "code": 0, "signal": None,
+                         "executed": True, "reason": "completed", "cleanup_succeeded": True}
+                        for name in selection["files"]]
             data = {"filter": "", "files": selection["files"], "executed": 2, "passed": 2, "failed": 0, "skipped": 0,
                     "file_results": receipts}
             reuse.write_json(directory / "frontend-results.json", data)
@@ -1417,7 +1419,10 @@ class NativeResultsTests(unittest.TestCase):
                                ("file_results", [receipts[0], receipts[0]]),
                                ("file_results", [receipts[0], {**receipts[1], "signal": "SIGTERM"}]),
                                ("file_results", [receipts[0], {**receipts[1], "code": 1}]),
-                               ("file_results", [receipts[0], {**receipts[1], "passed": False}])):
+                               ("file_results", [receipts[0], {**receipts[1], "passed": False}]),
+                               ("file_results", [receipts[0], {**receipts[1], "executed": False}]),
+                               ("file_results", [receipts[0], {**receipts[1], "reason": "timeout"}]),
+                               ("file_results", [receipts[0], {**receipts[1], "cleanup_succeeded": False}])):
                 reuse.write_json(directory / "frontend-results.json", {**data, key: value})
                 with self.subTest(key=key), self.assertRaises(ValueError):
                     reuse.execution_results("frontend", selection, directory)

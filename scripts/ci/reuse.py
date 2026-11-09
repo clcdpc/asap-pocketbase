@@ -155,7 +155,9 @@ def execution_results(suite, selection, directory=DIRECTORY):
         require(isinstance(receipts, list) and len(receipts) == len(raw["files"])
                 and sorted(row["file"] for row in receipts) == raw["files"]
                 and all(row.get("passed") is True and type(row.get("code")) is int and row["code"] == 0
-                        and row.get("signal") is None for row in receipts),
+                        and row.get("signal") is None and row.get("executed") is True
+                        and row.get("reason") == "completed" and row.get("cleanup_succeeded") is True
+                        for row in receipts),
                 "Missing, duplicate or non-passing frontend file outcomes")
         results = {"total": len(raw["files"]), "executed": raw["executed"], "passed": raw["passed"],
                    "failed": raw["failed"], "skipped": raw["skipped"],

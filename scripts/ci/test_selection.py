@@ -457,7 +457,9 @@ class FrontendSafetyTests(unittest.TestCase):
                 self.assertNotEqual(runner.returncode, 0)
                 raw = json.loads(results.read_text())
                 self.assertEqual(raw["passed"], 0)
-                self.assertEqual(raw["failed"], len(raw["files"]))
+                self.assertEqual(raw["failed"], 1)
+                self.assertEqual(raw["skipped"], len(raw["files"]) - 1)
+                self.assertEqual(raw["executed"], 1)
                 with self.assertRaises(reuse.EvidenceError):
                     reuse.execution_results("frontend", {"files": raw["files"], "minimum": len(raw["files"])}, root)
                 with self.assertRaises(ProcessLookupError):
