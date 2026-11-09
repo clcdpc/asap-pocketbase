@@ -12,6 +12,7 @@
     "Asap.Tests.Integration.PatronJourneyTests.AlreadyOwnLinkBrowserPreservesDraftsAndRecoversInsideTheExistingRequestModal",
     "Asap.Tests.Integration.PatronJourneyTests.Campaign2SettingsEditorPreservesIdentityOwnershipAndConditionalFieldsThroughSqlAndReload",
     "Asap.Tests.Integration.PatronJourneyTests.ConfiguredPatronAcceptanceBrowserVerifiesRealFailuresCommitsAndRecovery",
+    "Asap.Tests.Integration.PatronJourneyTests.ConfiguredPatronAssetsSkipOriginSqlWhileDocumentsRevalidateCurrentCsp",
     "Asap.Tests.Integration.PatronJourneyTests.EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance",
     "Asap.Tests.Integration.PatronJourneyTests.EmailHistoryBrowserPagesRealSqlScopesFiltersAndReadOnlyLayouts",
     "Asap.Tests.Integration.PatronJourneyTests.EmailHistoryRetryBrowserPreservesFocusAcrossPendingCompletionAndMovedHistory",
