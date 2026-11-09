@@ -7,7 +7,7 @@ review, purchase, place holds, and track fulfillment from the staff portal.
 The shipped application is ASP.NET Core 10 on .NET 10 with SQL Server 2022.
 Schema is owned by the SDK-style DACPAC in `database/Asap.Database`. The web
 application uses Entra authentication, direct EF Core for ordinary persistence,
-feature services with selective parameterized Dapper/ADO.NET where the feature
+feature services with selective parameterized ADO.NET/raw SQL where the feature
 contract needs it, and Hangfire for recurring work. The tracked frontend lives
 under `src/Asap.Web/Frontend` and is copied to generated `wwwroot` by MSBuild.
 

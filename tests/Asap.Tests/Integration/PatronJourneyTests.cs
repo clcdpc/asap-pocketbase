@@ -7915,8 +7915,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             new EmailOutboxRuntimeOptions(
                 TimeSpan.FromMilliseconds(150),
                 TimeSpan.FromSeconds(2),
-                TimeSpan.FromMinutes(2),
-                5));
+                TimeSpan.FromMinutes(2)));
 
         await using var blocker = new SqlConnection(databaseConnectionString);
         await blocker.OpenAsync();
@@ -7953,8 +7952,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             new EmailOutboxRuntimeOptions(
                 TimeSpan.FromSeconds(30),
                 TimeSpan.FromMilliseconds(75),
-                TimeSpan.FromMinutes(2),
-                5));
+                TimeSpan.FromMinutes(2)));
 
         await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
         Assert.AreEqual(1, sender.CallCount);
@@ -8016,8 +8014,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             new EmailOutboxRuntimeOptions(
                 TimeSpan.FromSeconds(30),
                 TimeSpan.FromMinutes(5),
-                TimeSpan.FromMinutes(2),
-                5));
+                TimeSpan.FromMinutes(2)));
 
         var firstDelivery = jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
         await sender.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -8049,8 +8046,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             new EmailOutboxRuntimeOptions(
                 TimeSpan.FromSeconds(30),
                 TimeSpan.FromMinutes(5),
-                TimeSpan.FromMinutes(2),
-                5));
+                TimeSpan.FromMinutes(2)));
 
         var firstDelivery = jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
         await sender.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -8183,7 +8179,8 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         };
         var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
 
-        for (var index = 0; index < EmailOutboxRuntimeOptions.Default.MaxAttempts + 1; index++)
+        const int readinessFailureRepetitions = 6;
+        for (var index = 0; index < readinessFailureRepetitions; index++)
         {
             await jobs.DeliverAsync(seeded.OutboxId, CancellationToken.None);
             var state = await ReadPreSendStateAsync(seeded.OutboxId);

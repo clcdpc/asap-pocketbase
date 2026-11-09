@@ -24,7 +24,7 @@ SQL asset is kept under `scripts/hangfire`.
 
 The web layer uses EF Core directly for normal aggregates and feature services.
 Where a feature needs reporting, queue, or reconciliation queries, it uses the
-existing parameterized Dapper/ADO.NET boundaries. Transactions, constraints,
+existing parameterized ADO.NET/raw SQL boundaries. Transactions, constraints,
 rowversion checks, scope predicates, and outbox/event writes are part of the
 observable contract rather than in-memory substitutes.
 

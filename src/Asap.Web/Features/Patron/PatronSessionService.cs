@@ -161,56 +161,6 @@ public sealed class PatronSessionService(ExternalConfiguration configuration)
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task SetOrganizationActiveAsync(
-        int organizationId,
-        bool isActive,
-        CancellationToken cancellationToken)
-    {
-        await using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(
-            IsolationLevel.ReadCommitted,
-            cancellationToken);
-
-        await using (var lockCommand = new SqlCommand(
-            "SELECT [Id] FROM [asap].[Organization] WITH (UPDLOCK, HOLDLOCK) WHERE [Id] = @organizationId;",
-            connection,
-            transaction))
-        {
-            lockCommand.Parameters.Add("@organizationId", SqlDbType.Int).Value = organizationId;
-            if (await lockCommand.ExecuteScalarAsync(cancellationToken) is null)
-            {
-                throw new InvalidOperationException("Organization does not exist.");
-            }
-        }
-
-        await using (var updateCommand = new SqlCommand(
-            "IF @isActive = 1 AND NOT EXISTS (SELECT 1 FROM [asap].[Organization] WHERE [Id] = @organizationId AND [Id] > 1 AND [OrganizationCodeId] = 2) THROW 51000, 'Only Polaris library organizations can be activated.', 1; UPDATE [asap].[Organization] SET [IsActive] = @isActive WHERE [Id] = @organizationId;",
-            connection,
-            transaction))
-        {
-            updateCommand.Parameters.Add("@isActive", SqlDbType.Bit).Value = isActive;
-            updateCommand.Parameters.Add("@organizationId", SqlDbType.Int).Value = organizationId;
-            await updateCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        if (!isActive)
-        {
-            await using var revokeCommand = new SqlCommand(
-                """
-                UPDATE [asap].[PatronSession]
-                SET [RevokedUtc] = COALESCE([RevokedUtc], SYSUTCDATETIME())
-                WHERE [EffectiveOrganizationId] = @organizationId;
-                """,
-                connection,
-                transaction);
-            revokeCommand.Parameters.Add("@organizationId", SqlDbType.Int).Value = organizationId;
-            await revokeCommand.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await transaction.CommitAsync(cancellationToken);
-    }
-
     private static bool TryHashToken(string token, out byte[] tokenHash)
     {
         tokenHash = [];

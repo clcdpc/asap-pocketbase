@@ -2115,6 +2115,43 @@ for (const action of ['Claim', 'Unclaim', 'Clear claim', 'Close task']) {
       capabilities: { canClaim: true, canUnclaim: true, canClearClaim: true, canAssign: true, canClose: true } } }));
 }
 
+test('Additional Copy reuses one assignment owner and retires Cancel and submit handlers before reopening', () =>
+  fixture('?stage=additional_copies&scope=2&request=71', async ui => {
+    const opener = actionButton('Assign');
+    const form = await openInlineDraft(ui, 'Assign', copyAssignmentLabel);
+    const select = form.querySelector('select'), cancel = actionButton('Cancel', form);
+    const candidateReads = () => ui.calls.filter(call => call.url.includes('/assignment-candidates')).length;
+    const reads = candidateReads();
+    ui.edit(`select[aria-label="${copyAssignmentLabel}"]`, '21');
+    opener.focus(); opener.click(); await settle();
+    assert.equal(ui.get(`select[aria-label="${copyAssignmentLabel}"]`), select);
+    assert.equal(select.closest('form'), form);
+    assert.equal(ui.get('#request-dialog-body').querySelectorAll('.inline-form').length, 1);
+    assert.equal(candidateReads(), reads, 'mounted activation does not fetch or register another draft');
+    assert.equal(select.value, '21');
+    assert.equal(document.activeElement, select);
+    assert.equal(protectedUnload(ui), true);
+    actionButton('Claim').click(); await settle();
+    assert.equal(requestMutations(ui).length, 0, 'the original dirty baseline still protects competing actions');
+    cancel.click();
+    assert.equal(document.activeElement, opener);
+    assert.equal(protectedUnload(ui), false);
+    const replacement = await openInlineDraft(ui, 'Assign', copyAssignmentLabel);
+    assert.notEqual(replacement, form); assert.equal(candidateReads(), reads + 1);
+    ui.edit(`select[aria-label="${copyAssignmentLabel}"]`, '21');
+    // Even a reattached retired form has no authority over the live editor.
+    ui.get('#request-dialog-body').append(form);
+    replacement.querySelector('select').focus();
+    cancel.click(); submitForm(ui, form); await settle();
+    assert.equal(replacement.isConnected, true);
+    assert.equal(document.activeElement, replacement.querySelector('select'));
+    assert.equal(protectedUnload(ui), true);
+    assert.equal(requestMutations(ui).length, 0);
+    form.remove();
+    actionButton('Cancel', replacement).click();
+    assert.equal(protectedUnload(ui), false, 'only the current draft remains registered');
+  }, { copyRequest: {} }));
+
 test('dirty Additional Copy assignment submits its own draft and protects its fields while pending', () =>
   fixture('?stage=additional_copies&scope=2&request=71', async ui => {
     const form = await openInlineDraft(ui, 'Assign', copyAssignmentLabel);

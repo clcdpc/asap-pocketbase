@@ -87,16 +87,22 @@ public sealed partial class WorkflowProcessingService
             .ToListAsync(cancellationToken);
         var titleRequests = await readContext.TitleRequests.AsNoTracking()
             .Where(item => organizationIds.Contains(item.LibraryOrganizationId) &&
-                          (item.Status == RequestStatus.Suggestion || item.Status == RequestStatus.OutstandingPurchase))
+                          (item.Status == RequestStatus.Suggestion ||
+                           item.Status == RequestStatus.OutstandingPurchase && item.BibId == null))
+            .Select(item => new WeeklyTitleSnapshot(item.Id, item.LibraryOrganizationId, item.Status,
+                item.Title, item.Author, item.CreatedUtc, item.UpdatedUtc))
             .ToListAsync(cancellationToken);
         var copyRequests = await readContext.AdditionalCopyRequests.AsNoTracking()
             .Where(item => organizationIds.Contains(item.LibraryOrganizationId) && item.Status == "open")
+            .Select(item => new WeeklyCopySnapshot(item.Id, item.LibraryOrganizationId,
+                item.Title, item.Author, item.BibId, item.CreatedUtc))
             .ToListAsync(cancellationToken);
         var systemSettings = await readContext.SystemSettings.AsNoTracking()
             .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var staffUrl = systemSettings?.StaffApplicationUrl;
         var createdCount = 0;
         var visited = 0;
+        var summariesByDataScope = new Dictionary<int, WeeklySummaryData>();
         foreach (var recipientSnapshot in staff)
         {
             visited++;
@@ -106,136 +112,154 @@ public sealed partial class WorkflowProcessingService
                 continue;
             }
 
-            var recipientRequests = titleRequests.Where(item => authorizationOrganizationId == LibraryScope.SystemOrganizationId ||
-                item.LibraryOrganizationId == authorizationOrganizationId).ToList();
-            var newSubmissions = recipientRequests.Where(item => item.Status == RequestStatus.Suggestion)
-                .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).ToList();
-            var purchases = recipientRequests.Where(item => item.Status == RequestStatus.OutstandingPurchase && item.BibId == null)
-                .OrderByDescending(item => item.UpdatedUtc).ThenByDescending(item => item.Id).ToList();
-            var copies = copyRequests.Where(item => authorizationOrganizationId == LibraryScope.SystemOrganizationId ||
-                item.LibraryOrganizationId == authorizationOrganizationId)
-                .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).ToList();
-            if (newSubmissions.Count == 0 && purchases.Count == 0 && copies.Count == 0)
+            // A selected-library super-admin shares that library's prepared data,
+            // while retaining system authorization and its own recipient checks below.
+            var dataScopeOrganizationId = authorizationOrganizationId == LibraryScope.SystemOrganizationId
+                ? scopeOrganizationId ?? LibraryScope.SystemOrganizationId : authorizationOrganizationId;
+            if (!summariesByDataScope.TryGetValue(dataScopeOrganizationId, out var summary))
+            {
+                summary = PrepareWeeklySummary(titleRequests, copyRequests, dataScopeOrganizationId);
+                summariesByDataScope.Add(dataScopeOrganizationId, summary);
+            }
+            if (summary.Submissions.Count == 0 && summary.Purchases.Count == 0 && summary.Copies.Count == 0)
             {
                 continue;
             }
 
-            EmailTransportReadiness readiness;
-            try
-            {
-                readiness = await emailSender.CheckReadinessAsync(authorizationOrganizationId, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-            catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
-            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
-            {
-                logger.LogWarning("Weekly summary readiness failed ({FailureType}).", exception.GetType().Name);
-                return new WorkflowRunResult("operational_failure", visited, createdCount, visited - createdCount, manualRunId);
-            }
             var businessKey = manualRunId is null
                 ? $"weekly-summary:{recipientSnapshot.Id}:{periodStart:yyyyMMdd}-{periodEnd:yyyyMMdd}"
                 : $"weekly-summary-force:{manualRunId.Value:N}:{recipientSnapshot.Id}";
-            await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-            await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-            if (!await LockManualOrganizationsAsync(
+            // This unlocked read only avoids transport preparation. Replay still passes the
+            // locked actor/recipient checks and final occurrence check below.
+            var readinessRequired = !await readContext.EmailOutbox.AnyAsync(
+                item => item.BusinessKey == businessKey, cancellationToken);
+            while (true)
+            {
+                var readiness = EmailTransportReadiness.NotConfigured;
+                if (readinessRequired)
+                {
+                    try
+                    {
+                        readiness = await emailSender.CheckReadinessAsync(authorizationOrganizationId, cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+                    catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
+                        exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+                    {
+                        logger.LogWarning("Weekly summary readiness failed ({FailureType}).", exception.GetType().Name);
+                        return new WorkflowRunResult("operational_failure", visited, createdCount, visited - createdCount, manualRunId);
+                    }
+                }
+                await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+                await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+                if (!await LockManualOrganizationsAsync(
+                        context,
+                        manualActorEvidence,
+                        scopeOrganizationId ?? authorizationOrganizationId,
+                        cancellationToken))
+                {
+                    break;
+                }
+                var authorization = await context.Organizations.FromSqlInterpolated(
+                        $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {authorizationOrganizationId}")
+                    .SingleOrDefaultAsync(cancellationToken);
+                var recipient = await context.StaffUsers.FromSqlInterpolated(
+                        $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {recipientSnapshot.Id}")
+                    .SingleOrDefaultAsync(cancellationToken);
+                var manualActorAllowed = await IsManualActorAllowedLockedAsync(
                     context,
                     manualActorEvidence,
                     scopeOrganizationId ?? authorizationOrganizationId,
-                    cancellationToken))
-            {
-                continue;
-            }
-            var authorization = await context.Organizations.FromSqlInterpolated(
-                    $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {authorizationOrganizationId}")
-                .SingleOrDefaultAsync(cancellationToken);
-            var recipient = await context.StaffUsers.FromSqlInterpolated(
-                    $"SELECT * FROM [asap].[StaffUser] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {recipientSnapshot.Id}")
-                .SingleOrDefaultAsync(cancellationToken);
-            var manualActorAllowed = await IsManualActorAllowedLockedAsync(
-                context,
-                manualActorEvidence,
-                scopeOrganizationId ?? authorizationOrganizationId,
-                cancellationToken);
-            if (authorization is null || !authorization.IsActive || recipient is null || !recipient.IsActive ||
-                recipient.OrganizationId != recipientSnapshot.OrganizationId || !recipient.WeeklyActionSummaryEnabled ||
-                recipient.NormalizedUserPrincipalName != recipientSnapshot.NormalizedUserPrincipalName ||
-                !StaffEmail.IsValidAuthenticationEmail(recipient) ||
-                !IsWeeklyRecipientRoleAllowed(recipient, authorizationOrganizationId) ||
-                !manualActorAllowed)
-            {
-                continue;
-            }
-            if (await context.EmailOutbox.AnyAsync(item => item.BusinessKey == businessKey, cancellationToken))
-            {
-                continue;
-            }
+                    cancellationToken);
+                if (authorization is null || !authorization.IsActive || recipient is null || !recipient.IsActive ||
+                    recipient.OrganizationId != recipientSnapshot.OrganizationId || !recipient.WeeklyActionSummaryEnabled ||
+                    recipient.NormalizedUserPrincipalName != recipientSnapshot.NormalizedUserPrincipalName ||
+                    !StaffEmail.IsValidAuthenticationEmail(recipient) ||
+                    !IsWeeklyRecipientRoleAllowed(recipient, authorizationOrganizationId) ||
+                    !manualActorAllowed)
+                {
+                    break;
+                }
+                if (await context.EmailOutbox.AnyAsync(item => item.BusinessKey == businessKey, cancellationToken))
+                {
+                    break;
+                }
+                if (!readinessRequired)
+                {
+                    // A removed prefilter hit is new work. Dispose this transaction before
+                    // obtaining readiness, then repeat the ordinary locked preparation.
+                    readinessRequired = true;
+                    continue;
+                }
 
-            var librarySettings = await context.EmailSettings.AsNoTracking()
-                .SingleOrDefaultAsync(item => item.OrganizationId == recipient.OrganizationId, cancellationToken);
-            var systemEmail = await context.EmailSettings.AsNoTracking()
-                .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
-            var fromAddress = Clean(librarySettings?.FromAddress) ?? Clean(systemEmail?.FromAddress);
-            var fromName = Clean(librarySettings?.FromName) ?? Clean(systemEmail?.FromName);
-            var primaryAddress = StaffEmail.TryNormalize(recipient.NotificationEmail, out var primary)
-                ? primary : null;
-            var additionalAddress = StaffEmail.TryNormalize(recipient.WeeklyActionSummaryEmail, out var additional)
-                ? additional : null;
-            var recipients = new List<(string? Address, string Kind, string Key)>
+                var librarySettings = await context.EmailSettings.AsNoTracking()
+                    .SingleOrDefaultAsync(item => item.OrganizationId == recipient.OrganizationId, cancellationToken);
+                var systemEmail = await context.EmailSettings.AsNoTracking()
+                    .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+                var fromAddress = Clean(librarySettings?.FromAddress) ?? Clean(systemEmail?.FromAddress);
+                var fromName = Clean(librarySettings?.FromName) ?? Clean(systemEmail?.FromName);
+                var primaryAddress = StaffEmail.TryNormalize(recipient.NotificationEmail, out var primary)
+                    ? primary : null;
+                var additionalAddress = StaffEmail.TryNormalize(recipient.WeeklyActionSummaryEmail, out var additional)
+                    ? additional : null;
+                var recipients = new List<(string? Address, string Kind, string Key)>
             {
                 (primaryAddress, "weekly_summary_primary", businessKey)
             };
-            if (!string.IsNullOrWhiteSpace(recipient.WeeklyActionSummaryEmail) &&
-                (additionalAddress is null || !string.Equals(primaryAddress, additionalAddress, StringComparison.OrdinalIgnoreCase)))
-            {
-                recipients.Add((additionalAddress, "weekly_summary_additional", $"{businessKey}:additional"));
-            }
-            // The primary key anchors the whole operation, including historical single-recipient
-            // operations. Commit both recipients together; retries never fill in or redirect copies.
-            var outboxItems = new List<EmailOutbox>();
-            var body = string.IsNullOrWhiteSpace(staffUrl) ? null : WeeklyBody(
-                newSubmissions, purchases, copies, staffUrl, periodStartLocal, periodEndLocal);
-            foreach (var (address, kind, key) in recipients)
-            {
-                var suppression = address is null ? "recipient_missing_or_invalid" :
-                    !recipientDomainPolicy.IsAllowed(address) ? "recipient_domain_not_allowed" :
-                    string.IsNullOrWhiteSpace(staffUrl) ? "staff_url_missing" :
-                    string.IsNullOrWhiteSpace(fromAddress) ? "sender_missing" :
-                    !readiness.IsConfigured ? "mail_not_configured" : null;
-                outboxItems.Add(new EmailOutbox
+                if (!string.IsNullOrWhiteSpace(recipient.WeeklyActionSummaryEmail) &&
+                    (additionalAddress is null || !string.Equals(primaryAddress, additionalAddress, StringComparison.OrdinalIgnoreCase)))
                 {
-                    OrganizationId = authorizationOrganizationId,
-                    BusinessKey = key,
-                    DeliveryClass = "staff_authorization_sensitive",
-                    RecipientStaffUserId = recipient.Id,
-                    RecipientAuthenticationEmail = recipient.NormalizedUserPrincipalName,
-                    AuthorizationOrganizationId = authorizationOrganizationId,
-                    RecipientAddressKind = kind,
-                    ToAddress = address,
-                    FromAddress = fromAddress,
-                    FromName = fromName,
-                    Subject = suppression is null ? $"Weekly ASAP action summary: {newSubmissions.Count} new, {purchases.Count} awaiting bibs, {copies.Count} additional copies" : null,
-                    BodyText = suppression is null ? body : null,
-                    Status = suppression is null ? "pending" : "suppressed",
-                    SuppressionReason = suppression,
-                    NextAttemptUtc = suppression is null ? now : null,
-                    CreatedUtc = now,
-                    SuppressedUtc = suppression is null ? null : now
-                });
-            }
-            context.EmailOutbox.AddRange(outboxItems);
-            try
-            {
-                await context.SaveChangesAsync(cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
-                createdCount++;
-                foreach (var outbox in outboxItems)
-                {
-                    DispatchCommittedOutbox(outbox, cancellationToken);
+                    recipients.Add((additionalAddress, "weekly_summary_additional", $"{businessKey}:additional"));
                 }
-            }
-            catch (DbUpdateException exception) when (exception.InnerException is SqlException { Number: 2601 or 2627 })
-            {
-                logger.LogInformation(exception, "Weekly summary duplicate or concurrent recipient mutation was ignored.");
+                // The primary key anchors the whole operation, including historical single-recipient
+                // operations. Commit both recipients together; retries never fill in or redirect copies.
+                var outboxItems = new List<EmailOutbox>();
+                var body = string.IsNullOrWhiteSpace(staffUrl) ? null : WeeklyBody(
+                    summary, staffUrl, periodStartLocal, periodEndLocal);
+                foreach (var (address, kind, key) in recipients)
+                {
+                    var suppression = address is null ? "recipient_missing_or_invalid" :
+                        !recipientDomainPolicy.IsAllowed(address) ? "recipient_domain_not_allowed" :
+                        string.IsNullOrWhiteSpace(staffUrl) ? "staff_url_missing" :
+                        string.IsNullOrWhiteSpace(fromAddress) ? "sender_missing" :
+                        !readiness.IsConfigured ? "mail_not_configured" : null;
+                    outboxItems.Add(new EmailOutbox
+                    {
+                        OrganizationId = authorizationOrganizationId,
+                        BusinessKey = key,
+                        DeliveryClass = "staff_authorization_sensitive",
+                        RecipientStaffUserId = recipient.Id,
+                        RecipientAuthenticationEmail = recipient.NormalizedUserPrincipalName,
+                        AuthorizationOrganizationId = authorizationOrganizationId,
+                        RecipientAddressKind = kind,
+                        ToAddress = address,
+                        FromAddress = fromAddress,
+                        FromName = fromName,
+                        Subject = suppression is null ? $"Weekly ASAP action summary: {summary.Submissions.Count} new, {summary.Purchases.Count} awaiting bibs, {summary.Copies.Count} additional copies" : null,
+                        BodyText = suppression is null ? body : null,
+                        Status = suppression is null ? "pending" : "suppressed",
+                        SuppressionReason = suppression,
+                        NextAttemptUtc = suppression is null ? now : null,
+                        CreatedUtc = now,
+                        SuppressedUtc = suppression is null ? null : now
+                    });
+                }
+                context.EmailOutbox.AddRange(outboxItems);
+                try
+                {
+                    await context.SaveChangesAsync(cancellationToken);
+                    await transaction.CommitAsync(cancellationToken);
+                    createdCount++;
+                    foreach (var outbox in outboxItems)
+                    {
+                        DispatchCommittedOutbox(outbox, cancellationToken);
+                    }
+                }
+                catch (DbUpdateException exception) when (exception.InnerException is SqlException { Number: 2601 or 2627 })
+                {
+                    logger.LogInformation(exception, "Weekly summary duplicate or concurrent recipient mutation was ignored.");
+                }
+                break;
             }
         }
         return new WorkflowRunResult("completed", visited, createdCount, visited - createdCount, manualRunId);
@@ -503,10 +527,36 @@ public sealed partial class WorkflowProcessingService
         TimeoutFamily.HoldPickupTimeout => RequestStatus.HoldPlaced,
         _ => ""
     };
+    private sealed record WeeklyTitleSnapshot(long Id, int LibraryOrganizationId, string Status,
+        string Title, string? Author, DateTime CreatedUtc, DateTime UpdatedUtc);
+    private sealed record WeeklyCopySnapshot(long Id, int LibraryOrganizationId,
+        string Title, string? Author, int BibId, DateTime CreatedUtc);
+    private sealed record WeeklySummaryCategory(int Count, IReadOnlyList<WeeklySummaryItem> Examples);
+    private sealed record WeeklySummaryData(WeeklySummaryCategory Submissions, WeeklySummaryCategory Purchases, WeeklySummaryCategory Copies);
+
+    private static WeeklySummaryData PrepareWeeklySummary(
+        IReadOnlyList<WeeklyTitleSnapshot> titles,
+        IReadOnlyList<WeeklyCopySnapshot> copyRequests,
+        int organizationId)
+    {
+        var scopedTitles = titles.Where(item => organizationId == LibraryScope.SystemOrganizationId ||
+            item.LibraryOrganizationId == organizationId).ToArray();
+        var submissions = scopedTitles.Where(item => item.Status == RequestStatus.Suggestion).ToArray();
+        var purchases = scopedTitles.Where(item => item.Status == RequestStatus.OutstandingPurchase).ToArray();
+        var copies = copyRequests.Where(item => organizationId == LibraryScope.SystemOrganizationId ||
+            item.LibraryOrganizationId == organizationId).ToArray();
+        return new WeeklySummaryData(
+            new WeeklySummaryCategory(submissions.Length, submissions.OrderByDescending(item => item.CreatedUtc)
+                .ThenByDescending(item => item.Id).Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author)).ToArray()),
+            new WeeklySummaryCategory(purchases.Length, purchases.OrderByDescending(item => item.UpdatedUtc)
+                .ThenByDescending(item => item.Id).Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author)).ToArray()),
+            new WeeklySummaryCategory(copies.Length, copies.OrderByDescending(item => item.CreatedUtc)
+                .ThenByDescending(item => item.Id).Take(5).Select(item => new WeeklySummaryItem(item.Title,
+                    item.Author ?? item.BibId.ToString(System.Globalization.CultureInfo.InvariantCulture))).ToArray()));
+    }
+
     private static string WeeklyBody(
-        IReadOnlyList<TitleRequest> submissions,
-        IReadOnlyList<TitleRequest> purchases,
-        IReadOnlyList<AdditionalCopyRequest> copies,
+        WeeklySummaryData summary,
         string staffUrl,
         DateTime periodStartLocal,
         DateTime periodEndLocal)
@@ -518,14 +568,14 @@ public sealed partial class WorkflowProcessingService
             $"Business period: {periodStartLocal:yyyy-MM-dd} through {endDisplay}",
             "",
             "New submissions",
-            $"{submissions.Count} active requests",
+            $"{summary.Submissions.Count} active requests",
             "Five most recent:"
         };
-        lines.AddRange(WeeklySampleLines(submissions.Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author))));
-        lines.AddRange(["", $"View new submissions: {WeeklyLink(staffUrl, "submitted")}", "", "Approved purchases without bibs", $"{purchases.Count} active requests", "Five most recent:"]);
-        lines.AddRange(WeeklySampleLines(purchases.Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author))));
-        lines.AddRange(["", $"View purchases awaiting bibs: {WeeklyLink(staffUrl, "purchased_waiting_for_bib")}", "", "Additional copies", $"{copies.Count} open tasks", "Five most recent:"]);
-        lines.AddRange(WeeklySampleLines(copies.Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author ?? item.BibId.ToString(System.Globalization.CultureInfo.InvariantCulture)))));
+        lines.AddRange(WeeklySampleLines(summary.Submissions.Examples));
+        lines.AddRange(["", $"View new submissions: {WeeklyLink(staffUrl, "submitted")}", "", "Approved purchases without bibs", $"{summary.Purchases.Count} active requests", "Five most recent:"]);
+        lines.AddRange(WeeklySampleLines(summary.Purchases.Examples));
+        lines.AddRange(["", $"View purchases awaiting bibs: {WeeklyLink(staffUrl, "purchased_waiting_for_bib")}", "", "Additional copies", $"{summary.Copies.Count} open tasks", "Five most recent:"]);
+        lines.AddRange(WeeklySampleLines(summary.Copies.Examples));
         lines.Add($"\nView additional copies: {WeeklyLink(staffUrl, "additional_copies")}");
         return string.Join("\n", lines);
     }

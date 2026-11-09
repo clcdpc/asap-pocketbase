@@ -13,11 +13,10 @@ namespace Asap.Web.Features.Email;
 public sealed record EmailOutboxRuntimeOptions(
     TimeSpan ProviderStartDeadline,
     TimeSpan ProviderCallTimeout,
-    TimeSpan LeaseDuration,
-    int MaxAttempts)
+    TimeSpan LeaseDuration)
 {
     public static EmailOutboxRuntimeOptions Default { get; } =
-        new(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(2), 5);
+        new(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(2));
 }
 
 internal sealed record ClaimedEmail(
@@ -35,7 +34,6 @@ internal sealed record ClaimedEmail(
     string Subject,
     string? BodyText,
     string? BodyHtml,
-    int AttemptCount,
     DateTime DeadlineStartedUtc,
     Guid LeaseId,
     byte[] RowVersion,
@@ -345,7 +343,7 @@ public sealed class EmailOutboxJobs(
                 inserted.[AuthorizationOrganizationId], inserted.[RecipientAddressKind],
                 inserted.[ToAddress], inserted.[FromAddress], inserted.[FromName],
                 inserted.[Subject], inserted.[BodyText], inserted.[BodyHtml],
-                inserted.[AttemptCount], inserted.[LeaseId],
+                inserted.[LeaseId],
                 inserted.[RowVersion], inserted.[TestConfigurationVersion],
                 inserted.[IntendedDeliveryMode], inserted.[AttemptDeliveryMode]
             WHERE [Id] = @id
@@ -378,10 +376,9 @@ public sealed class EmailOutboxJobs(
                     reader.GetString(11),
                     NullableString(reader, 12),
                     NullableString(reader, 13),
-                    reader.GetInt32(14),
                     now,
-                    reader.GetGuid(15),
-                    (byte[])reader[16], NullableString(reader, 17), NullableString(reader, 18), NullableString(reader, 19));
+                    reader.GetGuid(14),
+                    (byte[])reader[15], NullableString(reader, 16), NullableString(reader, 17), NullableString(reader, 18));
             }
         }
 
@@ -947,7 +944,4 @@ public sealed class EmailOutboxJobs(
 
     private static int? NullableInt32(SqlDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetInt32(ordinal);
-
-    private static Guid? NullableGuid(SqlDataReader reader, int ordinal) =>
-        reader.IsDBNull(ordinal) ? null : reader.GetGuid(ordinal);
 }
