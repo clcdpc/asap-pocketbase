@@ -24,6 +24,36 @@ other acceptance tests keep their separate prerequisites/invocation. Counts
 represent files, separately from node:test subtests.
 
 The frontend safety/remaining split executes each selected file exactly once.
+Each file has a fifteen-minute monotonic deadline covering execution and output
+drain, with no per-file exceptions. A complete native Windows measurement on
+November 9, 2026 passed all 89 discovered files under a preliminary five-minute
+budget. The slowest was staff_navigation_drafts_ui.test.js at 218.553s; the next
+was the deployment safety file at 36.258s. The final 900s deadline gives 4.1 times
+the slowest completed measurement. The complete current suite is timed in its
+per-file receipts; these are machine observations, not tighter performance gates.
+Termination gets at most five seconds of grace, then forced escalation and a
+two-second post-kill wait. Each Windows taskkill call itself has a two-second
+hard-kill timeout. Output retains its first 1 MiB, plus bounded diagnostics.
+
+POSIX ownership is the child's detached process group; cleanup probes the group
+after output close. Escaped sessions are outside that boundary; a still-visible
+group (including unreaped orphan zombies) conservatively stops the sweep.
+Windows ownership uses taskkill /T while launcher ancestry is available and
+verifies output closure. Disposable native fixtures verify the observed parent
+and descendant PIDs disappear. It does not own arbitrary detached/unref'd
+descendants after launcher exit: Windows Node can report close without waiting
+for their inherited handles. A retained pipe without provable tree termination
+is bounded and fails cleanup, stopping subsequent files. Successful kill command
+status alone is not evidence that arbitrary descendants were removed.
+
+Failure reasons latch before cleanup, so timeout followed by exit zero still
+fails. Every selected file has one receipt; executed failures increment failed,
+and files that never start increment skipped and have executed=false. Complete
+passing evidence additionally requires executed=true, reason=completed and
+cleanup_succeeded=true on every file. Interrupted or uncertain cleanup can never
+qualify for reuse. Narrow fixtures in frontend_runner.test.js exercise native
+processes plus explicitly simulated startup/retained-pipe/race/helper failures.
+
 Qualification verifies the exact discovered file list, complete per-file
 passing receipts and integer counters; filtered, interrupted, missing,
 duplicated or failed execution cannot qualify. Portable acceptance helpers,
