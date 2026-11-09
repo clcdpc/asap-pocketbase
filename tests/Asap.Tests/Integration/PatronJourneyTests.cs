@@ -385,14 +385,8 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         startInfo.ArgumentList.Add(baseAddress.GetLeftPart(UriPartial.Authority));
         startInfo.ArgumentList.Add(artifactDirectory);
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start the patron browser runner.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-        Assert.AreEqual(0, process.ExitCode, $"{stdout}{Environment.NewLine}{stderr}");
+        var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken);
+        Assert.AreEqual(0, exitCode, $"{stdout}{Environment.NewLine}{stderr}");
 
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "browser-results.json"))))
@@ -554,14 +548,8 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         startInfo.ArgumentList.Add(seeded.StaleCopyBId.ToString());
         startInfo.ArgumentList.Add(seeded.StaleCreateSourceId.ToString());
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start the staff browser runner.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-        Assert.AreEqual(0, process.ExitCode, $"{stdout}{Environment.NewLine}{stderr}");
+        var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken);
+        Assert.AreEqual(0, exitCode, $"{stdout}{Environment.NewLine}{stderr}");
 
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))

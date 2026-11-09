@@ -95,25 +95,9 @@ public sealed partial class PatronJourneyTests
             {
                 startInfo.ArgumentList.Add(argument);
             }
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Could not start the Campaign 2 Settings browser runner.");
-            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(4));
-            var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
-            var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
-            try
-            {
-                await process.WaitForExitAsync(timeout.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                throw;
-            }
-            var output = await stdout + Environment.NewLine + await stderr;
-            Assert.AreEqual(0, process.ExitCode, output);
+            var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken, TimeSpan.FromMinutes(4));
+            var output = stdout + Environment.NewLine + stderr;
+            Assert.AreEqual(0, exitCode, output);
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "settings-browser-results.json")));
             Assert.IsTrue(report.RootElement.GetProperty(libraryAdmin ? "campaign2LibraryAdmin" : "campaign2SystemAndInheritance").GetBoolean());
             Assert.IsTrue(report.RootElement.GetProperty("namedOverrideEditsBackToSystem").GetBoolean());

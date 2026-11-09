@@ -141,12 +141,8 @@ public sealed partial class PatronJourneyTests
             startInfo.ArgumentList.Add("library-format-rule-drafts");
             startInfo.ArgumentList.Add(libraryId.ToString());
             startInfo.ArgumentList.Add(formatCode);
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Could not start the format-rule draft browser regression.");
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
-            Assert.AreEqual(0, process.ExitCode, $"{await stdout}{Environment.NewLine}{await stderr}");
+            var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken);
+            Assert.AreEqual(0, exitCode, $"{stdout}{Environment.NewLine}{stderr}");
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "settings-browser-results.json")));
             Assert.AreEqual(0, report.RootElement.GetProperty("externalRequests").GetInt32());
             Assert.AreEqual(0, report.RootElement.GetProperty("pageErrors").GetArrayLength());

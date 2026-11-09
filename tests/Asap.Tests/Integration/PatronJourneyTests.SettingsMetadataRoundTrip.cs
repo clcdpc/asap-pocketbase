@@ -106,12 +106,8 @@ public sealed partial class PatronJourneyTests
             startInfo.ArgumentList.Add("library-metadata");
             startInfo.ArgumentList.Add(libraryId.ToString());
             startInfo.ArgumentList.Add(suffix);
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Could not start the production Settings metadata browser regression.");
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
-            var stderrTask = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
-            var output = await stdoutTask + Environment.NewLine + await stderrTask;
+            var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken);
+            var output = stdout + Environment.NewLine + stderr;
             var resetLineageCount = await ReadCountWithParameterAsync("""
                 SELECT COUNT(*) FROM [asap].[EmailTemplate] library
                 JOIN [asap].[EmailTemplate] source ON source.[Id] = library.[SourceTemplateId]
@@ -119,7 +115,7 @@ public sealed partial class PatronJourneyTests
                   AND source.[TemplateKey] IN (N'suggestion_submitted', N'rejection:audit_reset_' + @suffix);
                 """, ("@org", libraryId), ("@suffix", suffix));
             TestContext.WriteLine($"Template reset witness physical lineage count after browser: {resetLineageCount}");
-            Assert.AreEqual(0, process.ExitCode, output);
+            Assert.AreEqual(0, exitCode, output);
             Assert.AreEqual(0, resetLineageCount, "Reset-only drafts and explicit cleanup must leave no Library lineage for either witness.");
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "settings-browser-results.json")));
             Assert.IsTrue(report.RootElement.GetProperty("libraryOverrideMetadataRoundTrip").GetBoolean());

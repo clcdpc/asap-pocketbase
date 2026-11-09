@@ -132,14 +132,8 @@ public sealed partial class PatronJourneyTests
         startInfo.ArgumentList.Add(seeded.DeletedCopyId);
         startInfo.ArgumentList.Add(seeded.OutOfScopeCopyId);
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start the request-link browser runner.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-        Assert.AreEqual(0, process.ExitCode, $"{stdout}{Environment.NewLine}{stderr}");
+        var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken);
+        Assert.AreEqual(0, exitCode, $"{stdout}{Environment.NewLine}{stderr}");
 
         using var report = JsonDocument.Parse(
             await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "request-links-results.json")));
