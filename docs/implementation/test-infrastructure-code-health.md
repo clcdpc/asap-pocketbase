@@ -45,11 +45,14 @@ target exit, cancellation or loss of its parent triggers cleanup. Cleanup uses
 that ownership even after the requested launcher exits.
 
 Exit plus concurrent stdout/stderr drains share the operation deadline (four
-minutes by default). Staff presentation explicitly allows six minutes: the
+minutes by default). Staff presentation explicitly allows eight minutes: the
 [November 9 #494 browser receipt](https://github.com/clcdpc/asap-pocketbase/actions/runs/42621243813/artifacts/13678350517)
 at reviewed head `14601b863a2a96e402a68540f1f10a9ed7e1c117` on the three-worker
 hosted topology recorded 4m08s for that case. The four-minute default stopped it
-at 4m00s during this qualification. Other callers keep their
+at 4m00s during this qualification. A November 9 Windows/SQL Server 2022/Chromium
+recheck at `4470fc0f22f58fc300683e9f98684b72bc7fcc81` passed in 5m54s under a
+six-minute bound; eight minutes leaves headroom for that existing workload.
+Other callers keep their
 defaults/explicit deadlines; CI job limits are unchanged.
 Cancellation remains `OperationCanceledException` with the
 caller token; expiry becomes `TimeoutException` retaining the triggering error.
