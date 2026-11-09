@@ -39,6 +39,15 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         return zoom;
       };
       const zoom = await applyNativeZoom();
+      const captureNativeImage = async name => {
+        const session = await context.newCDPSession(page);
+        const metrics = await session.send('Page.getLayoutMetrics');
+        assert.equal(metrics.visualViewport.zoom, 2);
+        const capture = await session.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true,
+          clip: { x: 0, y: 0, width: metrics.contentSize.width, height: metrics.contentSize.height, scale: 1 } });
+        await fs.writeFile(path.join(artifacts, `native-zoom-${width}-${name}.png`), Buffer.from(capture.data, 'base64'));
+        await session.detach();
+      };
       const scan = async name => {
         await page.evaluate(axe);
         const result = await page.evaluate(async () => ({
@@ -54,13 +63,7 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
         assert.equal(result.visualViewportScale, 1);
         assert.equal(result.htmlZoom, '1'); assert.equal(result.bodyZoom, '1');
         assert.ok(Math.abs(result.devicePixelRatio / ratio - 2) < 0.01);
-        const session = await context.newCDPSession(page);
-        const metrics = await session.send('Page.getLayoutMetrics');
-        assert.equal(metrics.visualViewport.zoom, 2);
-        const capture = await session.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true,
-          clip: { x: 0, y: 0, width: metrics.contentSize.width, height: metrics.contentSize.height, scale: 1 } });
-        await fs.writeFile(path.join(artifacts, `native-zoom-${width}-${name}.png`), Buffer.from(capture.data, 'base64'));
-        await session.detach();
+        await captureNativeImage(name);
         states.push({ physicalWidth: width, name, actualBrowserZoom: zoom, ...result });
       };
       const title = page.locator(`a[data-request-id="${sourceId}"]`);
@@ -83,6 +86,33 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       const footer = await detail.locator('.request-save-footer').boundingBox();
       assert.ok(footer.y >= 0 && footer.y + footer.height <= await page.evaluate(() => innerHeight), 'The save footer remains in the actual zoomed viewport.');
       await scan('detail');
+      await detail.getByRole('tab', { name: 'Details', exact: true }).click();
+      for (const position of ['top', 'bottom']) {
+        const geometry = await detail.evaluate((root, position) => {
+          const middle = root.querySelector('.request-middle');
+          middle.scrollTop = position === 'top' ? 0 : middle.scrollHeight;
+          return { middle: middle.getBoundingClientRect().toJSON(),
+            footer: root.querySelector('.request-save-footer').getBoundingClientRect().toJSON(),
+            scrollTop: middle.scrollTop, scrollHeight: middle.scrollHeight, clientHeight: middle.clientHeight,
+            height: innerHeight };
+        }, position);
+        assert.ok(geometry.footer.top >= 0 && geometry.footer.bottom <= geometry.height, `${width}/${position}: footer stays visible.`);
+        assert.ok(geometry.middle.bottom <= geometry.footer.top + 1, `${width}/${position}: footer cannot cover content.`);
+        assert.ok(geometry.scrollHeight > geometry.clientHeight, 'Long Details content must genuinely scroll.');
+        assert.ok(Math.abs(geometry.scrollTop - (position === 'top' ? 0 : geometry.scrollHeight - geometry.clientHeight)) <= 1);
+      }
+      const notes = detail.getByLabel('Notes', { exact: true });
+      await notes.focus();
+      await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
+      assert.equal(await notes.evaluate(node => node === document.activeElement), true);
+      // Native focus scrolling may expose only the textarea's caret line.
+      // The scroll pane must also allow the whole control above the footer.
+      await notes.scrollIntoViewIfNeeded();
+      const notesGeometry = await notes.evaluate(node => ({ notes: node.getBoundingClientRect().toJSON(),
+        middle: node.closest('.request-middle').getBoundingClientRect().toJSON() }));
+      await captureNativeImage('details-bottom');
+      assert.ok(notesGeometry.notes.top >= notesGeometry.middle.top - 1 && notesGeometry.notes.bottom <= notesGeometry.middle.bottom + 1,
+        `${width}: scrolling brings the final Notes control fully above the footer: ${JSON.stringify(notesGeometry)}`);
       page.once('dialog', dialog => dialog.accept());
       await detail.getByRole('button', { name: 'Revert changes', exact: true }).click();
       assert.equal(await detail.locator('.request-save-state').textContent(), 'All changes saved');
@@ -91,6 +121,13 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       const suggestion = page.locator('#staff-suggestion-dialog[open]');
       await suggestion.getByRole('button', { name: 'Create suggestion', exact: true }).waitFor();
       await verifyMixedFieldLayout(page, '#staff-suggestion-body');
+      const date = suggestion.getByLabel('Exact publication date', { exact: true });
+      const initialDate = await date.inputValue();
+      await date.fill('2026-02-18');
+      await date.focus(); await date.press('ArrowUp');
+      assert.notEqual(await date.inputValue(), '2026-02-18', 'Native date segments remain keyboard editable.');
+      assert.equal(await date.evaluate(node => node.type === 'date' && node.validity.valid), true);
+      await date.fill(initialDate);
       await scan('new-suggestion');
       await page.keyboard.press('Escape');
       await page.goto(`${baseURL}/staff/?stage=settings&settingsScope=system#settings-patron`, { waitUntil: 'networkidle' });

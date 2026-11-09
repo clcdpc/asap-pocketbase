@@ -145,15 +145,31 @@ async function runJourney(browser, baseOrigin, artifactRoot, axeSource, report) 
       await page.locator('#step-form:not(.hidden)').waitFor();
       await scanMajorState(page, axeSource, artifactRoot, report, viewport, 'form');
 
+      for (const format of ['ebook', 'eaudiobook']) {
+        await page.locator('#format').selectOption(format);
+        const content = page.locator('#econtent-msg-container');
+        assert.equal(await content.isVisible(), true);
+        const text = await content.textContent();
+        assert.equal(text, `This is an ${format === 'ebook' ? 'eBook' : 'eAudiobook'} suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm`);
+        assert.equal(await content.locator('p,br,div,img,script').count(), 0);
+        const link = content.getByRole('link');
+        assert.equal(await link.getAttribute('href'), 'https://help.libbyapp.com/en-us/6260.htm');
+        assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
+        assert.equal(await content.evaluate(node => getComputedStyle(node).whiteSpace), 'pre-wrap');
+      }
       await fillSuggestion(page, viewport);
       await page.locator('#step-success:not(.hidden)').waitFor();
       assert.equal(await page.evaluate(() => document.activeElement.id), 'success-title');
+      assert.match(await page.locator('#success-body').textContent(), /updates\.\n\nThank you for using our suggestion service\.$/);
+      assert.equal(await page.locator('#success-body p, #success-body div').count(), 0);
       await scanMajorState(page, axeSource, artifactRoot, report, viewport, 'success');
 
       await page.locator('#step-success .btn-submit-another').click();
       await fillSuggestion(page, viewport);
       await page.locator('#step-conflict:not(.hidden)').waitFor();
       assert.equal(await page.evaluate(() => document.activeElement.id), 'conflict-title');
+      assert.doesNotMatch(await page.locator('#conflict-body').textContent(), /\{\{|<\/?(?:div|p|br)\b/);
+      assert.match(await page.locator('#conflict-body').textContent(), /\n\nThank you for using this library's suggestion service\.$/);
       await scanMajorState(page, axeSource, artifactRoot, report, viewport, 'duplicate');
 
       await page.locator('#step-conflict .btn-logout').click();

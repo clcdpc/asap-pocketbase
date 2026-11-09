@@ -449,9 +449,35 @@ async function runPatronTextRefinements(page, axeSource, args, report, saveSetti
     assert.ok(provider?.id); assert.equal(provider.isEnabled, true);
     for (const [id, original] of originalKeys) assert.equal(saved.stored.configuredSystem.providers.find(item => item.id === id).key, original);
     const savedRow = page.locator(`#external-search-provider-editor [data-provider-id="${provider.id}"]`);
-    await savedRow.getByLabel('Label', { exact: true }).fill(`UI refinements provider ${args.formatCode} edited`);
-    await saveSettings(); await reload('system');
-    assert.equal((await read('system')).stored.configuredSystem.providers.find(item => item.id === provider.id).key, key);
+    try {
+      await savedRow.getByLabel('Label', { exact: true }).fill(`UI refinements provider ${args.formatCode} edited`);
+      await savedRow.getByLabel('Enabled', { exact: true }).uncheck();
+      const expectedOrder = saved.stored.configuredSystem.providers.map(item => item.id);
+      const position = expectedOrder.indexOf(provider.id);
+      assert.ok(position > 0);
+      [expectedOrder[position - 1], expectedOrder[position]] = [expectedOrder[position], expectedOrder[position - 1]];
+      await savedRow.getByRole('button', { name: 'Move up', exact: true }).click();
+      await saveSettings(); await reload('system');
+      const editedProviders = (await read('system')).stored.configuredSystem.providers;
+      const editedProvider = editedProviders.find(item => item.id === provider.id);
+      assert.equal(editedProvider.key, key);
+      assert.equal(editedProvider.label, `UI refinements provider ${args.formatCode} edited`);
+      assert.equal(editedProvider.isEnabled, false);
+      assert.deepEqual(editedProviders.map(item => item.id), expectedOrder, 'Provider reordering must persist without changing identities.');
+    } finally {
+      // The .NET class shares its fixture: restore exact accepted orders even
+      // when a probe fails, before the owning cleanup deletes the added row.
+      const current = await read('system');
+      await page.evaluate(async body => {
+        const { authorizedJson } = await import('/staff/js/http.js');
+        await authorizedJson('/api/asap/staff/settings', { method: 'POST', body });
+      }, { orgId: 'system', version: current.version, providers: saved.stored.configuredSystem.providers.map(
+        ({ id, key, sortOrder }) => ({ id, key, sortOrder })) });
+      await reload('system');
+      assert.deepEqual((await read('system')).stored.configuredSystem.providers.map(({ id, key, sortOrder }) => ({ id, key, sortOrder })),
+        saved.stored.configuredSystem.providers.map(({ id, key, sortOrder }) => ({ id, key, sortOrder })),
+        'The shared fixture must retain its exact original provider order and identities.');
+    }
     await page.locator('#settings-nav-patron').click();
     const systemMessage = 'System <b> & é\nOne line\n\nLibby help:\nhttps://help.libbyapp.com/en-us/6260.htm\n';
     await page.locator('#patron-success-message').fill(systemMessage);
