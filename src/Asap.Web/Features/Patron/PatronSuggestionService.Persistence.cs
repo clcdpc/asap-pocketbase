@@ -29,10 +29,6 @@ public sealed partial class PatronSuggestionService
         int verifiedPatronId,
         CancellationToken cancellationToken)
     {
-        if (contextFactory is null || staffEligibility is null)
-        {
-            throw new PatronFlowException(500, "Staff suggestion creation is not configured.");
-        }
         RequireStaffPatronIdentity(patron, verifiedPatronId, Clean(input.Barcode) ?? string.Empty);
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);

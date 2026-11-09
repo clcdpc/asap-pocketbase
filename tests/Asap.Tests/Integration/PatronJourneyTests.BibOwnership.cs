@@ -976,15 +976,25 @@ public sealed partial class PatronJourneyTests
             "Identifier-derived tags must be removed when the BIB/check evidence is invalidated.");
     }
 
-    private PatronSuggestionService CreateBibOwnershipSuggestionService(IdentifierLookupResult lookupResult) => new(
-        factory!.Services.GetRequiredService<ExternalConfiguration>(),
-        factory.Services.GetRequiredService<PatronConfigurationService>(),
-        new BibOwnershipIdentifierProvider(lookupResult),
-        factory.Services.GetRequiredService<IEmailOutboxDispatcher>(),
-        factory.Services.GetRequiredService<IEmailSender>(),
-        factory.Services.GetRequiredService<RecipientDomainPolicy>(),
-        timeProvider!,
-        NullLogger<PatronSuggestionService>.Instance);
+    private PatronSuggestionService CreateBibOwnershipSuggestionService(IdentifierLookupResult lookupResult)
+    {
+        var services = factory!.Services;
+        var configuration = services.GetRequiredService<ExternalConfiguration>();
+        var provider = new BibOwnershipIdentifierProvider(lookupResult);
+        return new PatronSuggestionService(
+            configuration,
+            services.GetRequiredService<PatronConfigurationService>(),
+            provider,
+            services.GetRequiredService<IEmailOutboxDispatcher>(),
+            services.GetRequiredService<IEmailSender>(),
+            services.GetRequiredService<RecipientDomainPolicy>(),
+            timeProvider!,
+            NullLogger<PatronSuggestionService>.Instance,
+            services.GetRequiredService<IDbContextFactory<AsapDbContext>>(),
+            services.GetRequiredService<StaffEligibilityService>(),
+            services.GetRequiredService<IStaffPolarisProvider>(),
+            new PickupPreferenceMutationService(configuration, provider, timeProvider!));
+    }
 
     private static async Task DeleteBibOwnershipRequestsAsync(IEnumerable<long> requestIds)
     {
