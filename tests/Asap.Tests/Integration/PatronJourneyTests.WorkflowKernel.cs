@@ -369,6 +369,7 @@ public sealed partial class PatronJourneyTests
                 "@id",
                 seeded.RequestId));
             Assert.AreEqual(1, provider.HoldReadBarcodes.Count(item => item == requestBarcode));
+            await AssertTransitionPhaseAsync(seeded.RequestId, "fulfilled");
         }
         finally
         {
