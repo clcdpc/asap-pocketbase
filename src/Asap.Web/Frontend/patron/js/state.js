@@ -23,13 +23,49 @@ export function setAdditionalFieldDefinitions(definitions) {
   additionalFieldDefinitions = Array.isArray(definitions) ? definitions : [];
 }
 
-export let authToken = sessionStorage.getItem('asap_patron_token') || '';
+function readStoredToken() {
+  try {
+    return sessionStorage.getItem('asap_patron_token') || '';
+  } catch {
+    return '';
+  }
+}
+
+// Read persistence once; the live token owns this page even if later writes fail.
+export let authToken = readStoredToken();
 export function setAuthToken(token) {
   authToken = token || '';
-  if (authToken) {
-    sessionStorage.setItem('asap_patron_token', authToken);
-  } else {
-    sessionStorage.removeItem('asap_patron_token');
+  try {
+    if (authToken) {
+      sessionStorage.setItem('asap_patron_token', authToken);
+    } else {
+      sessionStorage.removeItem('asap_patron_token');
+    }
+  } catch {
+    // Persistence is optional; current-page authentication has already changed.
+  }
+}
+
+let rememberedLibraryOrgId;
+export function getRememberedLibraryOrgId() {
+  if (rememberedLibraryOrgId === undefined) {
+    try {
+      rememberedLibraryOrgId = localStorage.getItem('asap_patron_library_org_id') || '';
+    } catch {
+      rememberedLibraryOrgId = '';
+    }
+  }
+  return rememberedLibraryOrgId;
+}
+
+export function rememberLibraryOrgId(orgId) {
+  const clean = String(orgId || '').trim();
+  if (!clean) return;
+  rememberedLibraryOrgId = clean;
+  try {
+    localStorage.setItem('asap_patron_library_org_id', clean);
+  } catch {
+    // Keep the accepted selection in memory when preferences cannot be saved.
   }
 }
 

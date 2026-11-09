@@ -1,4 +1,4 @@
-import { loginForm, suggestionForm } from './state.js';
+import { loginForm, suggestionForm, getRememberedLibraryOrgId, rememberLibraryOrgId } from './state.js';
 import { loginPatron, logoutPatron, restorePatronSession, SessionExpiredError } from './api.js';
 import { authToken, setAuthToken, setSubmitOutcomeUnknown, submitOutcomeUnknown, submitInProgress, setSubmitInProgress } from './state.js';
 import { applyLoadedUiText, uiConfig } from './config.js';
@@ -38,13 +38,11 @@ export function patronContextCookieValue() {
 
 export function getPatronExperienceLibraryOrgId() {
   const params = new URLSearchParams(window.location.search);
-  return params.get('libraryOrgId') || patronContextCookieValue() || localStorage.getItem('asap_patron_library_org_id') || '';
+  return params.get('libraryOrgId') || patronContextCookieValue() || getRememberedLibraryOrgId();
 }
 
 export function storePatronExperienceLibraryOrgId(orgId) {
-  const clean = String(orgId || '').trim();
-  if (!clean) return;
-  localStorage.setItem('asap_patron_library_org_id', clean);
+  rememberLibraryOrgId(orgId);
 }
 
 export function setLoginBusy(isBusy) {

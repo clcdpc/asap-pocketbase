@@ -242,6 +242,8 @@ function aLibraryUiText() {
 
     const restoreB = auth.restoreSession();
     await Promise.resolve();
+    const workingSessionStorage = global.sessionStorage;
+    Object.defineProperty(global, 'sessionStorage', { configurable: true, get() { throw new Error('Storage denied'); } });
     barcode.value = 'D20000000000904';
     pin.value = '1234';
     await auth.handleLoginSubmit({ preventDefault() {} });
@@ -249,8 +251,9 @@ function aLibraryUiText() {
     await restoreB;
 
     assert.strictEqual(document.getElementById('display-barcode').textContent, 'D20000000000904', 'stale failed restore must not replace the newer login UI');
-    assert.strictEqual(sessionStorage.getItem('asap_patron_token'), 'token-D20000000000904', 'stale failed restore must not clear the newer token');
+    assert.strictEqual(state.authToken, 'token-D20000000000904', 'stale failed restore must not clear the newer in-memory token when storage is denied');
     assert.strictEqual(document.getElementById('step-form').classList.contains('hidden'), false, 'stale failed restore must not return the newer session to login');
+    Object.defineProperty(global, 'sessionStorage', { configurable: true, writable: true, value: workingSessionStorage });
 
     state.setAuthToken('token-A');
     const startupOperation = auth.captureAuthOperation();

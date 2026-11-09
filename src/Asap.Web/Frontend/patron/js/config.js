@@ -1,4 +1,4 @@
-import { defaultPublicationOptions, fieldKeys, formatKeys, setAdditionalFieldDefinitions } from './state.js';
+import { defaultPublicationOptions, fieldKeys, formatKeys, setAdditionalFieldDefinitions, getRememberedLibraryOrgId, rememberLibraryOrgId } from './state.js';
 import { loadPatronConfig } from './api.js';
 import { normalizeFormatRules } from './form-rules.js';
 
@@ -85,9 +85,9 @@ export function getConfigUrl() {
   const params = new URLSearchParams(window.location.search);
   let orgId = params.get('libraryOrgId');
   if (orgId) {
-    localStorage.setItem('asap_patron_library_org_id', orgId);
+    rememberLibraryOrgId(orgId);
   } else {
-    orgId = localStorage.getItem('asap_patron_library_org_id') || '';
+    orgId = getRememberedLibraryOrgId();
   }
 
   let url = '/api/asap/config?t=' + Date.now();
