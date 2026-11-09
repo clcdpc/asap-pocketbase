@@ -18,6 +18,8 @@ public sealed class WorkflowProcessingGuard(JobStorage storage)
             cancellationToken.ThrowIfCancellationRequested();
             handle = connection.AcquireDistributedLock(ResourceName, AcquisitionTimeout);
             cancellationToken.ThrowIfCancellationRequested();
+            ScheduledWorkflowAttribute.RecordAdmission();
+            cancellationToken.ThrowIfCancellationRequested();
             return new Lease(connection, handle);
         }
         catch (DistributedLockTimeoutException)

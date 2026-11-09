@@ -11,10 +11,12 @@ public sealed class ScheduledWorkflowAttribute : JobFilterAttribute, IServerFilt
     public const string OccurrenceParameter = "AsapWorkflowOccurrenceUtc";
     public const string DeadlineParameter = "AsapWorkflowAdmissionDeadlineUtc";
     public const string DeferralCountParameter = "AsapWorkflowAdmissionDeferrals";
+    public const string AdmittedParameter = "AsapWorkflowAdmitted";
     public const int MaximumDeferrals = 10;
     public static readonly TimeSpan AdmissionDelay = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan AdmissionWindow = TimeSpan.FromMinutes(10);
     private static readonly AsyncLocal<DateTime?> occurrence = new();
+    private static readonly AsyncLocal<PerformingContext?> pendingAdmission = new();
 
     public static DateTime? OccurrenceUtc => occurrence.Value;
 
@@ -26,6 +28,8 @@ public sealed class ScheduledWorkflowAttribute : JobFilterAttribute, IServerFilt
 
     public void OnPerforming(PerformingContext context)
     {
+        occurrence.Value = null;
+        pendingAdmission.Value = null;
         context.CancellationToken.ThrowIfCancellationRequested();
         // Hangfire 1.8 stores the recurring execution's scheduled UTC timestamp in
         // Time, which can precede job creation after scheduler downtime. Existing
@@ -37,22 +41,45 @@ public sealed class ScheduledWorkflowAttribute : JobFilterAttribute, IServerFilt
         var deadline = context.GetJobParameter<DateTime?>(DeadlineParameter) ?? DateTime.UtcNow.Add(AdmissionWindow);
         context.SetJobParameter(OccurrenceParameter, occurredUtc);
         context.SetJobParameter(DeadlineParameter, deadline);
-        if (context.GetJobParameter<int>(DeferralCountParameter) > 0 && DateTime.UtcNow >= deadline)
+        var admitted = context.GetJobParameter<bool>(AdmittedParameter);
+        if (!admitted && context.GetJobParameter<int>(DeferralCountParameter) > 0 && DateTime.UtcNow >= deadline)
         {
             throw new InvalidOperationException("Workflow admission deferral exhausted its deadline; the occurrence is incomplete.");
         }
         occurrence.Value = DateTime.SpecifyKind(occurredUtc, DateTimeKind.Utc);
+        pendingAdmission.Value = admitted ? null : context;
     }
 
     public void OnPerformed(PerformedContext context)
     {
         occurrence.Value = null;
+        pendingAdmission.Value = null;
+    }
+
+    internal static void RecordAdmission()
+    {
+        // Persist before any business work. If this write fails, the guard releases
+        // its lease and the job fails without starting work or enabling replay.
+        pendingAdmission.Value?.SetJobParameter(AdmittedParameter, true);
+        pendingAdmission.Value = null;
     }
 
     public void OnStateElection(ElectStateContext context)
     {
         if (context.CandidateState is not FailedState { Exception: WorkflowAdmissionBusyException })
         {
+            return;
+        }
+
+        if (context.GetJobParameter<bool>(AdmittedParameter))
+        {
+            // Shutdown recovery still reacquires the common guard. The original
+            // pending-admission budget is retired; this is pre-work contention on
+            // an already admitted occurrence, not a returned business failure.
+            context.CandidateState = new ScheduledState(DateTime.UtcNow.Add(AdmissionDelay))
+            {
+                Reason = "Workflow guard busy before resumed work."
+            };
             return;
         }
 

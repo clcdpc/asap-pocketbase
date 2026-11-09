@@ -87,6 +87,7 @@ public sealed partial class PatronJourneyTests
                 occurredUtc = Hangfire.Common.SerializationHelper.Deserialize<DateTime>(connection.GetJobParameter(id, ScheduledWorkflowAttribute.OccurrenceParameter));
                 deadline = Hangfire.Common.SerializationHelper.Deserialize<DateTime>(connection.GetJobParameter(id, ScheduledWorkflowAttribute.DeadlineParameter));
                 Assert.AreEqual("1", connection.GetJobParameter(id, ScheduledWorkflowAttribute.DeferralCountParameter));
+                Assert.IsNull(connection.GetJobParameter(id, ScheduledWorkflowAttribute.AdmittedParameter));
                 Assert.AreEqual(connection.GetJobData(id).CreatedAt, occurredUtc);
                 Assert.AreEqual(job.Method, ReadEnqueuedHangfireJob(storage, id).Method);
             }
@@ -94,6 +95,18 @@ public sealed partial class PatronJourneyTests
             // Reconstruct the service provider and server, then advance only the
             // Hangfire schedule. No new job/arguments or in-memory budget survives.
             await using var reconstructed = CreateApplicationFactory(configurationPath);
+            using (services.GetRequiredService<WorkflowProcessingGuard>().TryAcquire(CancellationToken.None))
+            using (var server = StartScheduledFixtureServer(reconstructed.Services, storage, queue, filters))
+            {
+                Assert.IsTrue(jobs.ChangeState(id, new EnqueuedState(queue), ScheduledState.StateName));
+                await WaitForScheduledStateAsync(storage, id, ScheduledState.StateName);
+            }
+            using (var pending = storage.GetConnection())
+            {
+                Assert.AreEqual(deadline, SerializationHelper.Deserialize<DateTime>(pending.GetJobParameter(id, ScheduledWorkflowAttribute.DeadlineParameter)));
+                Assert.AreEqual("2", pending.GetJobParameter(id, ScheduledWorkflowAttribute.DeferralCountParameter));
+                Assert.IsNull(pending.GetJobParameter(id, ScheduledWorkflowAttribute.AdmittedParameter));
+            }
             Assert.IsTrue(jobs.ChangeState(id, new EnqueuedState(queue), ScheduledState.StateName));
             using (var server = StartScheduledFixtureServer(reconstructed.Services, storage, queue, filters))
             {
@@ -102,7 +115,8 @@ public sealed partial class PatronJourneyTests
             using var verify = storage.GetConnection();
             Assert.AreEqual(occurredUtc, SerializationHelper.Deserialize<DateTime>(verify.GetJobParameter(id, ScheduledWorkflowAttribute.OccurrenceParameter)));
             Assert.AreEqual(deadline, SerializationHelper.Deserialize<DateTime>(verify.GetJobParameter(id, ScheduledWorkflowAttribute.DeadlineParameter)));
-            Assert.AreEqual("1", verify.GetJobParameter(id, ScheduledWorkflowAttribute.DeferralCountParameter));
+            Assert.AreEqual("2", verify.GetJobParameter(id, ScheduledWorkflowAttribute.DeferralCountParameter));
+            Assert.AreEqual("true", verify.GetJobParameter(id, ScheduledWorkflowAttribute.AdmittedParameter));
             Assert.IsNull(verify.GetJobParameter(id, "RetryCount"));
             Assert.AreEqual(1, storage.GetMonitoringApi().JobDetails(id).History.Count(item => item.StateName == SucceededState.StateName));
         }
@@ -154,6 +168,9 @@ public sealed partial class PatronJourneyTests
             using var verify = storage.GetConnection();
             var failed = verify.GetStateData(id);
             StringAssert.Contains(failed.Data["ExceptionMessage"], "exhausted");
+            Assert.IsNull(verify.GetJobParameter(id, ScheduledWorkflowAttribute.AdmittedParameter));
+            Assert.AreEqual(expiredDeadline ? "1" : ScheduledWorkflowAttribute.MaximumDeferrals.ToString(),
+                verify.GetJobParameter(id, ScheduledWorkflowAttribute.DeferralCountParameter));
             Assert.IsNull(verify.GetJobParameter(id, "RetryCount"));
             Assert.AreEqual(1, storage.GetMonitoringApi().JobDetails(id).History.Count(item => item.StateName == ScheduledState.StateName));
         }
@@ -200,6 +217,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("recurring")]
     [DataRow("partial_failure")]
     [DataRow("authority_changed")]
+    [DataRow("shutdown")]
     public async Task ScheduledWeeklySummaryPreservesPeriodAndCommittedEvidenceAcrossDeferral(string scenario)
     {
         const int scope = 99049;
@@ -248,9 +266,23 @@ public sealed partial class PatronJourneyTests
             requestId = request.Id;
         }
         var readinessCalls = 0;
-        var sender = new ReadinessSender(_ => scenario == "partial_failure" && Interlocked.Increment(ref readinessCalls) == 2
-            ? Task.FromException<EmailTransportReadiness>(new EmailOperationalException("Failure after first recipient committed"))
-            : Task.FromResult(EmailTransportReadiness.Configured));
+        var secondRecipientEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sender = new ReadinessSender(async token =>
+        {
+            if (Interlocked.Increment(ref readinessCalls) == 2)
+            {
+                if (scenario == "partial_failure")
+                {
+                    throw new EmailOperationalException("Failure after first recipient committed");
+                }
+                if (scenario == "shutdown")
+                {
+                    secondRecipientEntered.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+            }
+            return EmailTransportReadiness.Configured;
+        });
         var storage = factory.Services.GetRequiredService<JobStorage>();
         var queue = $"period-{Guid.NewGuid():N}";
         var filters = new SavedEmailQueueFilters(queue);
@@ -287,9 +319,40 @@ public sealed partial class PatronJourneyTests
                     services.AddSingleton<IEmailSender>(sender);
                 }));
             Assert.IsTrue(jobs.ChangeState(id, new EnqueuedState(queue), ScheduledState.StateName));
+            EmailOutbox? committed = null;
             using (var server = StartScheduledFixtureServer(reconstructed.Services, storage, queue, filters))
             {
-                await WaitForScheduledStateAsync(storage, id, scenario == "partial_failure" ? FailedState.StateName : SucceededState.StateName);
+                if (scenario == "shutdown")
+                {
+                    await secondRecipientEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    await using var pending = await contexts.CreateDbContextAsync();
+                    committed = await pending.EmailOutbox.AsNoTracking().SingleAsync(item => item.RecipientStaffUserId == first.Id);
+                    server.SendStop();
+                }
+                else
+                {
+                    await WaitForScheduledStateAsync(storage, id, scenario == "partial_failure" ? FailedState.StateName : SucceededState.StateName);
+                }
+            }
+            if (scenario == "shutdown")
+            {
+                Assert.AreEqual(1, await ReadCountAsync($"SELECT COUNT(*) FROM [HangFire].[JobQueue] WHERE [JobId] = {long.Parse(id)} AND [FetchedAt] IS NULL;"));
+                using (var pending = storage.GetConnection())
+                {
+                    Assert.AreEqual(ProcessingState.StateName, pending.GetStateData(id).Name);
+                    Assert.IsFalse(storage.GetMonitoringApi().JobDetails(id).History.Any(item => item.StateName == SucceededState.StateName));
+                    pending.SetJobParameter(id, ScheduledWorkflowAttribute.DeadlineParameter,
+                        SerializationHelper.Serialize(DateTime.UtcNow.AddMinutes(-1)));
+                }
+                timeProvider.SetUtcNow(new DateTimeOffset(nextDay.AddDays(1)));
+                await using var resumed = CreateApplicationFactory(configurationPath).WithWebHostBuilder(builder =>
+                    builder.ConfigureServices(services =>
+                    {
+                        services.RemoveAll<IEmailSender>();
+                        services.AddSingleton<IEmailSender>(sender);
+                    }));
+                using var server = StartScheduledFixtureServer(resumed.Services, storage, queue, filters);
+                await WaitForScheduledStateAsync(storage, id, SucceededState.StateName);
             }
             await using var verify = await contexts.CreateDbContextAsync();
             var rows = await verify.EmailOutbox.AsNoTracking().Where(item => item.RecipientStaffUserId == first.Id || item.RecipientStaffUserId == second.Id).ToListAsync();
@@ -298,7 +361,14 @@ public sealed partial class PatronJourneyTests
             {
                 Assert.AreEqual($"weekly-summary:{row.RecipientStaffUserId}:20300311-20300318", row.BusinessKey);
                 Assert.AreEqual("pending", row.Status);
-                Assert.AreEqual(nextDay, row.CreatedUtc, "Audit timestamps use execution time; reporting identity uses occurrence time.");
+                var expectedCreatedUtc = scenario == "shutdown" && row.RecipientStaffUserId == second.Id ? nextDay.AddDays(1) : nextDay;
+                Assert.AreEqual(expectedCreatedUtc, row.CreatedUtc, "Audit timestamps use execution time; reporting identity uses occurrence time.");
+            }
+            if (committed is not null)
+            {
+                var preserved = rows.Single(item => item.RecipientStaffUserId == first.Id);
+                Assert.AreEqual(committed.Id, preserved.Id);
+                CollectionAssert.AreEqual(committed.RowVersion, preserved.RowVersion, "Recovery must retain the committed outbox row without rewriting it.");
             }
             using var connection = storage.GetConnection();
             Assert.AreEqual(occurredUtc, SerializationHelper.Deserialize<DateTime>(connection.GetJobParameter(id, ScheduledWorkflowAttribute.OccurrenceParameter)));
@@ -366,7 +436,9 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task ScheduledWorkflowShutdownRequeuesWithoutSuccessfulCompletionOrBusinessFailure()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ScheduledWorkflowShutdownRequeuesWithoutSuccessfulCompletionOrBusinessFailure(bool deferred)
     {
         var provider = new WaitingOrganizationProvider();
         await using var application = CreateApplicationFactory(configurationPath, provider);
@@ -375,29 +447,133 @@ public sealed partial class PatronJourneyTests
         var queue = $"shutdown-{Guid.NewGuid():N}";
         var filters = new SavedEmailQueueFilters(queue);
         var jobs = new BackgroundJobClient(storage, filters);
-        var id = jobs.Create(Job.FromExpression<BackgroundWorkflowJobs>(worker => worker.RefreshOrganizationsAsync(CancellationToken.None)), new EnqueuedState(queue));
+        var job = Job.FromExpression<BackgroundWorkflowJobs>(worker => worker.RefreshOrganizationsAsync(CancellationToken.None));
+        var id = jobs.Create(job, new EnqueuedState(queue));
         try
         {
+            DateTime? admissionDeadline = null;
+            var priorFailures = 0;
+            if (deferred)
+            {
+                using (services.GetRequiredService<WorkflowProcessingGuard>().TryAcquire(CancellationToken.None))
+                using (var server = StartScheduledFixtureServer(services, storage, queue, filters))
+                {
+                    await WaitForScheduledStateAsync(storage, id, ScheduledState.StateName);
+                }
+                using var connection = storage.GetConnection();
+                admissionDeadline = SerializationHelper.Deserialize<DateTime>(connection.GetJobParameter(id, ScheduledWorkflowAttribute.DeadlineParameter));
+                Assert.AreEqual("1", connection.GetJobParameter(id, ScheduledWorkflowAttribute.DeferralCountParameter));
+                Assert.IsFalse(provider.Entered.Task.IsCompleted, "Guard contention must precede business work.");
+                priorFailures = storage.GetMonitoringApi().JobDetails(id).History.Count(item => item.StateName == FailedState.StateName);
+                Assert.IsTrue(jobs.ChangeState(id, new EnqueuedState(queue), ScheduledState.StateName));
+            }
             using (var server = StartScheduledFixtureServer(services, storage, queue, filters))
             {
                 await provider.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
                 server.SendStop();
             }
+            await provider.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            DateTime occurredUtc;
             using (var connection = storage.GetConnection())
             {
                 // Hangfire returns the SQL queue lease on shutdown while retaining
                 // Processing state until the next worker claims this same job.
                 Assert.AreEqual(ProcessingState.StateName, connection.GetStateData(id).Name);
-                Assert.IsFalse(storage.GetMonitoringApi().JobDetails(id).History.Any(item => item.StateName is "Failed" or "Succeeded"));
-                Assert.IsNull(connection.GetJobParameter(id, ScheduledWorkflowAttribute.DeferralCountParameter));
+                var shutdownHistory = storage.GetMonitoringApi().JobDetails(id).History;
+                Assert.AreEqual(priorFailures, shutdownHistory.Count(item => item.StateName == FailedState.StateName));
+                Assert.IsFalse(shutdownHistory.Any(item => item.StateName == SucceededState.StateName));
+                Assert.AreEqual(deferred ? "1" : null, connection.GetJobParameter(id, ScheduledWorkflowAttribute.DeferralCountParameter));
+                occurredUtc = SerializationHelper.Deserialize<DateTime>(connection.GetJobParameter(id, ScheduledWorkflowAttribute.OccurrenceParameter));
+                Assert.AreEqual(connection.GetJobData(id).CreatedAt, occurredUtc);
+                if (deferred)
+                {
+                    Assert.AreEqual(admissionDeadline, SerializationHelper.Deserialize<DateTime>(connection.GetJobParameter(id, ScheduledWorkflowAttribute.DeadlineParameter)));
+                    // Expire the original admission window deterministically after
+                    // admission and shutdown, before reconstructing either worker.
+                    connection.SetJobParameter(id, ScheduledWorkflowAttribute.DeadlineParameter,
+                        SerializationHelper.Serialize(DateTime.UtcNow.AddMinutes(-1)));
+                }
             }
             Assert.AreEqual(1, await ReadCountAsync($"SELECT COUNT(*) FROM [HangFire].[JobQueue] WHERE [JobId] = {long.Parse(id)} AND [FetchedAt] IS NULL;"));
             await using var reconstructed = CreateApplicationFactory(configurationPath);
+            if (deferred)
+            {
+                // Recovery is still serialized with other workflow families even
+                // though the original pending-admission deadline is retired.
+                using (services.GetRequiredService<WorkflowProcessingGuard>().TryAcquire(CancellationToken.None))
+                using (var server = StartScheduledFixtureServer(reconstructed.Services, storage, queue, filters))
+                {
+                    await WaitForScheduledStateAsync(storage, id, ScheduledState.StateName);
+                }
+                using var pending = storage.GetConnection();
+                Assert.AreEqual("1", pending.GetJobParameter(id, ScheduledWorkflowAttribute.DeferralCountParameter));
+                Assert.IsTrue(SerializationHelper.Deserialize<DateTime>(pending.GetJobParameter(id, ScheduledWorkflowAttribute.DeadlineParameter)) < DateTime.UtcNow);
+                priorFailures = storage.GetMonitoringApi().JobDetails(id).History.Count(item => item.StateName == FailedState.StateName);
+                Assert.IsTrue(jobs.ChangeState(id, new EnqueuedState(queue), ScheduledState.StateName));
+            }
             using var nextServer = StartScheduledFixtureServer(reconstructed.Services, storage, queue, filters);
             await WaitForScheduledStateAsync(storage, id, SucceededState.StateName);
+            using var verify = storage.GetConnection();
+            Assert.AreEqual(occurredUtc, SerializationHelper.Deserialize<DateTime>(verify.GetJobParameter(id, ScheduledWorkflowAttribute.OccurrenceParameter)));
+            var resumedJob = ReadEnqueuedHangfireJob(storage, id);
+            Assert.AreEqual(job.Method, resumedJob.Method);
+            CollectionAssert.AreEqual(job.Args.ToArray(), resumedJob.Args.ToArray());
+            Assert.IsNull(verify.GetJobParameter(id, "RetryCount"));
+            var history = storage.GetMonitoringApi().JobDetails(id).History;
+            Assert.AreEqual(1, history.Count(item => item.StateName == SucceededState.StateName));
+            Assert.AreEqual(priorFailures, history.Count(item => item.StateName == FailedState.StateName));
         }
         finally
         {
+            provider.Release.TrySetResult();
+            jobs.Delete(id);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScheduledWorkflowAdmissionWriteFailureReleasesGuardWithoutBusinessWorkOrReplay()
+    {
+        var provider = new WaitingOrganizationProvider();
+        await using var application = CreateApplicationFactory(configurationPath, provider);
+        var services = application.Services;
+        var storage = services.GetRequiredService<JobStorage>();
+        var queue = $"admission-write-{Guid.NewGuid():N}";
+        var filters = new SavedEmailQueueFilters(queue);
+        var jobs = new BackgroundJobClient(storage, filters);
+        var id = jobs.Create(Job.FromExpression<BackgroundWorkflowJobs>(worker => worker.RefreshOrganizationsAsync(CancellationToken.None)), new EnqueuedState(queue));
+        try
+        {
+            // Fail only this job's admission write, inside real Hangfire SQL storage.
+            await ExecuteNonQueryAsync($"""
+                CREATE TRIGGER [HangFire].[FixtureFailWorkflowAdmission] ON [HangFire].[JobParameter]
+                AFTER INSERT, UPDATE AS
+                BEGIN
+                    SET NOCOUNT ON;
+                    IF EXISTS (SELECT 1 FROM inserted WHERE [JobId] = {long.Parse(id)} AND [Name] = N'{ScheduledWorkflowAttribute.AdmittedParameter}')
+                    BEGIN
+                        THROW 51000, 'Controlled admission persistence failure.', 1;
+                    END
+                END;
+                """);
+            using (var server = StartScheduledFixtureServer(services, storage, queue, filters))
+            {
+                await WaitForScheduledStateAsync(storage, id, FailedState.StateName);
+            }
+            using var connection = storage.GetConnection();
+            StringAssert.Contains(connection.GetStateData(id).Data["ExceptionMessage"], "Controlled admission persistence failure");
+            Assert.IsNull(connection.GetJobParameter(id, ScheduledWorkflowAttribute.AdmittedParameter));
+            Assert.IsNull(connection.GetJobParameter(id, "RetryCount"));
+            Assert.IsFalse(provider.Entered.Task.IsCompleted);
+            using var guard = services.GetRequiredService<WorkflowProcessingGuard>().TryAcquire(CancellationToken.None);
+            Assert.IsNotNull(guard, "Failed persistence must release the acquired shared guard.");
+            await using var reconstructed = CreateApplicationFactory(configurationPath, provider);
+            using var nextServer = StartScheduledFixtureServer(reconstructed.Services, storage, queue, filters);
+            Assert.AreEqual(FailedState.StateName, connection.GetStateData(id).Name);
+            Assert.IsFalse(provider.Entered.Task.IsCompleted);
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync("DROP TRIGGER IF EXISTS [HangFire].[FixtureFailWorkflowAdmission];");
             provider.Release.TrySetResult();
             jobs.Delete(id);
         }
@@ -407,6 +583,7 @@ public sealed partial class PatronJourneyTests
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<PolarisConnectionTestResult> TestConnectionAsync(CancellationToken cancellationToken) =>
             Task.FromResult(new PolarisConnectionTestResult(true, 1));
@@ -414,7 +591,15 @@ public sealed partial class PatronJourneyTests
         public async Task<IReadOnlyList<PolarisOrganizationSnapshot>> GetOrganizationsAsync(CancellationToken cancellationToken)
         {
             Entered.TrySetResult();
-            await Release.Task.WaitAsync(cancellationToken);
+            try
+            {
+                await Release.Task.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Cancelled.TrySetResult();
+                throw;
+            }
             return [new(2, "Test Library", "Test", 2, 1)];
         }
 
