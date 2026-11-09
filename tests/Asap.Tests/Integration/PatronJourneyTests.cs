@@ -10801,6 +10801,8 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
 
     private sealed class FailingPatronCodeReferenceProvider : IPolarisReferenceProvider
     {
+        public int PatronCodeLookupCount { get; private set; }
+
         public Task<PolarisConnectionTestResult> TestConnectionAsync(
             CancellationToken cancellationToken) =>
             Task.FromResult(new PolarisConnectionTestResult(false, 0, "testing_patron_codes_failure"));
@@ -10811,10 +10813,13 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 [new(1, "System", null, 1, null), new(2, "Test Library", "Test", 2, 1)]);
 
         public Task<IReadOnlyList<PolarisPatronCodeSnapshot>> GetPatronCodesAsync(
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken)
+        {
+            PatronCodeLookupCount++;
             throw new PolarisOperationalException(
                 "testing_patron_codes_failure",
                 "Testing patron-code reference failure.");
+        }
     }
 
     private sealed class LockProbePatronCodeReferenceProvider(string connectionString) : IPolarisReferenceProvider

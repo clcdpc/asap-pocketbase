@@ -161,7 +161,6 @@ public sealed partial class WorkflowProcessingService(
             return new WorkflowRunResult("organization_snapshot_invalid");
         }
 
-        var patronCodes = await referenceProvider.GetPatronCodesAsync(cancellationToken);
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var changed = 0;
         foreach (var snapshot in snapshots.Where(item => item.Id > LibraryScope.SystemOrganizationId))
@@ -210,7 +209,7 @@ public sealed partial class WorkflowProcessingService(
             }
         }
         await context.SaveChangesAsync(cancellationToken);
-        return new WorkflowRunResult("completed", snapshots.Count + patronCodes.Count, changed);
+        return new WorkflowRunResult("completed", snapshots.Count, changed);
     }
 
     public async Task<int> CleanupSessionsAsync(CancellationToken cancellationToken = default)

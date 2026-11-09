@@ -43,21 +43,39 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task OrganizationRefreshProviderFailureLeavesOrganizationsUntouched()
+    public async Task OrganizationRefreshSucceedsWithoutUnusedPatronCodeLookup()
     {
+        var provider = new FailingPatronCodeReferenceProvider();
         await using var refreshFactory = CreateApplicationFactory(
             configurationPath,
-            new FailingPatronCodeReferenceProvider());
+            provider);
+        var result = await refreshFactory.Services.GetRequiredService<WorkflowProcessingService>()
+            .RefreshOrganizationsAsync(CancellationToken.None);
+        Assert.AreEqual("completed", result.Code);
+        Assert.AreEqual(2, result.Visited, "Only organization snapshots contribute to the refresh count.");
+        Assert.AreEqual(0, provider.PatronCodeLookupCount);
+    }
+
+    [TestMethod]
+    public async Task OrganizationRefreshProviderFailureLeavesOrganizationsUntouched()
+    {
+        await using var refreshFactory = CreateApplicationFactory(configurationPath, new FailingOrganizationReferenceProvider());
         var service = refreshFactory.Services.GetRequiredService<WorkflowProcessingService>();
         await using var context = await refreshFactory.Services
             .GetRequiredService<IDbContextFactory<AsapDbContext>>()
             .CreateDbContextAsync();
-        var before = await context.Organizations.CountAsync(item => item.Id == 99);
+        var before = await context.Organizations.AsNoTracking().OrderBy(item => item.Id)
+            .Select(item => new { item.Id, item.RowVersion }).ToListAsync();
 
         await Assert.ThrowsExactlyAsync<PolarisOperationalException>(
             () => service.RefreshOrganizationsAsync(CancellationToken.None));
-        var after = await context.Organizations.CountAsync(item => item.Id == 99);
-        Assert.AreEqual(before, after);
+        var after = await context.Organizations.AsNoTracking().OrderBy(item => item.Id)
+            .Select(item => new { item.Id, item.RowVersion }).ToListAsync();
+        CollectionAssert.AreEqual(before.Select(item => item.Id).ToArray(), after.Select(item => item.Id).ToArray());
+        for (var index = 0; index < before.Count; index++)
+        {
+            CollectionAssert.AreEqual(before[index].RowVersion, after[index].RowVersion);
+        }
     }
 
     [TestMethod]
