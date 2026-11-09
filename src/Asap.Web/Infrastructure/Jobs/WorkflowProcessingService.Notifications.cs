@@ -87,16 +87,22 @@ public sealed partial class WorkflowProcessingService
             .ToListAsync(cancellationToken);
         var titleRequests = await readContext.TitleRequests.AsNoTracking()
             .Where(item => organizationIds.Contains(item.LibraryOrganizationId) &&
-                          (item.Status == RequestStatus.Suggestion || item.Status == RequestStatus.OutstandingPurchase))
+                          (item.Status == RequestStatus.Suggestion ||
+                           item.Status == RequestStatus.OutstandingPurchase && item.BibId == null))
+            .Select(item => new WeeklyTitleSnapshot(item.Id, item.LibraryOrganizationId, item.Status,
+                item.Title, item.Author, item.CreatedUtc, item.UpdatedUtc))
             .ToListAsync(cancellationToken);
         var copyRequests = await readContext.AdditionalCopyRequests.AsNoTracking()
             .Where(item => organizationIds.Contains(item.LibraryOrganizationId) && item.Status == "open")
+            .Select(item => new WeeklyCopySnapshot(item.Id, item.LibraryOrganizationId,
+                item.Title, item.Author, item.BibId, item.CreatedUtc))
             .ToListAsync(cancellationToken);
         var systemSettings = await readContext.SystemSettings.AsNoTracking()
             .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
         var staffUrl = systemSettings?.StaffApplicationUrl;
         var createdCount = 0;
         var visited = 0;
+        var summaries = new Dictionary<int, WeeklySummaryData>();
         foreach (var recipientSnapshot in staff)
         {
             visited++;
@@ -106,16 +112,12 @@ public sealed partial class WorkflowProcessingService
                 continue;
             }
 
-            var recipientRequests = titleRequests.Where(item => authorizationOrganizationId == LibraryScope.SystemOrganizationId ||
-                item.LibraryOrganizationId == authorizationOrganizationId).ToList();
-            var newSubmissions = recipientRequests.Where(item => item.Status == RequestStatus.Suggestion)
-                .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).ToList();
-            var purchases = recipientRequests.Where(item => item.Status == RequestStatus.OutstandingPurchase && item.BibId == null)
-                .OrderByDescending(item => item.UpdatedUtc).ThenByDescending(item => item.Id).ToList();
-            var copies = copyRequests.Where(item => authorizationOrganizationId == LibraryScope.SystemOrganizationId ||
-                item.LibraryOrganizationId == authorizationOrganizationId)
-                .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).ToList();
-            if (newSubmissions.Count == 0 && purchases.Count == 0 && copies.Count == 0)
+            if (!summaries.TryGetValue(authorizationOrganizationId, out var summary))
+            {
+                summary = PrepareWeeklySummary(titleRequests, copyRequests, authorizationOrganizationId);
+                summaries.Add(authorizationOrganizationId, summary);
+            }
+            if (summary.Submissions.Count == 0 && summary.Purchases.Count == 0 && summary.Copies.Count == 0)
             {
                 continue;
             }
@@ -209,7 +211,7 @@ public sealed partial class WorkflowProcessingService
                 // operations. Commit both recipients together; retries never fill in or redirect copies.
                 var outboxItems = new List<EmailOutbox>();
                 var body = string.IsNullOrWhiteSpace(staffUrl) ? null : WeeklyBody(
-                    newSubmissions, purchases, copies, staffUrl, periodStartLocal, periodEndLocal);
+                    summary, staffUrl, periodStartLocal, periodEndLocal);
                 foreach (var (address, kind, key) in recipients)
                 {
                     var suppression = address is null ? "recipient_missing_or_invalid" :
@@ -229,7 +231,7 @@ public sealed partial class WorkflowProcessingService
                         ToAddress = address,
                         FromAddress = fromAddress,
                         FromName = fromName,
-                        Subject = suppression is null ? $"Weekly ASAP action summary: {newSubmissions.Count} new, {purchases.Count} awaiting bibs, {copies.Count} additional copies" : null,
+                        Subject = suppression is null ? $"Weekly ASAP action summary: {summary.Submissions.Count} new, {summary.Purchases.Count} awaiting bibs, {summary.Copies.Count} additional copies" : null,
                         BodyText = suppression is null ? body : null,
                         Status = suppression is null ? "pending" : "suppressed",
                         SuppressionReason = suppression,
@@ -521,10 +523,36 @@ public sealed partial class WorkflowProcessingService
         TimeoutFamily.HoldPickupTimeout => RequestStatus.HoldPlaced,
         _ => ""
     };
+    private sealed record WeeklyTitleSnapshot(long Id, int LibraryOrganizationId, string Status,
+        string Title, string? Author, DateTime CreatedUtc, DateTime UpdatedUtc);
+    private sealed record WeeklyCopySnapshot(long Id, int LibraryOrganizationId,
+        string Title, string? Author, int BibId, DateTime CreatedUtc);
+    private sealed record WeeklySummaryCategory(int Count, IReadOnlyList<WeeklySummaryItem> Examples);
+    private sealed record WeeklySummaryData(WeeklySummaryCategory Submissions, WeeklySummaryCategory Purchases, WeeklySummaryCategory Copies);
+
+    private static WeeklySummaryData PrepareWeeklySummary(
+        IReadOnlyList<WeeklyTitleSnapshot> titles,
+        IReadOnlyList<WeeklyCopySnapshot> copyRequests,
+        int organizationId)
+    {
+        var scopedTitles = titles.Where(item => organizationId == LibraryScope.SystemOrganizationId ||
+            item.LibraryOrganizationId == organizationId).ToArray();
+        var submissions = scopedTitles.Where(item => item.Status == RequestStatus.Suggestion).ToArray();
+        var purchases = scopedTitles.Where(item => item.Status == RequestStatus.OutstandingPurchase).ToArray();
+        var copies = copyRequests.Where(item => organizationId == LibraryScope.SystemOrganizationId ||
+            item.LibraryOrganizationId == organizationId).ToArray();
+        return new WeeklySummaryData(
+            new WeeklySummaryCategory(submissions.Length, submissions.OrderByDescending(item => item.CreatedUtc)
+                .ThenByDescending(item => item.Id).Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author)).ToArray()),
+            new WeeklySummaryCategory(purchases.Length, purchases.OrderByDescending(item => item.UpdatedUtc)
+                .ThenByDescending(item => item.Id).Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author)).ToArray()),
+            new WeeklySummaryCategory(copies.Length, copies.OrderByDescending(item => item.CreatedUtc)
+                .ThenByDescending(item => item.Id).Take(5).Select(item => new WeeklySummaryItem(item.Title,
+                    item.Author ?? item.BibId.ToString(System.Globalization.CultureInfo.InvariantCulture))).ToArray()));
+    }
+
     private static string WeeklyBody(
-        IReadOnlyList<TitleRequest> submissions,
-        IReadOnlyList<TitleRequest> purchases,
-        IReadOnlyList<AdditionalCopyRequest> copies,
+        WeeklySummaryData summary,
         string staffUrl,
         DateTime periodStartLocal,
         DateTime periodEndLocal)
@@ -536,14 +564,14 @@ public sealed partial class WorkflowProcessingService
             $"Business period: {periodStartLocal:yyyy-MM-dd} through {endDisplay}",
             "",
             "New submissions",
-            $"{submissions.Count} active requests",
+            $"{summary.Submissions.Count} active requests",
             "Five most recent:"
         };
-        lines.AddRange(WeeklySampleLines(submissions.Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author))));
-        lines.AddRange(["", $"View new submissions: {WeeklyLink(staffUrl, "submitted")}", "", "Approved purchases without bibs", $"{purchases.Count} active requests", "Five most recent:"]);
-        lines.AddRange(WeeklySampleLines(purchases.Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author))));
-        lines.AddRange(["", $"View purchases awaiting bibs: {WeeklyLink(staffUrl, "purchased_waiting_for_bib")}", "", "Additional copies", $"{copies.Count} open tasks", "Five most recent:"]);
-        lines.AddRange(WeeklySampleLines(copies.Take(5).Select(item => new WeeklySummaryItem(item.Title, item.Author ?? item.BibId.ToString(System.Globalization.CultureInfo.InvariantCulture)))));
+        lines.AddRange(WeeklySampleLines(summary.Submissions.Examples));
+        lines.AddRange(["", $"View new submissions: {WeeklyLink(staffUrl, "submitted")}", "", "Approved purchases without bibs", $"{summary.Purchases.Count} active requests", "Five most recent:"]);
+        lines.AddRange(WeeklySampleLines(summary.Purchases.Examples));
+        lines.AddRange(["", $"View purchases awaiting bibs: {WeeklyLink(staffUrl, "purchased_waiting_for_bib")}", "", "Additional copies", $"{summary.Copies.Count} open tasks", "Five most recent:"]);
+        lines.AddRange(WeeklySampleLines(summary.Copies.Examples));
         lines.Add($"\nView additional copies: {WeeklyLink(staffUrl, "additional_copies")}");
         return string.Join("\n", lines);
     }

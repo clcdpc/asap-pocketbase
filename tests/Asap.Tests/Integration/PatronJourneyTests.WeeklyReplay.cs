@@ -170,6 +170,7 @@ public sealed partial class PatronJourneyTests
     private sealed class WeeklySummarySqlProbe : DbCommandInterceptor, IMaterializationInterceptor
     {
         public List<string> Commands { get; } = [];
+        public List<(string Sql, string[] Columns, int ReadCalls)> Reads { get; } = [];
         public int FullRequestEntities { get; private set; }
         public int OccurrenceReads => Commands.Count(sql => sql.Contains("[asap].[EmailOutbox]", StringComparison.Ordinal) &&
             sql.Contains("[BusinessKey] =", StringComparison.Ordinal));
@@ -177,6 +178,13 @@ public sealed partial class PatronJourneyTests
             CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
         {
             Commands.Add(command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+        public override ValueTask<InterceptionResult> DataReaderClosingAsync(DbCommand command,
+            DataReaderClosingEventData eventData, InterceptionResult result)
+        {
+            Reads.Add((command.CommandText, Enumerable.Range(0, eventData.DataReader.FieldCount)
+                .Select(eventData.DataReader.GetName).ToArray(), eventData.ReadCount));
             return ValueTask.FromResult(result);
         }
         public object InitializedInstance(MaterializationInterceptionData materializationData, object entity)
