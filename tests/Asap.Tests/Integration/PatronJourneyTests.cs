@@ -4892,91 +4892,99 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             initialIdentifierJobCount = Convert.ToInt32(await WithFixtureClock(count).ExecuteScalarAsync());
         }
 
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
-        client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
-        using var session = await client.GetAsync("/api/asap/staff/session");
-        using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
-        client.DefaultRequestHeaders.Add(
-            "X-ASAP-Antiforgery",
-            sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
-        using var get = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
-        using var getBody = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
-
-        using var retry = await client.PostAsJsonAsync(
-            $"/api/asap/staff/title-requests/{requestId}/retry-identifier-check",
-            new { version = getBody.RootElement.GetProperty("version").GetString() });
-        Assert.AreEqual(HttpStatusCode.OK, retry.StatusCode, await retry.Content.ReadAsStringAsync());
-
-        await using var verify = new SqlConnection(databaseConnectionString);
-        await verify.OpenAsync();
-        await using var command = new SqlCommand(
-            """
-            SELECT r.[IsbnCheckStatus], r.[IsbnCheckRetryCount], r.[IsbnCheckLastErrorCode], r.[IsbnCheckResult],
-                   r.[LastCheckedUtc],
-                   (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
-                    WHERE [TitleRequestId] = r.[Id] AND [EventType] = N'identifier_retry_requested'),
-                   (SELECT COUNT(*) FROM [HangFire].[Job]
-                    WHERE [InvocationData] LIKE N'%IdentifierLookupJobs%'),
-                   r.[RowVersion]
-            FROM [asap].[TitleRequest] r
-            WHERE r.[Id] = @id;
-            """,
-            verify);
-        command.Parameters.AddWithValue("@id", requestId);
-        await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
-        Assert.IsTrue(await result.ReadAsync());
-        byte[] retryVersion = (byte[])result[7];
-        Assert.AreEqual("pending", result.GetString(0));
-        Assert.AreEqual(0, result.GetInt32(1));
-        Assert.IsTrue(result.IsDBNull(2));
-        Assert.IsTrue(result.IsDBNull(3));
-        Assert.IsTrue(result.IsDBNull(4));
-        Assert.AreEqual(1, result.GetInt32(5));
-        Assert.AreEqual(initialIdentifierJobCount + 1, result.GetInt32(6));
-
         var matchingIdentifierJobIds = new List<string>();
-        await using (var connection = new SqlConnection(databaseConnectionString))
+        try
         {
-            await connection.OpenAsync();
-            await using var commandForJob = connection.CreateCommand();
-            commandForJob.CommandText =
-                """
-                SELECT CONVERT(nvarchar(30), j.[Id])
-                FROM [HangFire].[Job] j
-                WHERE j.[InvocationData] LIKE N'%IdentifierLookupJobs%'
-                  AND EXISTS
-                  (
-                      SELECT 1
-                      FROM OPENJSON(j.[Arguments]) argument
-                      WHERE argument.[key] = N'0'
-                        AND TRY_CONVERT(bigint, argument.[value]) = @requestId
-                  );
-                """;
-            commandForJob.Parameters.AddWithValue("@requestId", requestId);
-            await using var jobs = await commandForJob.ExecuteReaderAsync();
-            while (await jobs.ReadAsync())
-            {
-                matchingIdentifierJobIds.Add(jobs.GetString(0));
-            }
-        }
+            client.DefaultRequestHeaders.Add("X-ASAP-Test-Staff-Id", actorId.ToString());
+            client.DefaultRequestHeaders.Add("X-ASAP-Test-Tenant-Id", identity.TenantId);
+            using var session = await client.GetAsync("/api/asap/staff/session");
+            using var sessionBody = JsonDocument.Parse(await session.Content.ReadAsStringAsync());
+            client.DefaultRequestHeaders.Add(
+                "X-ASAP-Antiforgery",
+                sessionBody.RootElement.GetProperty("antiforgeryToken").GetString());
+            using var get = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
+            using var getBody = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
 
-        Assert.HasCount(1, matchingIdentifierJobIds);
-        var storedJobId = matchingIdentifierJobIds.Single();
-        var storedJob = ReadEnqueuedHangfireJob(storage, storedJobId);
-        Assert.AreEqual(typeof(IdentifierLookupJobs), storedJob.Type);
-        Assert.AreEqual(nameof(IdentifierLookupJobs.ProcessAsync), storedJob.Method.Name);
-        Assert.AreEqual(5, storedJob.Args.Count);
-        Assert.AreEqual(requestId, Convert.ToInt64(storedJob.Args[0]));
-        Assert.AreEqual("9780000002110", storedJob.Args[1] as string);
-        Assert.AreEqual(2, Convert.ToInt32(storedJob.Args[2]));
-        CollectionAssert.AreEqual(retryVersion, (byte[])storedJob.Args[3]);
-        Assert.AreEqual(CancellationToken.None, (CancellationToken)storedJob.Args[4]);
-        var jobHistory = storage.GetMonitoringApi().JobDetails(storedJobId);
-        Assert.IsNotNull(jobHistory);
-        var enqueuedState = jobHistory!.History.FirstOrDefault(state =>
-            state.StateName == Hangfire.States.EnqueuedState.StateName);
-        Assert.IsNotNull(enqueuedState);
-        Assert.AreEqual("asap-identifier", enqueuedState!.Data["Queue"]);
+            using var retry = await client.PostAsJsonAsync(
+                $"/api/asap/staff/title-requests/{requestId}/retry-identifier-check",
+                new { version = getBody.RootElement.GetProperty("version").GetString() });
+            Assert.AreEqual(HttpStatusCode.OK, retry.StatusCode, await retry.Content.ReadAsStringAsync());
+
+            await using var verify = new SqlConnection(databaseConnectionString);
+            await verify.OpenAsync();
+            await using var command = new SqlCommand(
+                """
+                SELECT r.[IsbnCheckStatus], r.[IsbnCheckRetryCount], r.[IsbnCheckLastErrorCode], r.[IsbnCheckResult],
+                       r.[LastCheckedUtc],
+                       (SELECT COUNT(*) FROM [asap].[TitleRequestEvent]
+                        WHERE [TitleRequestId] = r.[Id] AND [EventType] = N'identifier_retry_requested'),
+                       (SELECT COUNT(*) FROM [HangFire].[Job]
+                        WHERE [InvocationData] LIKE N'%IdentifierLookupJobs%'),
+                       r.[RowVersion]
+                FROM [asap].[TitleRequest] r
+                WHERE r.[Id] = @id;
+                """,
+                verify);
+            command.Parameters.AddWithValue("@id", requestId);
+            await using var result = await WithFixtureClock(command).ExecuteReaderAsync();
+            Assert.IsTrue(await result.ReadAsync());
+            byte[] retryVersion = (byte[])result[7];
+            Assert.AreEqual("pending", result.GetString(0));
+            Assert.AreEqual(0, result.GetInt32(1));
+            Assert.IsTrue(result.IsDBNull(2));
+            Assert.IsTrue(result.IsDBNull(3));
+            Assert.IsTrue(result.IsDBNull(4));
+            Assert.AreEqual(1, result.GetInt32(5));
+            Assert.AreEqual(initialIdentifierJobCount + 1, result.GetInt32(6));
+
+            await using (var connection = new SqlConnection(databaseConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var commandForJob = connection.CreateCommand();
+                commandForJob.CommandText =
+                    """
+                    SELECT CONVERT(nvarchar(30), j.[Id])
+                    FROM [HangFire].[Job] j
+                    WHERE j.[InvocationData] LIKE N'%IdentifierLookupJobs%'
+                      AND EXISTS
+                      (
+                          SELECT 1
+                          FROM OPENJSON(j.[Arguments]) argument
+                          WHERE argument.[key] = N'0'
+                            AND TRY_CONVERT(bigint, argument.[value]) = @requestId
+                      );
+                    """;
+                commandForJob.Parameters.AddWithValue("@requestId", requestId);
+                await using var jobs = await commandForJob.ExecuteReaderAsync();
+                while (await jobs.ReadAsync())
+                {
+                    matchingIdentifierJobIds.Add(jobs.GetString(0));
+                }
+            }
+
+            Assert.HasCount(1, matchingIdentifierJobIds);
+            var storedJobId = matchingIdentifierJobIds.Single();
+            var storedJob = ReadEnqueuedHangfireJob(storage, storedJobId);
+            Assert.AreEqual(typeof(IdentifierLookupJobs), storedJob.Type);
+            Assert.AreEqual(nameof(IdentifierLookupJobs.ProcessAsync), storedJob.Method.Name);
+            Assert.AreEqual(5, storedJob.Args.Count);
+            Assert.AreEqual(requestId, Convert.ToInt64(storedJob.Args[0]));
+            Assert.AreEqual("9780000002110", storedJob.Args[1] as string);
+            Assert.AreEqual(2, Convert.ToInt32(storedJob.Args[2]));
+            CollectionAssert.AreEqual(retryVersion, (byte[])storedJob.Args[3]);
+            Assert.AreEqual(CancellationToken.None, (CancellationToken)storedJob.Args[4]);
+            var jobHistory = storage.GetMonitoringApi().JobDetails(storedJobId);
+            Assert.IsNotNull(jobHistory);
+            var enqueuedState = jobHistory!.History.FirstOrDefault(state =>
+                state.StateName == Hangfire.States.EnqueuedState.StateName);
+            Assert.IsNotNull(enqueuedState);
+            Assert.AreEqual("asap-identifier", enqueuedState!.Data["Queue"]);
+        }
+        finally
+        {
+            DeleteHangfireJobs(factory.Services.GetRequiredService<IBackgroundJobClient>(), matchingIdentifierJobIds);
+            await DeleteRequestIdsAsync(factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>(), [requestId]);
+        }
     }
 
     [TestMethod]

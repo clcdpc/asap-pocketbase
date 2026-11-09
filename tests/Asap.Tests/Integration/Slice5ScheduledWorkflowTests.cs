@@ -215,11 +215,21 @@ public sealed partial class PatronJourneyTests
         timeProvider!.SetUtcNow(new DateTimeOffset(occurredUtc));
         string? staffUrl;
         long requestId;
+        long[] enabledGlobalRecipients;
         await using (var seed = await contexts.CreateDbContextAsync())
         {
             var system = await seed.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
             staffUrl = system.StaffApplicationUrl;
             system.StaffApplicationUrl = "https://staff.example.org/staff/";
+            // A scoped summary also includes opted-in global super-admins. Keep
+            // this partial-progress fixture's recipient sequence wholly owned.
+            var globalRecipients = await seed.StaffUsers.Where(item => item.OrganizationId == 1 &&
+                item.Role == StaffRole.SuperAdmin && item.WeeklyActionSummaryEnabled).ToListAsync();
+            enabledGlobalRecipients = globalRecipients.Select(item => item.Id).ToArray();
+            foreach (var globalRecipient in globalRecipients)
+            {
+                globalRecipient.WeeklyActionSummaryEnabled = false;
+            }
             foreach (var staffId in new[] { first.Id, second.Id })
             {
                 var staff = await seed.StaffUsers.SingleAsync(item => item.Id == staffId);
@@ -316,6 +326,9 @@ public sealed partial class PatronJourneyTests
                 ("@url", (object?)staffUrl ?? DBNull.Value), ("@scope", scope));
             await DeactivateCorrectiveStaffAsync(first.Id);
             await DeactivateCorrectiveStaffAsync(second.Id);
+            await using var restore = await contexts.CreateDbContextAsync();
+            await restore.StaffUsers.Where(item => enabledGlobalRecipients.Contains(item.Id))
+                .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.WeeklyActionSummaryEnabled, true));
         }
     }
 
