@@ -204,6 +204,41 @@ public sealed class ExternalConfigurationValidatorTests
         Assert.AreEqual(300, value.PatronLoginRateLimit.WindowSeconds);
     }
 
+    [TestMethod]
+    public void LogLevelOverridesAllowOnlyCategorySpecificDebugAndTraceValues()
+    {
+        var valid = TestConfigurationFactory.Create();
+        valid.LogLevelOverrides = new Dictionary<string, string?>
+        {
+            ["Microsoft.EntityFrameworkCore.Database.Command"] = "Debug",
+            ["Asap.Web.Features.Staff.StaffAuthentication"] = "Trace"
+        };
+
+        Assert.HasCount(0, ExternalConfigurationValidator.Validate(valid));
+
+        valid.LogLevelOverrides["Microsoft.EntityFrameworkCore.Database.Command"] = "Information";
+        valid.LogLevelOverrides["Microsoft.AspNetCore.*"] = "Debug";
+        valid.LogLevelOverrides["Default"] = "Trace";
+        var invalid = ExternalConfigurationValidator.Validate(valid);
+
+        Assert.AreEqual(3, invalid.Count(error => error == "log_level_override_invalid"));
+    }
+
+    [TestMethod]
+    public void LogLevelOverridesRejectDuplicateCategoryPrefixesWithoutCaseSensitivity()
+    {
+        var value = TestConfigurationFactory.Create();
+        value.LogLevelOverrides = new Dictionary<string, string?>
+        {
+            ["Asap.Web.Features.Staff.Authentication"] = "Debug",
+            ["asap.web.features.staff.authentication"] = "Trace"
+        };
+
+        CollectionAssert.Contains(
+            ExternalConfigurationValidator.Validate(value).ToList(),
+            "log_level_override_duplicate");
+    }
+
     [DataRow(0, 300, "patron_login_rate_limit_permit_invalid")]
     [DataRow(20, 0, "patron_login_rate_limit_window_invalid")]
     [TestMethod]

@@ -257,7 +257,7 @@ public sealed partial class WorkflowProcessingService
                 }
                 catch (DbUpdateException exception) when (exception.InnerException is SqlException { Number: 2601 or 2627 })
                 {
-                    logger.LogInformation(exception, "Weekly summary duplicate or concurrent recipient mutation was ignored.");
+                    logger.LogDebug(exception, "Weekly summary duplicate or concurrent recipient mutation was ignored.");
                 }
                 break;
             }
@@ -388,7 +388,7 @@ public sealed partial class WorkflowProcessingService
 
         if (cancellationToken.IsCancellationRequested)
         {
-            logger.LogInformation("Email outbox {OutboxId} awaits the scheduled sweep after caller cancellation.", outbox.Id);
+            logger.LogDebug("Email outbox {OutboxId} awaits the scheduled sweep after caller cancellation.", outbox.Id);
             return;
         }
 

@@ -3,11 +3,12 @@ import { createLatestLoad } from '../../shared/latest-load.js';
 import { createDraftScope } from './draft-scope.js';
 
 export function createSessionCoordinator({ identity, shell, navigation, getFeatures, onAccepted, onPreferencesChanged,
-  request = authorizedJson, sessionRequest = loadStaffSession }) {
+  request = authorizedJson, sessionRequest = loadStaffSession, initialSignInFailure = null }) {
   const reads = createLatestLoad(), admission = createDraftScope(), events = new window.AbortController();
-  let disposed = false, started = false, signOutAttempt = null, unsubscribeInvalid = null, unsubscribeAccess = null;
+  let disposed = false, started = false, initialSignInFailurePresented = false,
+    signOutAttempt = null, unsubscribeInvalid = null, unsubscribeAccess = null;
 
-  function lose(message, accessUnavailable = false) {
+  function lose(message, accessUnavailable = false, authenticationFailure = null) {
     if (disposed) return;
     reads.begin('session').abort(); navigation.invalidate();
     let featureMessage = null;
@@ -16,7 +17,9 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
     for (const feature of getFeatures()) {
       const result = feature.signedOut?.(); if (typeof result === 'string') featureMessage = result;
     }
-    identity.clear(); shell.showSignedOut(message, featureMessage, accessUnavailable);
+    identity.clear();
+    if (authenticationFailure) shell.showAuthenticationFailure(authenticationFailure);
+    else shell.showSignedOut(message, featureMessage, accessUnavailable);
   }
   function accessUnavailable() {
     lose('Staff access is not currently available. Sign out or use a different authorized Microsoft account.', true);
@@ -26,13 +29,22 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
     try {
       const session = await sessionRequest({ signal: load.signal });
       if (disposed || !load.isCurrent()) return;
-      if (!session.authenticated) { lose(); return; }
+      if (!session.authenticated) {
+        if (initialSignInFailure) lose(undefined, false, initialSignInFailure);
+        else lose();
+        return;
+      }
       if (session.accessAllowed === false) { accessUnavailable(); return; }
       const staff = identity.accept(session.staff);
       onAccepted(staff);
       for (const feature of getFeatures()) feature.setStaff?.(staff);
       shell.showWorkspace(staff); shell.announce('Staff session ready.');
       await navigation.navigateFromUrl({ initial: true });
+      if (initialSignInFailure && !initialSignInFailurePresented && !disposed &&
+          load.isCurrent() && identity.isCurrent(staff)) {
+        initialSignInFailurePresented = true;
+        shell.showAuthenticationNotice?.(initialSignInFailure);
+      }
     } catch (error) {
       if (!disposed && load.isCurrent() && !isAbortError(error)) lose('Staff access could not be loaded. Try signing in again.');
     } finally { reads.finish('session', load.token); }

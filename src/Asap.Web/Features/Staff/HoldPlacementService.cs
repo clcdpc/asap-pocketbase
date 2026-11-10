@@ -1885,7 +1885,7 @@ public sealed class HoldPlacementService(
     {
         if (cancellationToken.IsCancellationRequested)
         {
-            logger.LogInformation("Hold notification dispatch for request {RequestId} was deferred after commit because the caller canceled.", requestId);
+            logger.LogDebug("Hold notification dispatch for request {RequestId} was deferred after commit because the caller canceled.", requestId);
             return true;
         }
 

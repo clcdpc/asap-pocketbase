@@ -39,11 +39,11 @@
 
     <section id="signed-out" class="signed-out" hidden aria-labelledby="signed-out-title">
       <img src="/jpl.png" alt="" width="88" height="88">
-      <h1 id="signed-out-title">ASAP Staff</h1>
+      <h1 id="signed-out-title" tabindex="-1" aria-describedby="signed-out-message">ASAP Staff</h1>
       <p id="signed-out-message">Sign in with your authorized library account.</p>
       <a class="primary-button sign-in" href="/api/asap/staff/sign-in?returnUrl=%2Fstaff%2F">
         <i class="fa fa-windows" aria-hidden="true"></i>
-        Sign in with Microsoft
+        <span id="sign-in-label">Sign in with Microsoft</span>
       </a>
     </section>
 

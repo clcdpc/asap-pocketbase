@@ -3,7 +3,7 @@ import { createSessionIdentity } from './session-identity.js';
 import { createClaimsFilter } from './claims-filter.js';
 import { createSessionCoordinator } from './session.js';
 import { createStaffShell } from './shell.js';
-import { createRouter } from './router.js';
+import { createRouter, readInitialSignInFailure } from './router.js';
 import { createNavigationController } from './navigation.js';
 import { createDetailHost } from './detail-host.js';
 import { createTitleQueue, createCopyQueue } from './queues.js';
@@ -228,6 +228,7 @@ export function createWorkflowApp() {
   const features = [search, bulk, suggestion, titleDetail, copyCreation, copyDetail, detailHost, polarisLookup,
     operations, titleQueue, copyQueue, profile, settings, analytics];
   const session = createSessionCoordinator({ identity: sessionIdentity, shell, navigation, getFeatures: () => features,
+    initialSignInFailure: readInitialSignInFailure(),
     onAccepted: staff => navigation.align({ scope: staff.role === 'super_admin' ? 'all' : String(staff.organizationId) }),
     onPreferencesChanged: staff => {
       titleQueue.preferencesChanged(); copyQueue.preferencesChanged(); profile.preferencesChanged(staff); settings.setStaff(staff);
