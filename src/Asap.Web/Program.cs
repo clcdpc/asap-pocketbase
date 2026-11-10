@@ -32,6 +32,12 @@ var configurationResult = ExternalConfigurationLoader.Load(
     allowSqlAuthenticationForTesting: builder.Environment.IsEnvironment("Testing"));
 
 var externalConfiguration = configurationResult.Value;
+if (externalConfiguration?.LogLevelOverrides is { Count: > 0 } logLevelOverrides)
+{
+    builder.Configuration.AddInMemoryCollection(logLevelOverrides.Select(item =>
+        new KeyValuePair<string, string?>($"Logging:LogLevel:{item.Key}", item.Value)));
+}
+
 var certificate = externalConfiguration is null
     ? null
     : CertificateLocator.FindWithPrivateKey(
@@ -55,9 +61,12 @@ else if (externalConfiguration is not null &&
     externalConfiguration = null;
 }
 
-NLogConfiguration.Configure(externalConfiguration?.Application.LogPath, builder.Environment.ContentRootPath);
+NLogConfiguration.Configure(
+    externalConfiguration?.Application.LogPath,
+    builder.Environment.ContentRootPath,
+    externalConfiguration?.LogLevelOverrides);
 builder.Logging.ClearProviders();
-builder.Host.UseNLog();
+builder.Host.UseNLog(new NLogAspNetCoreOptions { RemoveLoggerFactoryFilter = false });
 
 builder.Services.AddSingleton(configurationResult);
 builder.Services.AddSingleton<RuntimeInitializationState>();

@@ -10,6 +10,8 @@ public sealed class ExternalConfiguration
 
     public ApplicationOptions Application { get; set; } = new();
 
+    public Dictionary<string, string?> LogLevelOverrides { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     public EmailSafetyOptions EmailSafety { get; set; } = new();
 
     public PatronLoginRateLimitOptions PatronLoginRateLimit { get; set; } = new();

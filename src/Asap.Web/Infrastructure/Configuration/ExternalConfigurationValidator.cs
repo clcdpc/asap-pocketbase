@@ -69,6 +69,7 @@ public static partial class ExternalConfigurationValidator
             errors);
         ValidateEntra(value.Authentication.Entra, errors);
         ValidateApplication(value.Application, errors);
+        ValidateLogLevelOverrides(value.LogLevelOverrides, errors);
         ValidateRecipientDomains(value.EmailSafety.AllowedRecipientDomains, errors);
         if (value.EmailSafety.DeliveryMode is not ("capture" or "postmark"))
         {
@@ -225,6 +226,34 @@ public static partial class ExternalConfigurationValidator
             application.DataProtectionKeyEncryptionCertificateThumbprint,
             "data_protection_certificate_missing",
             errors);
+    }
+
+    private static void ValidateLogLevelOverrides(
+        Dictionary<string, string?>? overrides,
+        ICollection<string> errors)
+    {
+        if (overrides is null)
+        {
+            return;
+        }
+
+        if (overrides.Keys.Distinct(StringComparer.OrdinalIgnoreCase).Count() != overrides.Count)
+        {
+            errors.Add("log_level_override_duplicate");
+        }
+
+        foreach (var (category, level) in overrides)
+        {
+            if (string.IsNullOrWhiteSpace(category) ||
+                !LogCategoryRegex().IsMatch(category) ||
+                !category.Contains('.') ||
+                string.Equals(category, "Default", StringComparison.OrdinalIgnoreCase) ||
+                (!string.Equals(level, "Debug", StringComparison.OrdinalIgnoreCase) &&
+                 !string.Equals(level, "Trace", StringComparison.OrdinalIgnoreCase)))
+            {
+                errors.Add("log_level_override_invalid");
+            }
+        }
     }
 
     private static void ValidateRecipientDomains(List<string>? domains, ICollection<string> errors)
@@ -415,4 +444,7 @@ public static partial class ExternalConfigurationValidator
 
     [GeneratedRegex("^[A-Za-z0-9-]+$", RegexOptions.CultureInvariant)]
     private static partial Regex DomainLabelRegex();
+
+    [GeneratedRegex("^[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*$", RegexOptions.CultureInvariant)]
+    private static partial Regex LogCategoryRegex();
 }
