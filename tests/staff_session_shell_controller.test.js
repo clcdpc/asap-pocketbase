@@ -84,6 +84,122 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     assert.equal(get('#workspace').hidden, false); replacement.dispose();
   });
 
+  for (const category of ['denied', 'cancelled', 'temporary']) {
+    await fixture(async ({ load, get }) => {
+      const { readInitialSignInFailure } = await load('router');
+      const { createSessionIdentity } = await load('session-identity');
+      const { createSessionCoordinator } = await load('session');
+      const { createStaffShell } = await load('shell');
+      window.history.pushState({}, '', `/staff/?signInError=${category}&view=queue#requests`);
+      const initialSignInFailure = readInitialSignInFailure();
+      assert.equal(initialSignInFailure, category);
+      assert.equal(window.location.search, '?view=queue', 'failure query is removed while the route remains intact');
+      assert.equal(window.location.hash, '#requests');
+
+      const identity = createSessionIdentity();
+      let sessionReads = 0, navigationReads = 0, notices = 0, signOutRequests = 0, signedOutHooks = 0;
+      const shell = createStaffShell({ root: document, sessionIdentity: identity,
+        getContext: () => ({ activeView: 'queue', scope: 'all' }), settingsScope: () => 'system', operationsScope: () => 'all',
+        findTitle: () => null, openRecentTitle() {}, onViewIntent() {}, onSignOutIntent() {}, request: async () => ({ state: 'ready' }) });
+      const showNotice = shell.showAuthenticationNotice;
+      shell.showAuthenticationNotice = value => { notices++; return showNotice(value); };
+      const coordinator = createSessionCoordinator({ identity, shell,
+        navigation: { invalidate() {}, navigateFromUrl: async () => { navigationReads++; return true; } },
+        getFeatures: () => [{ signedOut() { signedOutHooks++; } }], onAccepted() {}, onPreferencesChanged() {},
+        initialSignInFailure,
+        request: async () => { signOutRequests++; return {}; },
+        sessionRequest: async () => {
+          sessionReads++;
+          return { authenticated: true, accessAllowed: true, staff: actorA };
+        } });
+      try {
+        await coordinator.start();
+        await coordinator.start();
+        assert.equal(sessionReads, 1, 'restarting the coordinator does not repeat session admission');
+        assert.equal(navigationReads, 1);
+        assert.equal(notices, 1, 'the recognized failure is announced once');
+        assert.equal(identity.actor().id, actorA.id, 'the accepted staff identity remains active');
+        assert.equal(get('#workspace').hidden, false, 'the notice does not replace the authenticated workspace');
+        assert.equal(get('#signed-out').hidden, true);
+        assert.equal(get('#app-status').getAttribute('role'), 'status');
+        assert.equal(get('#app-status').getAttribute('aria-live'), 'polite');
+        assert.match(get('#app-status').textContent, /recent Microsoft sign-in attempt/i);
+        assert.match(get('#app-status').textContent, /current staff session is still active/i);
+        assert.notEqual(get('#signed-out-title'), document.activeElement, 'the nonblocking notice does not move focus');
+        assert.equal(signOutRequests, 0);
+        assert.equal(signedOutHooks, 0, 'the current authenticated session is not cleaned up');
+      } finally {
+        coordinator.dispose();
+        shell.dispose();
+      }
+    });
+  }
+
+  await fixture(async ({ load, get }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createSessionCoordinator } = await load('session');
+    const { createStaffShell } = await load('shell');
+    const identity = createSessionIdentity();
+    let failures = 0, notices = 0, navigationReads = 0;
+    const shell = createStaffShell({ root: document, sessionIdentity: identity,
+      getContext: () => ({ activeView: 'queue', scope: 'all' }), settingsScope: () => 'system', operationsScope: () => 'all',
+      findTitle: () => null, openRecentTitle() {}, onViewIntent() {}, onSignOutIntent() {}, request: async () => ({ state: 'ready' }) });
+    const showFailure = shell.showAuthenticationFailure;
+    shell.showAuthenticationFailure = category => { failures++; return showFailure(category); };
+    const showNotice = shell.showAuthenticationNotice;
+    shell.showAuthenticationNotice = category => { notices++; return showNotice(category); };
+    const coordinator = createSessionCoordinator({ identity, shell,
+      navigation: { invalidate() {}, navigateFromUrl: async () => { navigationReads++; return true; } },
+      getFeatures: () => [], onAccepted() {}, onPreferencesChanged() {}, initialSignInFailure: 'denied',
+      sessionRequest: async () => ({ authenticated: false, accessAllowed: false }) });
+    try {
+      await coordinator.start();
+      assert.equal(failures, 1, 'an unauthenticated coordinator presents the callback failure');
+      assert.equal(notices, 0, 'signed-out users do not receive the active-session notice');
+      assert.equal(get('#workspace').hidden, true);
+      assert.equal(get('#signed-out').hidden, false);
+      assert.match(get('#signed-out-message').textContent, /not authorized.*library administrator/i);
+      assert.equal(get('#signed-out-title'), document.activeElement);
+      assert.equal(identity.actor(), null);
+      assert.equal(navigationReads, 0);
+    } finally {
+      coordinator.dispose();
+      shell.dispose();
+    }
+  });
+
+  await fixture(async ({ load, get }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createSessionCoordinator } = await load('session');
+    const { createStaffShell } = await load('shell');
+    const identity = createSessionIdentity();
+    let failures = 0, notices = 0, navigationReads = 0;
+    const shell = createStaffShell({ root: document, sessionIdentity: identity,
+      getContext: () => ({ activeView: 'queue', scope: 'all' }), settingsScope: () => 'system', operationsScope: () => 'all',
+      findTitle: () => null, openRecentTitle() {}, onViewIntent() {}, onSignOutIntent() {}, request: async () => ({ state: 'ready' }) });
+    const showFailure = shell.showAuthenticationFailure;
+    shell.showAuthenticationFailure = category => { failures++; return showFailure(category); };
+    const showNotice = shell.showAuthenticationNotice;
+    shell.showAuthenticationNotice = category => { notices++; return showNotice(category); };
+    const coordinator = createSessionCoordinator({ identity, shell,
+      navigation: { invalidate() {}, navigateFromUrl: async () => { navigationReads++; return true; } },
+      getFeatures: () => [], onAccepted() {}, onPreferencesChanged() {},
+      sessionRequest: async () => ({ authenticated: true, accessAllowed: true, staff: actorA }) });
+    try {
+      await coordinator.start();
+      assert.equal(failures, 0);
+      assert.equal(notices, 0, 'ordinary authenticated startup has no callback notice');
+      assert.equal(get('#workspace').hidden, false);
+      assert.equal(get('#signed-out').hidden, true);
+      assert.equal(get('#app-status').textContent, 'Staff session ready.');
+      assert.equal(identity.actor().id, actorA.id);
+      assert.equal(navigationReads, 1);
+    } finally {
+      coordinator.dispose();
+      shell.dispose();
+    }
+  });
+
   await fixture(async ({ load, get, dom }) => {
     const { createSessionIdentity } = await load('session-identity');
     const { createSessionCoordinator } = await load('session');

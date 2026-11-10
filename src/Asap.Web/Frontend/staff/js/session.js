@@ -5,7 +5,8 @@ import { createDraftScope } from './draft-scope.js';
 export function createSessionCoordinator({ identity, shell, navigation, getFeatures, onAccepted, onPreferencesChanged,
   request = authorizedJson, sessionRequest = loadStaffSession, initialSignInFailure = null }) {
   const reads = createLatestLoad(), admission = createDraftScope(), events = new window.AbortController();
-  let disposed = false, started = false, signOutAttempt = null, unsubscribeInvalid = null, unsubscribeAccess = null;
+  let disposed = false, started = false, initialSignInFailurePresented = false,
+    signOutAttempt = null, unsubscribeInvalid = null, unsubscribeAccess = null;
 
   function lose(message, accessUnavailable = false, authenticationFailure = null) {
     if (disposed) return;
@@ -39,6 +40,11 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
       for (const feature of getFeatures()) feature.setStaff?.(staff);
       shell.showWorkspace(staff); shell.announce('Staff session ready.');
       await navigation.navigateFromUrl({ initial: true });
+      if (initialSignInFailure && !initialSignInFailurePresented && !disposed &&
+          load.isCurrent() && identity.isCurrent(staff)) {
+        initialSignInFailurePresented = true;
+        shell.showAuthenticationNotice?.(initialSignInFailure);
+      }
     } catch (error) {
       if (!disposed && load.isCurrent() && !isAbortError(error)) lose('Staff access could not be loaded. Try signing in again.');
     } finally { reads.finish('session', load.token); }

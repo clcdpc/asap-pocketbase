@@ -158,6 +158,21 @@ public sealed class StaffAuthenticationTests
         Assert.AreEqual(StaffAuthenticationRegistration.ExternalAuthenticationFailedReason,
             StaffAuthenticationRegistration.ClassifyFailure(remoteFailure.Failure));
 
+        var unexpectedRemoteException = CreateThrownRemoteFailure();
+        var unexpectedRemoteHttp = NewFailureHttpContext(provider);
+        unexpectedRemoteHttp.TraceIdentifier = "remote-correlation-43";
+        var unexpectedRemoteFailure = new RemoteFailureContext(
+            unexpectedRemoteHttp,
+            scheme,
+            options,
+            unexpectedRemoteException);
+        await options.Events.RemoteFailure(unexpectedRemoteFailure);
+
+        Assert.IsTrue(unexpectedRemoteFailure.Result?.Handled);
+        Assert.AreEqual("/staff/?signInError=temporary", unexpectedRemoteHttp.Response.Headers.Location.ToString());
+        Assert.AreEqual(StaffAuthenticationRegistration.UnexpectedAuthenticationErrorReason,
+            StaffAuthenticationRegistration.ClassifyFailure(unexpectedRemoteFailure.Failure));
+
         var deniedHttp = NewFailureHttpContext(provider);
         var accessDenied = new AccessDeniedContext(deniedHttp, scheme, options);
         await options.Events.AccessDenied(accessDenied);
@@ -182,6 +197,20 @@ public sealed class StaffAuthenticationTests
         Assert.IsTrue(logs.Entries.Any(entry => entry.Level == LogLevel.Error &&
             entry.Message.Contains("unexpected_authentication_error", StringComparison.Ordinal) &&
             entry.Message.Contains(nameof(InvalidOperationException), StringComparison.Ordinal)));
+        var authenticationFailedLog = logs.Entries.Single(entry =>
+            entry.Level == LogLevel.Error &&
+            entry.Message.Contains("unexpected_authentication_error", StringComparison.Ordinal) &&
+            entry.Message.Contains("auth-correlation-42", StringComparison.Ordinal));
+        Assert.IsNull(authenticationFailedLog.Exception,
+            "OnAuthenticationFailed relies on the framework's exception log rather than duplicating it.");
+        var remoteFailureLog = logs.Entries.Single(entry =>
+            entry.Level == LogLevel.Error &&
+            entry.Message.Contains("unexpected_authentication_error", StringComparison.Ordinal) &&
+            entry.Message.Contains("remote-correlation-43", StringComparison.Ordinal));
+        Assert.AreSame(unexpectedRemoteException, remoteFailureLog.Exception,
+            "Unexpected remote failures retain the exception object on the application log event.");
+        StringAssert.Contains(remoteFailureLog.Exception!.ToString(), "private-remote-detail");
+        StringAssert.Contains(remoteFailureLog.Exception.ToString(), "at ");
         Assert.IsFalse(string.Join('\n', logs.Entries.Select(entry => entry.Message))
             .Contains("private-", StringComparison.Ordinal));
         Assert.AreEqual("/staff/?signInError=denied",
@@ -451,6 +480,18 @@ public sealed class StaffAuthenticationTests
         return directory?.FullName ?? throw new InvalidOperationException("Could not locate the repository root.");
     }
 
+    private static InvalidOperationException CreateThrownRemoteFailure()
+    {
+        try
+        {
+            throw new InvalidOperationException("private-remote-detail");
+        }
+        catch (InvalidOperationException exception)
+        {
+            return exception;
+        }
+    }
+
     private static JsonElement ParseLogEntry(string message)
     {
         using var document = JsonDocument.Parse(message);
@@ -468,7 +509,7 @@ public sealed class StaffAuthenticationTests
         }
     }
 
-    private sealed record CapturedLog(LogLevel Level, string Category, string Message);
+    private sealed record CapturedLog(LogLevel Level, string Category, string Message, Exception? Exception);
 
     private sealed class CapturingLogger(string category, List<CapturedLog> entries) : ILogger
     {
@@ -483,7 +524,7 @@ public sealed class StaffAuthenticationTests
             Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            entries.Add(new CapturedLog(logLevel, category, formatter(state, exception)));
+            entries.Add(new CapturedLog(logLevel, category, formatter(state, exception), exception));
         }
     }
 }

@@ -168,9 +168,20 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
     dom.title.focus({ preventScroll: true });
   }
 
+  function showAuthenticationNotice(category) {
+    const notices = {
+      denied: 'A recent Microsoft sign-in attempt was unsuccessful. Your current staff session is still active. Contact your library administrator if you need help.',
+      cancelled: 'A recent Microsoft sign-in attempt was cancelled. Your current staff session is still active.',
+      temporary: 'A recent Microsoft sign-in attempt could not be completed. Your current staff session is still active. Please try again if needed.'
+    };
+    const message = notices[category];
+    if (!message) return;
+    announce(message);
+  }
+
   for (const tab of tabs) tab.addEventListener('click', () => onViewIntent(tab.dataset.view), { signal: events.signal });
   get('#sign-out').addEventListener('click', () => onSignOutIntent(), { signal: events.signal });
-  return { announce, presentView, showWorkspace, showSignedOut, showAuthenticationFailure, preferencesChanged, recordReceipt, clearReceipt, settingsRefreshed, queueRefreshed,
+  return { announce, presentView, showWorkspace, showSignedOut, showAuthenticationFailure, showAuthenticationNotice, preferencesChanged, recordReceipt, clearReceipt, settingsRefreshed, queueRefreshed,
     rememberOpened, forgetUnavailable, renderRecent, refreshReadiness,
     configurationCommitted(scope) {
       if (disposed || !sessionIdentity.actor()) return;

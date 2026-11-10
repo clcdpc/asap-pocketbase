@@ -74,13 +74,13 @@ public static class StaffAuthenticationRegistration
                 ValidateIssuer(issuer, allowedTenants);
             options.Events.OnAuthenticationFailed = context =>
             {
-                HandleAuthenticationFailure(context.HttpContext, context.Exception);
+                HandleAuthenticationFailure(context.HttpContext, context.Exception, exceptionAlreadyLogged: true);
                 context.HandleResponse();
                 return Task.CompletedTask;
             };
             options.Events.OnRemoteFailure = context =>
             {
-                HandleAuthenticationFailure(context.HttpContext, context.Failure);
+                HandleAuthenticationFailure(context.HttpContext, context.Failure, exceptionAlreadyLogged: false);
                 context.HandleResponse();
                 return Task.CompletedTask;
             };
@@ -256,7 +256,8 @@ public static class StaffAuthenticationRegistration
     private static void HandleAuthenticationFailure(
         HttpContext context,
         Exception? exception,
-        string? fixedReason = null)
+        string? fixedReason = null,
+        bool exceptionAlreadyLogged = false)
     {
         var reason = ClassifyFailure(exception, fixedReason);
         var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
@@ -270,13 +271,25 @@ public static class StaffAuthenticationRegistration
         }
         else if (reason == UnexpectedAuthenticationErrorReason)
         {
-            // OpenIdConnectHandler already logs the exception and stack. This stable app event adds
-            // the failure code and correlation ID without writing the same exception a second time.
-            logger.LogError(
-                "Staff authentication failed ({FailureReason}, {ExceptionType}) for correlation {CorrelationId}.",
-                reason,
-                exception?.GetType().Name ?? "unknown",
-                context.TraceIdentifier);
+            if (exceptionAlreadyLogged)
+            {
+                // OpenIdConnectHandler logs this exception and stack before invoking
+                // OnAuthenticationFailed. Keep the stable reason and correlation without duplicating it.
+                logger.LogError(
+                    "Staff authentication failed ({FailureReason}, {ExceptionType}) for correlation {CorrelationId}.",
+                    reason,
+                    exception?.GetType().Name ?? "unknown",
+                    context.TraceIdentifier);
+            }
+            else
+            {
+                logger.LogError(
+                    exception,
+                    "Staff authentication failed ({FailureReason}, {ExceptionType}) for correlation {CorrelationId}.",
+                    reason,
+                    exception?.GetType().Name ?? "unknown",
+                    context.TraceIdentifier);
+            }
         }
         else
         {
