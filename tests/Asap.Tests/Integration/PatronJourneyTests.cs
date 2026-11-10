@@ -391,7 +391,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "browser-results.json"))))
         {
-            Assert.HasCount(10, report.RootElement.GetProperty("majorStates").EnumerateArray().ToArray());
+            Assert.HasCount(14, report.RootElement.GetProperty("majorStates").EnumerateArray().ToArray());
             Assert.HasCount(3, report.RootElement.GetProperty("authRaces").EnumerateArray().ToArray());
         }
 

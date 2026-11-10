@@ -9,13 +9,14 @@ module.exports = async function verifyMixedFieldLayout(page, container) {
     for (const gridClass of ['edit-form', 'settings-grid']) {
       const fixture = document.createElement('div');
       fixture.className = gridClass;
-      for (const type of ['date', 'select', 'date', 'text', 'date', 'number']) {
+      for (const type of ['date', 'select', 'date', 'text', 'date', 'number', 'date', 'textarea', 'date', 'text']) {
         const label = document.createElement('label');
         label.className = gridClass === 'settings-grid' ? 'settings-field' : 'form-field';
         const caption = document.createElement('span');
         caption.textContent = type === 'date' ? 'Publication date with a deliberately long wrapping label for translated text' : 'Short label';
-        const control = document.createElement(type === 'select' ? 'select' : 'input');
-        if (type !== 'select') control.type = type;
+        const control = document.createElement(['select', 'textarea'].includes(type) ? type : 'input');
+        if (!['select', 'textarea'].includes(type)) control.type = type;
+        if (type === 'textarea') control.rows = 4;
         control.setAttribute('aria-label', `Layout regression ${type}`);
         const help = document.createElement('div');
         help.className = 'form-field-help';

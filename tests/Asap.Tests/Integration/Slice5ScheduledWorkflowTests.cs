@@ -621,17 +621,19 @@ public sealed partial class PatronJourneyTests
         while (elapsed.Elapsed < TimeSpan.FromSeconds(30))
         {
             using var connection = storage.GetConnection();
-            if (connection.GetStateData(id)?.Name == expected)
+            var state = connection.GetStateData(id);
+            if (state?.Name == expected)
             {
                 return;
             }
-            if (connection.GetStateData(id)?.Name == FailedState.StateName)
+            if (state is not null && state.Name == FailedState.StateName)
             {
-                Assert.Fail($"Expected {expected}, job failed: {string.Join(", ", connection.GetStateData(id).Data.Values)}");
+                Assert.Fail($"Expected {expected}, job failed: {string.Join(", ", state.Data.Values)}");
             }
             await Task.Delay(50);
         }
         using var final = storage.GetConnection();
-        Assert.Fail($"Expected {expected}, actual {final.GetStateData(id)?.Name}: {string.Join(", ", final.GetStateData(id)?.Data.Values ?? [])}");
+        var finalState = final.GetStateData(id);
+        Assert.Fail($"Expected {expected}, actual {finalState?.Name}: {string.Join(", ", finalState?.Data.Values ?? [])}");
     }
 }

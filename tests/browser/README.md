@@ -4,7 +4,8 @@
 current Browser category, discovered by the native test runner. SQL-backed
 journeys use the Testing Kestrel fixtures:
 
-- `patron.cjs`: 10 desktop/mobile patron states and 3 authentication/session
+- `patron.cjs`: 14 desktop/mobile patron states, including separate eBook and
+  eAudiobook message scans at both viewport sizes, and 3 authentication/session
   race scenarios.
 - `staff.cjs`: 81 desktop/mobile staff states covering scope, recovery,
   queue, analytics, assignment, stale mutations, draft guards, route/history
@@ -65,12 +66,16 @@ journeys use the Testing Kestrel fixtures:
   sort/page/refresh/filter state, row/title/menu keyboard behavior, Purchase,
   Reject, Claim and Unclaim. An 80-event history checks the persistent footer.
   `staff-native-zoom.cjs` uses Chromium's tab zoom API through a test-only local
-  extension at physical widths 1280 and 1440. Each width checks nine named states:
+  extension at physical widths 1280 and 1440. Each width checks eleven named states:
   table, closed-actions, detail, confirmation, new-suggestion, workflow-picker,
-  format-rules-collapsed, format-rules-expanded and patron-placeholder. The 18
-  checkpoints retain both Format-rule scans and the action menu's full offscreen
-  focus restoration. The checks require zoom 2, doubled DPR, CDP zoom 2, CSS zoom 1 and
+  format-rules-collapsed, format-rules-expanded, patron-placeholder,
+  email-template-preview and email-template-picker. The 22 checkpoints retain
+  both Format-rule scans and the action menu's full offscreen focus restoration.
+  The checks require zoom 2, doubled DPR, CDP zoom 2, CSS zoom 1 and
   pinch scale 1; CSS zoom is not substituted for this acceptance evidence. Its
+  detail journey tabs through to editable Notes, records scroll-pane movement,
+  and checks the field against the persistent footer. The native date check
+  targets the year segment with ArrowUp and restores the original value. Its
   Analytics helper adds four applied-range and invalid-range checkpoints at 200%.
 
 - `frontend-cache.cjs`: published staff/patron files served through Program,
