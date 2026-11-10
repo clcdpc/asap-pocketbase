@@ -1172,6 +1172,72 @@ class EnvironmentTests(unittest.TestCase):
         second, _, _ = self.environment({"RUNNER_NAME": "ephemeral-two"})
         self.assertEqual(first, second)
 
+    def test_registry_uses_the_repository_and_tag_from_the_configured_sql_image(self):
+        body = fp.canonical({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                             "config": {}, "layers": []})
+        identity = "sha256:" + hashlib.sha256(body).hexdigest()
+        configured_image = "mcr.microsoft.com/mssql/server:2025-latest"
+        with mock.patch.object(fp, "SQL_TAG", configured_image), \
+                mock.patch.object(fp.urllib.request, "urlopen",
+                                  side_effect=[self.registry_response(body), self.registry_response(body)]) as urlopen:
+            self.assertEqual(fp.sql_image(), "mcr.microsoft.com/mssql/server@" + identity)
+        self.assertTrue(urlopen.call_args_list[0].args[0].full_url.endswith("/2025-latest"))
+        self.assertTrue(urlopen.call_args_list[1].args[0].full_url.endswith("/" + identity))
+
+    def test_registry_retries_transient_http_and_timeout_failures(self):
+        body = fp.canonical({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                             "config": {}, "layers": []})
+        identity = "sha256:" + hashlib.sha256(body).hexdigest()
+        transient_failures = (
+            urllib.error.HTTPError("https://mcr.microsoft.com", 429, "Too Many Requests", {}, None),
+            urllib.error.HTTPError("https://mcr.microsoft.com", 503, "Service Unavailable", {}, None),
+            urllib.error.URLError(TimeoutError("timed out")),
+        )
+        for failure in transient_failures:
+            if isinstance(failure, urllib.error.HTTPError):
+                self.addCleanup(failure.close)
+        for failure in transient_failures:
+            with self.subTest(failure=type(failure).__name__, status=getattr(failure, "code", None)), \
+                    mock.patch.object(fp.urllib.request, "urlopen",
+                                      side_effect=[failure, self.registry_response(body), self.registry_response(body)]) as urlopen, \
+                    mock.patch.object(fp.time, "sleep") as sleep:
+                self.assertEqual(fp.sql_image(), "mcr.microsoft.com/mssql/server@" + identity)
+                self.assertEqual(urlopen.call_count, 3)
+                sleep.assert_called_once_with(fp.SQL_REGISTRY_RETRY_BACKOFF_SECONDS[0])
+
+    def test_registry_retry_exhaustion_is_bounded_and_reports_the_last_failure(self):
+        error = urllib.error.HTTPError("https://mcr.microsoft.com", 503, "Service Unavailable", {}, None)
+        self.addCleanup(error.close)
+        with mock.patch.object(fp.urllib.request, "urlopen", side_effect=[error] * fp.SQL_REGISTRY_MAX_ATTEMPTS) as urlopen, \
+                mock.patch.object(fp.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, r"after 3 attempts: HTTP 503 Service Unavailable"):
+                fp.sql_image()
+        self.assertEqual(urlopen.call_count, fp.SQL_REGISTRY_MAX_ATTEMPTS)
+        self.assertEqual(sleep.call_args_list, [mock.call(delay)
+                                                for delay in fp.SQL_REGISTRY_RETRY_BACKOFF_SECONDS])
+
+    def test_registry_does_not_retry_authentication_manifest_or_digest_failures(self):
+        valid_body = fp.canonical({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                                   "config": {}, "layers": []})
+        failures = (
+            (urllib.error.HTTPError("https://mcr.microsoft.com", 401, "Unauthorized", {}, None),
+             urllib.error.HTTPError),
+            (self.registry_response(b"{invalid-json"), ValueError),
+            (self.registry_response(valid_body, "sha256:" + "0" * 64), ValueError),
+        )
+        for failure, error_type in failures:
+            if isinstance(failure, urllib.error.HTTPError):
+                self.addCleanup(failure.close)
+            urlopen_options = ({"side_effect": failure} if isinstance(failure, BaseException)
+                               else {"return_value": failure})
+            with self.subTest(failure=str(failure)), \
+                    mock.patch.object(fp.urllib.request, "urlopen", **urlopen_options) as urlopen, \
+                    mock.patch.object(fp.time, "sleep") as sleep:
+                with self.assertRaises(error_type):
+                    fp.sql_image()
+                self.assertEqual(urlopen.call_count, 1)
+                sleep.assert_not_called()
+
     def test_registry_accepts_native_oci_and_docker_single_manifests(self):
         for media_type in ("application/vnd.oci.image.manifest.v1+json",
                            "application/vnd.docker.distribution.manifest.v2+json"):
