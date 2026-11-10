@@ -26,6 +26,8 @@ param(
 
     [switch] $ValidateOnly,
 
+    [switch] $CheckDeploymentEligibility,
+
     [switch] $SqlPlanOnly,
 
     [string] $SqlPlanOutputDirectory = ''
@@ -37,6 +39,12 @@ Set-StrictMode -Version Latest
 # Package validation never reads the persistent host deployment settings.
 if ($ValidateOnly -and $SqlPlanOnly) {
     throw 'ValidateOnly cannot be combined with SQL plan or data-loss controls.'
+}
+if ($ValidateOnly -and $CheckDeploymentEligibility) {
+    throw 'ValidateOnly cannot be combined with deployment eligibility checks.'
+}
+if ($CheckDeploymentEligibility -and $SqlPlanOnly) {
+    throw 'Deployment eligibility checks cannot be combined with SQL plan diagnostics.'
 }
 
 function Get-Sha256Hex {
@@ -154,13 +162,19 @@ function Get-GitHubDeploymentData {
             -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' } `
             -TimeoutSec 30
     }
+    catch [System.OperationCanceledException] {
+        throw
+    }
+    catch [System.Management.Automation.PipelineStoppedException] {
+        throw
+    }
     catch {
         # Do not include request headers or operational configuration in errors.
         throw 'Could not verify automatic deployment freshness with GitHub; no activation is authorized.'
     }
 }
 
-function Get-AutomaticDeploymentSkipReason {
+function Get-AutomaticDeploymentSkip {
     param([string] $Commit, [object] $State)
 
     $head = Get-GitHubDeploymentData -Path 'git/ref/heads/main'
@@ -168,7 +182,10 @@ function Get-AutomaticDeploymentSkipReason {
         throw 'GitHub main head did not contain a full commit SHA.'
     }
     if ($head.object.sha -cne $Commit) {
-        return "Superseded: current main is $($head.object.sha); this artifact is $Commit."
+        return [pscustomobject]@{
+            ReasonCode = 'main-moved'
+            Reason = "Superseded: current main is $($head.object.sha); this artifact is $Commit."
+        }
     }
     if ($null -ne $State) {
         $deployed = Get-ManifestText -Manifest $State -Name 'commitSha'
@@ -182,11 +199,46 @@ function Get-AutomaticDeploymentSkipReason {
                 throw 'GitHub deployment ancestry comparison is invalid.'
             }
             if ($comparison.status -cne 'ahead' -or $comparison.merge_base_commit.sha -cne $deployed) {
-                return "Superseded: recorded deployment $deployed is newer than or unrelated to $Commit; use an explicit dispatch for intentional redeployment."
+                return [pscustomobject]@{
+                    ReasonCode = 'recorded-deployment-not-ancestor'
+                    Reason = "Superseded: recorded deployment $deployed is newer than or unrelated to $Commit; use an explicit dispatch for intentional redeployment."
+                }
             }
         }
     }
-    return ''
+    return [pscustomobject]@{ ReasonCode = ''; Reason = '' }
+}
+
+function Get-AutomaticDeploymentEligibility {
+    param([string] $Commit, [object] $State)
+
+    $skip = Get-AutomaticDeploymentSkip -Commit $Commit -State $State
+    if (-not [string]::IsNullOrWhiteSpace($skip.ReasonCode)) {
+        return [pscustomobject]@{ Decision = 'skip'; ReasonCode = $skip.ReasonCode; Reason = $skip.Reason }
+    }
+
+    return [pscustomobject]@{
+        Decision = 'eligible'
+        ReasonCode = 'eligible'
+        Reason = 'Current main and recorded deployment ancestry permit automatic deployment.'
+    }
+}
+
+function Assert-AutomaticDeploymentEligible {
+    param([string] $Commit, [object] $State)
+
+    $eligibility = Get-AutomaticDeploymentEligibility -Commit $Commit -State $State
+    if ($eligibility.Decision -ceq 'skip') {
+        if ($eligibility.ReasonCode -cnotin @('main-moved', 'recorded-deployment-not-ancestor') -or
+            [string]::IsNullOrWhiteSpace($eligibility.Reason)) {
+            throw 'Automatic test-IIS deployment eligibility was missing or invalid; no activation is authorized.'
+        }
+        throw "Automatic test-IIS deployment was blocked before target mutation. $($eligibility.Reason)"
+    }
+    if ($eligibility.Decision -cne 'eligible' -or $eligibility.ReasonCode -cne 'eligible' -or
+        [string]::IsNullOrWhiteSpace($eligibility.Reason)) {
+        throw 'Automatic test-IIS deployment eligibility was missing or invalid; no activation is authorized.'
+    }
 }
 
 function Write-DeploymentResult {
@@ -196,6 +248,44 @@ function Write-DeploymentResult {
     if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_OUTPUT)) {
         Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "deployment_status=$Status"
         Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "deployment_reason=$Reason"
+    }
+}
+
+function Write-DeploymentEligibilityResult {
+    param(
+        [ValidateSet('eligible', 'skip')]
+        [string] $Decision,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('eligible', 'not-applicable', 'main-moved', 'recorded-deployment-not-ancestor')]
+        [string] $ReasonCode,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string] $Reason,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('automatic', 'manual', 'tagged')]
+        [string] $Source
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Reason)) {
+        throw 'Deployment eligibility reason is missing.'
+    }
+    if (($Decision -ceq 'skip' -and
+            ($Source -cne 'automatic' -or $ReasonCode -cnotin @('main-moved', 'recorded-deployment-not-ancestor'))) -or
+        ($Decision -ceq 'eligible' -and
+            (($Source -ceq 'automatic' -and $ReasonCode -cne 'eligible') -or
+                ($Source -cne 'automatic' -and $ReasonCode -cne 'not-applicable')))) {
+        throw 'Deployment eligibility decision, reason code and source do not agree.'
+    }
+
+    Write-Host "Test-IIS eligibility: $Decision. $Reason"
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_OUTPUT)) {
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "decision=$Decision"
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "reason_code=$ReasonCode"
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "reason=$Reason"
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "source=$Source"
     }
 }
 
@@ -1392,6 +1482,48 @@ if ($ValidateOnly) {
     }
 }
 
+if ($CheckDeploymentEligibility) {
+    $eligibilityStagingPath = Join-Path ([IO.Path]::GetTempPath()) ("asap-test-eligibility-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $deploymentSource = Get-DeploymentSource -Label $ExpectedDeploymentLabel -Commit $ExpectedCommitSha
+        $hostConfig = Read-HostConfiguration -Path $ConfigPath
+        $archive = Test-DeploymentArchive `
+            -ZipPath $DeploymentZip `
+            -ExpectedHash $ExpectedZipSha256 `
+            -ExpectedCommit $ExpectedCommitSha `
+            -ExpectedLabel $ExpectedDeploymentLabel `
+            -StagingPath $eligibilityStagingPath
+        Test-PublishedApplicationConfigPath `
+            -WebRoot $archive.WebRoot `
+            -ExternalApplicationConfigPath $hostConfig.ExternalApplicationConfigPath
+        $null = Test-IisConfiguration -Config $hostConfig
+
+        if ($deploymentSource -ceq 'automatic') {
+            $state = Read-DeploymentState -StatePath $hostConfig.StatePath
+            $eligibility = Get-AutomaticDeploymentEligibility -Commit $ExpectedCommitSha -State $state
+        }
+        else {
+            $reason = if ($deploymentSource -ceq 'manual') {
+                'Explicitly authorized manual deployment; automatic freshness checks do not apply.'
+            }
+            else {
+                'Authorized tagged test release; automatic freshness checks do not apply.'
+            }
+            $eligibility = [pscustomobject]@{ Decision = 'eligible'; ReasonCode = 'not-applicable'; Reason = $reason }
+        }
+
+        Write-DeploymentEligibilityResult `
+            -Decision $eligibility.Decision `
+            -ReasonCode $eligibility.ReasonCode `
+            -Reason $eligibility.Reason `
+            -Source $deploymentSource
+        exit 0
+    }
+    finally {
+        Remove-Item -LiteralPath $eligibilityStagingPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $deploymentSource = Get-DeploymentSource -Label $ExpectedDeploymentLabel -Commit $ExpectedCommitSha
 if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_OUTPUT)) {
     Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "deployment_source=$deploymentSource"
@@ -1423,11 +1555,7 @@ try {
     $null = Test-IisConfiguration -Config $hostConfig
     $state = if (-not $SqlPlanOnly) { Read-DeploymentState -StatePath $hostConfig.StatePath } else { $null }
     if ($deploymentSource -ceq 'automatic') {
-        $skipReason = Get-AutomaticDeploymentSkipReason -Commit $ExpectedCommitSha -State $state
-        if ($skipReason) {
-            Write-DeploymentResult -Status 'skipped' -Reason $skipReason
-            exit 0
-        }
+        Assert-AutomaticDeploymentEligible -Commit $ExpectedCommitSha -State $state
     }
     $sqlPlan = $null
     if ($SqlPlanOnly -or $allowSqlDataLoss) {
@@ -1479,12 +1607,11 @@ try {
 
     # Planning can take long enough for another merge. Check again immediately
     # before the first SQL/IIS/web mutation, while holding workflow concurrency.
+    # Re-read state so a newer or divergent recorded deployment during planning
+    # cannot be hidden by the pre-plan snapshot.
     if ($deploymentSource -ceq 'automatic') {
-        $skipReason = Get-AutomaticDeploymentSkipReason -Commit $ExpectedCommitSha -State $state
-        if ($skipReason) {
-            Write-DeploymentResult -Status 'skipped' -Reason $skipReason
-            exit 0
-        }
+        $state = Read-DeploymentState -StatePath $hostConfig.StatePath
+        Assert-AutomaticDeploymentEligible -Commit $ExpectedCommitSha -State $state
     }
     Set-NonProductionDatabaseRecovery `
         -ExternalConfiguration $hostConfig.ExternalConfiguration `

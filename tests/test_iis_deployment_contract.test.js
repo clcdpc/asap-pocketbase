@@ -103,6 +103,26 @@ assert.deepEqual(deployWorkflow.environment, { name: 'asap-test-iis', deployment
   'safe skips must not generate successful implicit GitHub deployment records');
 assert.deepEqual(deployWorkflow.concurrency, { group: 'asap-test-iis', 'cancel-in-progress': false, queue: 'max' },
   'IIS activation must be serialized without interrupting a running SQL deployment');
+const downloadArtifact = deployWorkflow.steps.findIndex((candidate) => candidate.name === 'Download exact tested deployment artifact');
+const eligibilityStep = deployWorkflow.steps.findIndex((candidate) => candidate.name === 'Check test-IIS deployment eligibility');
+const activationStep = deployWorkflow.steps.findIndex((candidate) => candidate.name === 'Deploy exact tested artifact');
+assert.ok(downloadArtifact >= 0 && eligibilityStep === downloadArtifact + 1 && activationStep === eligibilityStep + 1,
+  'read-only eligibility must immediately precede activation in the same serialized job');
+assert.equal(deployWorkflow.steps[eligibilityStep].id, 'eligibility');
+assert.match(deployWorkflow.steps[eligibilityStep].run, /-CheckDeploymentEligibility/,
+  'preflight must use the installer eligibility mode');
+assert.doesNotMatch(deployWorkflow.steps[eligibilityStep].run, /-ValidateOnly/,
+  'package-only ValidateOnly must not be repurposed as deployment eligibility');
+const preflightHashCheck = deployWorkflow.steps[eligibilityStep].run.indexOf('$actualHash = (Get-FileHash');
+const preflightExtraction = deployWorkflow.steps[eligibilityStep].run.indexOf('Expand-Archive -LiteralPath $zipPath');
+assert.ok(preflightHashCheck >= 0 && preflightHashCheck < preflightExtraction,
+  'eligibility bootstrap must verify the exact hosted artifact before extracting its script');
+assert.match(deployWorkflow.steps[activationStep].if, /steps\.eligibility\.outcome == 'success'/,
+  'activation must require a successful eligibility step');
+assert.match(deployWorkflow.steps[activationStep].if, /steps\.eligibility\.outputs\.decision == 'eligible'/,
+  'activation must require an explicit eligible decision');
+assert.match(deployWorkflow.steps[activationStep].if, /steps\.eligibility\.outputs\.source == '(automatic|manual|tagged)'/,
+  'activation must reject a missing or malformed source alongside the decision');
 const deployCondition = deployWorkflow.if;
 assert.match(deployCondition, /!\s*cancelled\(\)/,
   'the deployment gate must not inherit skipped draft-validation status');
@@ -179,6 +199,15 @@ assert.ok(recovery > deployment.indexOf('if ($hangfireVersion -gt 9)') && recove
 assert.ok(recovery < deployment.indexOf('    Invoke-TestDeployment -Config $hostConfig'), 'recovery must run independently of DACPAC publication');
 assert.match(deployment.slice(recovery, exactSuccess), /-ConnectionString \$hostConfig\.AsapDatabaseConnectionString/);
 assert.strictEqual((deployment.match(/    Set-NonProductionDatabaseRecovery `/g) || []).length, 1, 'Hangfire must not receive a separate recovery command');
+assert.doesNotMatch(deployment, /deployment_status=skipped/,
+  'an activation attempt must fail if its final freshness guard blocks it instead of reporting a successful skip');
+const eligibilityModeStart = deployment.indexOf('if ($CheckDeploymentEligibility)');
+const firstEligibilitySource = deployment.indexOf("$deploymentSource = Get-DeploymentSource", eligibilityModeStart + 1);
+const eligibilityModeEnd = deployment.indexOf("$deploymentSource = Get-DeploymentSource", firstEligibilitySource + 1);
+assert.ok(eligibilityModeStart >= 0 && eligibilityModeEnd > eligibilityModeStart,
+  'installer must expose a separate read-only deployment eligibility mode');
+assert.doesNotMatch(deployment.slice(eligibilityModeStart, eligibilityModeEnd), /Set-NonProductionDatabaseRecovery|Invoke-TestDeployment|Write-DeploymentState\s+-Path/,
+  'eligibility must not change SQL recovery, installed web files, IIS activation or deployment receipts');
 assert.ok(!/RECOVERY\s+SIMPLE/i.test(postDeployment + fs.readFileSync(path.join(root, 'database/Asap.Database/Scripts/PreDeployment.sql'), 'utf8')),
   'DACPAC scripts must not own recovery policy');
 assert.match(postDeployment, /ALTER DATABASE CURRENT SET COMPATIBILITY_LEVEL = 160;/);

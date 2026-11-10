@@ -956,8 +956,53 @@ jobs:
           name: ${{ needs.build-test-package.outputs.artifact_name }}
           path: .artifacts/incoming
 
+      - name: Check test-IIS deployment eligibility
+        id: eligibility
+        shell: pwsh
+        env:
+          EXPECTED_ZIP_SHA256: ${{ needs.build-test-package.outputs.zip_sha256 }}
+          EXPECTED_COMMIT_SHA: ${{ needs.build-test-package.outputs.commit }}
+          EXPECTED_DEPLOYMENT_LABEL: ${{ needs.build-test-package.outputs.deployment_label }}
+          EXPLICIT_TEST_DEPLOYMENT: ${{ toJSON(inputs.deploy_test_iis) }}
+          ASAP_TEST_DEPLOYMENT_ENABLED: ${{ vars.ASAP_TEST_DEPLOYMENT_ENABLED }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $zipPath = (Resolve-Path .artifacts/incoming/asap-test-deployment.zip).Path
+          $expectedHash = $env:EXPECTED_ZIP_SHA256
+          if ($expectedHash -cnotmatch '^[0-9a-fA-F]{64}$') {
+            throw 'Hosted build did not provide a valid deployment ZIP SHA-256.'
+          }
+          $expectedHash = $expectedHash.Trim().ToLowerInvariant()
+          $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if (-not $actualHash.Equals($expectedHash, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Deployment ZIP SHA-256 mismatch: expected $expectedHash, got $actualHash."
+          }
+          $bootstrapRoot = Join-Path $env:RUNNER_TEMP ("asap-test-eligibility-bootstrap-" + [guid]::NewGuid().ToString('N'))
+          try {
+            Expand-Archive -LiteralPath $zipPath -DestinationPath $bootstrapRoot -Force
+            & (Join-Path $bootstrapRoot 'deployment/Deploy-AsapTest.ps1') `
+              -DeploymentZip $zipPath `
+              -ExpectedZipSha256 $expectedHash `
+              -ExpectedCommitSha $env:EXPECTED_COMMIT_SHA `
+              -ExpectedDeploymentLabel $env:EXPECTED_DEPLOYMENT_LABEL `
+              -CheckDeploymentEligibility
+          }
+          finally {
+            Remove-Item -LiteralPath $bootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Deploy exact tested artifact
         id: activate
+        if: >-
+          ${{ steps.eligibility.outcome == 'success' &&
+              steps.eligibility.outputs.decision == 'eligible' &&
+              (
+                steps.eligibility.outputs.source == 'automatic' ||
+                steps.eligibility.outputs.source == 'manual' ||
+                steps.eligibility.outputs.source == 'tagged'
+              ) }}
         shell: pwsh
         env:
           EXPECTED_ZIP_SHA256: ${{ needs.build-test-package.outputs.zip_sha256 }}
@@ -1026,25 +1071,101 @@ jobs:
         env:
           DEPLOYMENT_LABEL: ${{ needs.build-test-package.outputs.deployment_label }}
           TESTED_COMMIT: ${{ needs.build-test-package.outputs.commit }}
+          ELIGIBILITY_OUTCOME: ${{ steps.eligibility.outcome }}
+          ELIGIBILITY_DECISION: ${{ steps.eligibility.outputs.decision }}
+          ELIGIBILITY_REASON_CODE: ${{ steps.eligibility.outputs.reason_code }}
+          ELIGIBILITY_REASON: ${{ steps.eligibility.outputs.reason }}
+          ELIGIBILITY_SOURCE: ${{ steps.eligibility.outputs.source }}
           ACTIVATION_OUTCOME: ${{ steps.activate.outcome }}
           DEPLOYMENT_STATUS: ${{ steps.activate.outputs.deployment_status }}
           DEPLOYMENT_REASON: ${{ steps.activate.outputs.deployment_reason }}
           DEPLOYMENT_SOURCE: ${{ steps.activate.outputs.deployment_source }}
         run: |
-          $source = switch ($env:DEPLOYMENT_SOURCE) {
+          $sourceValue = if (-not [string]::IsNullOrWhiteSpace($env:DEPLOYMENT_SOURCE)) { $env:DEPLOYMENT_SOURCE } else { $env:ELIGIBILITY_SOURCE }
+          $source = switch ($sourceValue) {
             'automatic' { 'Automatic main deployment' }
             'tagged' { 'Tagged test release' }
             'manual' { 'Manual deployment' }
             default { "$($env:GITHUB_EVENT_NAME) on $($env:GITHUB_REF)" }
           }
-          $status = if ($env:ACTIVATION_OUTCOME -ne 'success') { 'Failure' } else {
-            switch ($env:DEPLOYMENT_STATUS) {
-              'deployed' { 'Success' }
-              'already-deployed' { 'Already deployed and healthy (no new activation)' }
-              'skipped' { 'Skipped (superseded; no activation)' }
-              'plan-only' { 'SQL plan only (no activation)' }
-              default { throw 'Installer did not report a deployment outcome.' }
+          $summaryError = $false
+          $reason = ''
+          $validSkipReason = $false
+          if ($env:ELIGIBILITY_REASON_CODE -ceq 'main-moved') {
+            $validSkipReason = $env:ELIGIBILITY_REASON -cmatch '^Superseded: current main is [0-9a-f]{40}; this artifact is [0-9a-f]{40}\.$'
+          }
+          elseif ($env:ELIGIBILITY_REASON_CODE -ceq 'recorded-deployment-not-ancestor') {
+            $validSkipReason = $env:ELIGIBILITY_REASON -cmatch '^Superseded: recorded deployment [0-9a-f]{40} is newer than or unrelated to [0-9a-f]{40}; use an explicit dispatch for intentional redeployment\.$'
+          }
+          if ($env:ELIGIBILITY_OUTCOME -ceq 'cancelled' -or $env:ACTIVATION_OUTCOME -ceq 'cancelled') {
+            $status = 'Cancelled'
+            $reason = 'Workflow cancellation prevented deployment completion.'
+          }
+          elseif ($env:ELIGIBILITY_OUTCOME -ceq 'failure') {
+            $status = 'Failure'
+            $reason = 'Deployment eligibility preflight failed; activation was not started.'
+          }
+          elseif ($env:ELIGIBILITY_OUTCOME -cne 'success') {
+            $status = 'Failure'
+            $reason = 'Deployment eligibility preflight did not complete successfully.'
+            $summaryError = $true
+          }
+          elseif ($env:ELIGIBILITY_DECISION -ceq 'skip') {
+            if ($env:ACTIVATION_OUTCOME -ceq 'skipped' -and
+                $validSkipReason -and
+                $sourceValue -ceq 'automatic') {
+              $status = 'Skipped (superseded; no activation)'
+              $reason = $env:ELIGIBILITY_REASON
             }
+            else {
+              $status = 'Failure'
+              $reason = 'Eligibility requested a skip without a complete, matching preflight result.'
+              $summaryError = $true
+            }
+          }
+          elseif ($env:ELIGIBILITY_DECISION -ceq 'eligible') {
+            if ($env:ACTIVATION_OUTCOME -ceq 'success') {
+              $status = switch ($env:DEPLOYMENT_STATUS) {
+                'deployed' { 'Success' }
+                'already-deployed' { 'Already deployed and healthy (no new activation)' }
+                'plan-only' { 'SQL plan only (no activation)' }
+                default {
+                  $summaryError = $true
+                  'Failure'
+                }
+              }
+              if ($status -ceq 'Failure') {
+                $reason = 'Installer did not report a recognized deployment outcome.'
+              }
+              elseif ([string]::IsNullOrWhiteSpace($env:DEPLOYMENT_REASON) -or
+                  [string]::IsNullOrWhiteSpace($env:ELIGIBILITY_REASON) -or
+                  $env:ELIGIBILITY_SOURCE -cnotin @('automatic', 'manual', 'tagged') -or
+                  $env:DEPLOYMENT_SOURCE -cne $env:ELIGIBILITY_SOURCE) {
+                $status = 'Failure'
+                $reason = 'Installer omitted a valid deployment reason or source.'
+                $summaryError = $true
+              }
+              else {
+                $reason = $env:DEPLOYMENT_REASON
+              }
+            }
+            elseif ($env:ACTIVATION_OUTCOME -ceq 'failure') {
+              $status = 'Failure'
+              $reason = if ([string]::IsNullOrWhiteSpace($env:DEPLOYMENT_REASON)) {
+                'Installer failed before reporting a successful deployment outcome.'
+              }
+              else { $env:DEPLOYMENT_REASON }
+            }
+            else {
+              $status = 'Failure'
+              $reason = 'Eligibility approved activation, but the deployment step did not run.'
+              $summaryError = $true
+            }
+          }
+          else {
+            $status = 'Failure'
+            $reason = 'Eligibility preflight succeeded without a valid decision.'
+            $summaryError = $true
           }
           @(
             '## Test IIS deployment'
@@ -1054,6 +1175,9 @@ jobs:
             "Commit: [$($env:TESTED_COMMIT)](https://github.com/clcdpc/asap-pocketbase/commit/$($env:TESTED_COMMIT))"
             "Source: $source"
             "Status: $status"
-            "Reason: $($env:DEPLOYMENT_REASON)"
+            "Reason: $reason"
             "Run: https://github.com/clcdpc/asap-pocketbase/actions/runs/$($env:GITHUB_RUN_ID)"
           ) -join "`n`n" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          if ($summaryError) {
+            throw 'Deployment summary found missing or inconsistent eligibility/deployment outputs.'
+          }

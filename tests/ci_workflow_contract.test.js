@@ -296,6 +296,20 @@ async function main() {
     context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'false';
     assert.equal(enabled(current, context), false);
   });
+  await check('actual deployment-step condition skips only a proven preflight skip and fails closed on malformed outputs', () => {
+    const activation = step(deploy, 'Deploy exact tested artifact');
+    const shouldActivate = (outcome, decision, source) => evaluate(activation.if, {
+      steps: { eligibility: { outcome, outputs: { decision, source } } }
+    }) === 'true';
+    assert.equal(shouldActivate('success', 'eligible', 'automatic'), true, 'A successful explicit eligible decision runs activation');
+    assert.equal(shouldActivate('success', 'skip', 'automatic'), false, 'A proven freshness skip produces a gray skipped activation step');
+    assert.equal(shouldActivate('success', '', 'automatic'), false, 'Missing decision output must not authorize activation');
+    assert.equal(shouldActivate('success', 'unknown', 'automatic'), false, 'Malformed decision output must not authorize activation');
+    assert.equal(shouldActivate('success', 'eligible', ''), false, 'Missing source output must not authorize activation');
+    assert.equal(shouldActivate('success', 'eligible', 'unknown'), false, 'Malformed source output must not authorize activation');
+    assert.equal(shouldActivate('failure', 'eligible', 'automatic'), false, 'A failed preflight must not authorize activation');
+    assert.equal(shouldActivate('cancelled', 'eligible', 'automatic'), false, 'A cancelled preflight must not authorize activation');
+  });
   await check('bounded native deployment queue retains rapid merges and never cancels active activation', () => {
     validateConcurrency(workflow);
     for (const value of ['invalid', true, false, 0, 100, null, undefined]) {
@@ -355,34 +369,51 @@ async function main() {
       assert.doesNotMatch(full.steps.map((candidate) => candidate.run || '').join('\n'), /git tag|AssemblyVersion|InformationalVersion|\/p:Version/);
     } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
   });
-  await check('actual deployment summary distinguishes new activation, idempotency, skips, diagnostics and failures', () => {
+  await check('actual deployment summary distinguishes activation, preflight skips, diagnostics, failure and cancellation', () => {
     const summary = step(deploy, 'Summarize test-IIS deployment');
     assert.equal(summary.if, '${{ always() }}');
     assert.deepEqual(deploy.environment, { name: 'asap-test-iis', deployment: false },
       'Environment protections remain while implicit green deployment records cannot misreport a skipped activation');
     const temporary = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'asap-deployment-summary-'));
     try {
-      for (const [outcome, status, expected] of [
-        ['success', 'deployed', 'Success'],
-        ['success', 'already-deployed', 'Already deployed and healthy (no new activation)'],
-        ['success', 'skipped', 'Skipped (superseded; no activation)'],
-        ['success', 'plan-only', 'SQL plan only (no activation)'],
-        ['failure', 'deployed', 'Failure'],
-        ['cancelled', '', 'Failure'],
-        ['skipped', '', 'Failure']
-      ]) {
-        const output = path.join(temporary, `${outcome}-${status}.md`);
+      const cases = [
+        { name: 'deployed', preflight: 'success', decision: 'eligible', reasonCode: 'eligible', source: 'automatic', activation: 'success', deploymentStatus: 'deployed', expected: 'Success', reason: 'fixture reason' },
+        { name: 'healthy', preflight: 'success', decision: 'eligible', reasonCode: 'eligible', source: 'automatic', activation: 'success', deploymentStatus: 'already-deployed', expected: 'Already deployed and healthy (no new activation)', reason: 'fixture reason' },
+        { name: 'plan-only', preflight: 'success', decision: 'eligible', reasonCode: 'not-applicable', source: 'tagged', activation: 'success', deploymentStatus: 'plan-only', expected: 'SQL plan only (no activation)', reason: 'fixture reason' },
+        { name: 'preflight-main-moved', preflight: 'success', decision: 'skip', reasonCode: 'main-moved', source: 'automatic', activation: 'skipped', eligibilityReason: 'Superseded: current main is ' + 'e'.repeat(40) + '; this artifact is ' + 'a'.repeat(40) + '.', expected: 'Skipped (superseded; no activation)', reason: 'Superseded: current main is ' + 'e'.repeat(40) + '; this artifact is ' + 'a'.repeat(40) + '.' },
+        { name: 'preflight-skip', preflight: 'success', decision: 'skip', reasonCode: 'recorded-deployment-not-ancestor', source: 'automatic', activation: 'skipped', eligibilityReason: 'Superseded: recorded deployment ' + 'c'.repeat(40) + ' is newer than or unrelated to ' + 'a'.repeat(40) + '; use an explicit dispatch for intentional redeployment.', expected: 'Skipped (superseded; no activation)', reason: 'Superseded: recorded deployment ' + 'c'.repeat(40) + ' is newer than or unrelated to ' + 'a'.repeat(40) + '; use an explicit dispatch for intentional redeployment.' },
+        { name: 'malformed-skip-reason', preflight: 'success', decision: 'skip', reasonCode: 'main-moved', source: 'automatic', activation: 'skipped', eligibilityReason: 'Superseded: garbage', expected: 'Failure', reason: 'Eligibility requested a skip without a complete, matching preflight result.', failSummary: true },
+        { name: 'activation-failure', preflight: 'success', decision: 'eligible', reasonCode: 'not-applicable', source: 'manual', activation: 'failure', deploymentStatus: '', expected: 'Failure', reason: 'Installer failed before reporting a successful deployment outcome.' },
+        { name: 'preflight-failure', preflight: 'failure', decision: '', source: '', activation: 'skipped', expected: 'Failure', reason: 'Deployment eligibility preflight failed; activation was not started.' },
+        { name: 'cancelled', preflight: 'cancelled', decision: '', source: '', activation: 'skipped', expected: 'Cancelled', reason: 'Workflow cancellation prevented deployment completion.' },
+        { name: 'missing-decision', preflight: 'success', decision: '', source: 'automatic', activation: 'skipped', expected: 'Failure', reason: 'Eligibility preflight succeeded without a valid decision.', failSummary: true },
+        { name: 'missing-source', preflight: 'success', decision: 'eligible', source: '', activation: 'skipped', expected: 'Failure', reason: 'Eligibility approved activation, but the deployment step did not run.', failSummary: true },
+        { name: 'eligible-but-skipped', preflight: 'success', decision: 'eligible', source: 'automatic', activation: 'skipped', expected: 'Failure', reason: 'Eligibility approved activation, but the deployment step did not run.', failSummary: true }
+      ];
+      for (const item of cases) {
+        const output = path.join(temporary, `${item.name}.md`);
         const context = nonPr('push', 157);
         context.needs = { 'build-test-package': { outputs: { commit: context.github.sha, deployment_label: 'test-aaaaaaaaaaaa' } } };
-        context.steps = { activate: { outcome, outputs: { deployment_status: status, deployment_reason: 'fixture reason', deployment_source: 'automatic' } } };
+        context.steps = {
+          eligibility: { outcome: item.preflight, outputs: {
+            decision: item.decision, reason_code: item.reasonCode || '', reason: item.eligibilityReason || 'fixture reason', source: item.source
+          } },
+          activate: { outcome: item.activation, outputs: {
+            deployment_status: item.deploymentStatus, deployment_reason: item.activationReason || (item.activation === 'failure' ? '' : 'fixture reason'),
+            deployment_source: item.activation === 'success' || item.activation === 'failure' ? item.source : ''
+          } }
+        };
         const env = Object.fromEntries(Object.entries(summary.env).map(([key, value]) => [key, template(value, context)]));
         const run = cp.spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-EncodedCommand', Buffer.from(summary.run, 'utf16le').toString('base64')], {
-          encoding: 'utf8', env: { ...process.env, ...env, GITHUB_STEP_SUMMARY: output, GITHUB_RUN_ID: '157' }
+          encoding: 'utf8', env: { ...process.env, ...env, GITHUB_STEP_SUMMARY: output, GITHUB_RUN_ID: '157',
+            GITHUB_EVENT_NAME: context.github.event_name, GITHUB_REF: context.github.ref }
         });
         assert.ifError(run.error);
-        assert.equal(run.status, 0, run.stderr);
+        assert.equal(run.status !== 0, Boolean(item.failSummary), `${item.name}: ${run.stderr}`);
         const markdown = fs.readFileSync(output, 'utf8');
-        for (const text of ['Environment: DEVWEB', 'Deployment: test-aaaaaaaaaaaa', 'Source: Automatic main deployment', `Status: ${expected}`, 'Reason: fixture reason', '/actions/runs/157', `/commit/${context.github.sha}`]) {
+        const expectedSource = item.source === 'tagged' ? 'Tagged test release' : item.source === 'manual' ? 'Manual deployment' :
+          item.source === 'automatic' ? 'Automatic main deployment' : 'push on refs/heads/main';
+        for (const text of ['Environment: DEVWEB', 'Deployment: test-aaaaaaaaaaaa', `Source: ${expectedSource}`, `Status: ${item.expected}`, `Reason: ${item.reason}`, '/actions/runs/157', `/commit/${context.github.sha}`]) {
           assert.ok(markdown.includes(text), text);
         }
         assert.match(markdown, /Environment: DEVWEB\r?\n\r?\nDeployment:/, 'Summary fields must render as separate paragraphs');
