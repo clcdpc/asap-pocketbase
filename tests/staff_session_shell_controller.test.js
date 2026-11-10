@@ -7,6 +7,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 (async () => {
   await fixture(async ({ load, get }) => {
     const { createSessionIdentity } = await load('session-identity');
+    const { readInitialSignInFailure } = await load('session');
     const { createStaffShell } = await load('shell');
     const identity = createSessionIdentity();
     let readiness, viewChanges = 0;
@@ -15,6 +16,21 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       openRecentTitle() {}, onViewIntent() { viewChanges += 1; }, onSignOutIntent() {},
       request: () => new Promise(resolve => { readiness = resolve; }) };
     const shell = createStaffShell(options);
+    window.history.pushState({}, '', '/staff/?signInError=denied&view=queue#requests');
+    assert.equal(readInitialSignInFailure(), 'denied');
+    assert.equal(window.location.search, '?view=queue', 'the one-time failure category is removed from the visible URL');
+    assert.equal(window.location.hash, '#requests');
+    window.history.pushState({}, '', '/staff/?signInError=untrusted');
+    assert.equal(readInitialSignInFailure(), null, 'unknown query values never become presentation text');
+    assert.equal(window.location.search, '');
+    shell.showAuthenticationFailure('denied');
+    assert.match(get('#signed-out-message').textContent, /not authorized.*library administrator/i);
+    assert.equal(get('#signed-out-title'), document.activeElement, 'auth failure moves focus to the explained page heading');
+    assert.equal(get('#sign-in-label').textContent, 'Try again with Microsoft');
+    shell.showAuthenticationFailure('temporary');
+    assert.match(get('#signed-out-message').textContent, /could not complete.*Please try again/i);
+    shell.showAuthenticationFailure('cancelled');
+    assert.match(get('#signed-out-message').textContent, /sign-in was cancelled/i);
     const ownerA = identity.accept(actorA); shell.showWorkspace(ownerA);
     assert.equal(get('#profile-button').closest('header') !== null, true);
     assert.equal(get('.view-tabs [data-view="profile"]'), null, 'Profile belongs beside the authenticated identity');

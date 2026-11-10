@@ -9,7 +9,8 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
   findTitle, openRecentTitle, onViewIntent, onSignOutIntent, request = authorizedJson }) {
   const get = selector => root.querySelector(selector);
   const dom = { status: get('#app-status'), readiness: get('#email-readiness-warning'), signedOut: get('#signed-out'),
-    message: get('#signed-out-message'), workspace: get('#workspace'), actions: get('#session-actions'),
+    title: get('#signed-out-title'), message: get('#signed-out-message'), signInLabel: get('#sign-in-label'),
+    workspace: get('#workspace'), actions: get('#session-actions'),
     identity: get('#staff-identity'), recent: get('#recent-work'), recentList: get('#recent-request-list') };
   const views = { queue: ['#queue-view', '#queue-title'], 'additional-copies': ['#additional-copy-view', '#additional-copy-title'],
     settings: ['#settings-view', '#settings-title'], analytics: ['#analytics-view', '#analytics-title'],
@@ -146,15 +147,30 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
     const store = storage(); if (store && recentKey) { try { store.removeItem(recentKey); } catch { /* Storage may be unavailable. */ } }
     recentKey = null; dom.recent.open = false; dom.recentList.replaceChildren();
     dom.message.textContent = latestReceipt()?.message || featureMessage || message || 'Sign in with your authorized library account.';
+    if (dom.signInLabel) dom.signInLabel.textContent = 'Sign in with Microsoft';
     dom.signedOut.hidden = false; dom.workspace.hidden = true; dom.actions.hidden = !accessUnavailable;
     if (profileEntry) profileEntry.hidden = true;
     if (accessUnavailable) { dom.identity.textContent = 'Access unavailable'; dom.identity.title = ''; }
     announce('');
   }
 
+  function showAuthenticationFailure(category) {
+    if (disposed) return;
+    const failures = {
+      denied: 'Sign-in was unsuccessful. This account is not authorized for ASAP. Contact your library administrator if you believe you should have access.',
+      cancelled: 'Microsoft sign-in was cancelled. Try again if you want to continue.',
+      temporary: 'ASAP could not complete Microsoft sign-in right now. Please try again. If the problem continues, contact your library administrator.'
+    };
+    const message = failures[category];
+    if (!message) return;
+    showSignedOut(message);
+    dom.signInLabel.textContent = 'Try again with Microsoft';
+    dom.title.focus({ preventScroll: true });
+  }
+
   for (const tab of tabs) tab.addEventListener('click', () => onViewIntent(tab.dataset.view), { signal: events.signal });
   get('#sign-out').addEventListener('click', () => onSignOutIntent(), { signal: events.signal });
-  return { announce, presentView, showWorkspace, showSignedOut, preferencesChanged, recordReceipt, clearReceipt, settingsRefreshed, queueRefreshed,
+  return { announce, presentView, showWorkspace, showSignedOut, showAuthenticationFailure, preferencesChanged, recordReceipt, clearReceipt, settingsRefreshed, queueRefreshed,
     rememberOpened, forgetUnavailable, renderRecent, refreshReadiness,
     configurationCommitted(scope) {
       if (disposed || !sessionIdentity.actor()) return;

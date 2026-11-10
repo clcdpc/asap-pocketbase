@@ -3,6 +3,8 @@ using Asap.Web.Infrastructure.Configuration;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
@@ -12,6 +14,12 @@ public static class StaffAuthenticationRegistration
 {
     public const string CookieScheme = "AsapStaffCookie";
     public const string EntraScheme = "AsapEntra";
+    internal const string TenantNotAllowedReason = "tenant_not_allowed";
+    internal const string InvalidIdentityReason = "invalid_identity";
+    internal const string StaffNotAuthorizedReason = "staff_not_authorized";
+    internal const string ExternalAuthenticationFailedReason = "external_authentication_failed";
+    internal const string ExternalAuthenticationCancelledReason = "external_authentication_cancelled";
+    internal const string UnexpectedAuthenticationErrorReason = "unexpected_authentication_error";
     private const string SelectorScheme = "AsapStaffSelector";
 
     public static IServiceCollection AddStaffAuthentication(
@@ -64,20 +72,40 @@ public static class StaffAuthenticationRegistration
             options.TokenValidationParameters.ValidateIssuer = true;
             options.TokenValidationParameters.IssuerValidator = (issuer, _, _) =>
                 ValidateIssuer(issuer, allowedTenants);
+            options.Events.OnAuthenticationFailed = context =>
+            {
+                HandleAuthenticationFailure(context.HttpContext, context.Exception);
+                context.HandleResponse();
+                return Task.CompletedTask;
+            };
+            options.Events.OnRemoteFailure = context =>
+            {
+                HandleAuthenticationFailure(context.HttpContext, context.Failure);
+                context.HandleResponse();
+                return Task.CompletedTask;
+            };
+            options.Events.OnAccessDenied = context =>
+            {
+                HandleAuthenticationFailure(
+                    context.HttpContext,
+                    null,
+                    ExternalAuthenticationCancelledReason);
+                context.HandleResponse();
+                return Task.CompletedTask;
+            };
             options.Events.OnTokenValidated = async context =>
             {
-                var principal = context.Principal!;
-                if (!Guid.TryParse(principal.FindFirstValue(StaffClaims.TenantId), out var tenantId) ||
-                    !Guid.TryParse(principal.FindFirstValue("oid"), out var objectId) ||
-                    tenantId == Guid.Empty || objectId == Guid.Empty)
+                var principal = context.Principal;
+                if (principal is null || !TryReadEntraIdentity(principal, out var tenantId, out var objectId))
                 {
-                    context.Fail("Required Entra identity claims are missing.");
+                    context.Fail(new StaffAuthenticationRejectionException(InvalidIdentityReason));
                     return;
                 }
 
-                if (!IssuerMatchesTenant(context.SecurityToken.Issuer, tenantId))
+                if (context.SecurityToken is null ||
+                    !IssuerMatchesTenant(context.SecurityToken.Issuer, tenantId))
                 {
-                    context.Fail("The Entra issuer does not match the tenant claim.");
+                    context.Fail(new StaffAuthenticationRejectionException(InvalidIdentityReason));
                     return;
                 }
 
@@ -87,7 +115,7 @@ public static class StaffAuthenticationRegistration
                         out _,
                         out var normalizedAuthenticationEmail))
                 {
-                    context.Fail("A valid Entra email claim is required.");
+                    context.Fail(new StaffAuthenticationRejectionException(InvalidIdentityReason));
                     return;
                 }
 
@@ -101,7 +129,7 @@ public static class StaffAuthenticationRegistration
                     context.HttpContext.RequestAborted);
                 if (result.Outcome != StaffEligibilityOutcome.Allowed)
                 {
-                    context.Fail(result.Code);
+                    context.Fail(new StaffAuthenticationRejectionException(StaffNotAuthorizedReason));
                     return;
                 }
 
@@ -171,6 +199,101 @@ public static class StaffAuthenticationRegistration
         }
 
         return null;
+    }
+
+    internal static bool TryReadEntraIdentity(
+        ClaimsPrincipal principal,
+        out Guid tenantId,
+        out Guid objectId)
+    {
+        var hasTenantId = Guid.TryParse(principal.FindFirstValue(StaffClaims.TenantId), out tenantId);
+        var hasObjectId = Guid.TryParse(principal.FindFirstValue("oid"), out objectId);
+        return hasTenantId && hasObjectId && tenantId != Guid.Empty && objectId != Guid.Empty;
+    }
+
+    internal static string FailureRedirectUri(string reason)
+    {
+        return QueryHelpers.AddQueryString("/staff/", "signInError", FailurePresentation(reason));
+    }
+
+    internal static string FailurePresentation(string reason) => reason switch
+    {
+        TenantNotAllowedReason or InvalidIdentityReason or StaffNotAuthorizedReason => "denied",
+        ExternalAuthenticationCancelledReason => "cancelled",
+        _ => "temporary"
+    };
+
+    internal static string ClassifyFailure(Exception? exception, string? fixedReason = null)
+    {
+        if (fixedReason is not null)
+        {
+            return fixedReason;
+        }
+
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is StaffAuthenticationRejectionException rejection)
+            {
+                return rejection.Reason;
+            }
+
+            if (current is SecurityTokenInvalidIssuerException)
+            {
+                return TenantNotAllowedReason;
+            }
+
+            if (current is OpenIdConnectProtocolException or SecurityTokenException)
+            {
+                return ExternalAuthenticationFailedReason;
+            }
+        }
+
+        return exception is null || exception is AuthenticationFailureException { InnerException: null }
+            ? ExternalAuthenticationFailedReason
+            : UnexpectedAuthenticationErrorReason;
+    }
+
+    private static void HandleAuthenticationFailure(
+        HttpContext context,
+        Exception? exception,
+        string? fixedReason = null)
+    {
+        var reason = ClassifyFailure(exception, fixedReason);
+        var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Asap.Web.Features.Staff.StaffAuthentication");
+        if (reason == ExternalAuthenticationCancelledReason)
+        {
+            logger.LogInformation(
+                "Staff sign-in ended before authentication ({FailureReason}) for correlation {CorrelationId}.",
+                reason,
+                context.TraceIdentifier);
+        }
+        else if (reason == UnexpectedAuthenticationErrorReason)
+        {
+            // OpenIdConnectHandler already logs the exception and stack. This stable app event adds
+            // the failure code and correlation ID without writing the same exception a second time.
+            logger.LogError(
+                "Staff authentication failed ({FailureReason}, {ExceptionType}) for correlation {CorrelationId}.",
+                reason,
+                exception?.GetType().Name ?? "unknown",
+                context.TraceIdentifier);
+        }
+        else
+        {
+            logger.LogWarning(
+                "Staff authentication was rejected ({FailureReason}) for correlation {CorrelationId}.",
+                reason,
+                context.TraceIdentifier);
+        }
+
+        var path = context.Request.PathBase.Add("/staff/").Value ?? "/staff/";
+        context.Response.Redirect(QueryHelpers.AddQueryString(path, "signInError", FailurePresentation(reason)));
+    }
+
+    private sealed class StaffAuthenticationRejectionException(string reason)
+        : AuthenticationFailureException("Staff authentication was rejected.")
+    {
+        public string Reason { get; } = reason;
     }
 
     private static Task JsonStatus(RedirectContext<CookieAuthenticationOptions> context, int status, string code)
