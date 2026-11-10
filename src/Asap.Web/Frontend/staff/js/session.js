@@ -2,19 +2,6 @@ import { authorizedJson, isAbortError, loadStaffSession, onAccessUnavailable, on
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { createDraftScope } from './draft-scope.js';
 
-export function readInitialSignInFailure() {
-  const location = new URL(window.location.href);
-  if (!location.searchParams.has('signInError')) return null;
-  const category = location.searchParams.get('signInError');
-  location.searchParams.delete('signInError');
-  window.history.replaceState(
-    window.history.state,
-    '',
-    `${location.pathname}${location.search}${location.hash}`
-  );
-  return ['denied', 'cancelled', 'temporary'].includes(category) ? category : null;
-}
-
 export function createSessionCoordinator({ identity, shell, navigation, getFeatures, onAccepted, onPreferencesChanged,
   request = authorizedJson, sessionRequest = loadStaffSession, initialSignInFailure = null }) {
   const reads = createLatestLoad(), admission = createDraftScope(), events = new window.AbortController();

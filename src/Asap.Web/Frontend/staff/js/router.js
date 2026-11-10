@@ -3,6 +3,19 @@ import { readUrl, historyPath, applyQueueContext, replaceStageUrl, replaceReques
   requestedSettingsScopeFromUrl, requestedOperationalScopeFromUrl, requestedCopyStatusFromUrl,
   requestedOperationsContextFromUrl, applyOperationsContext } from './url-utils.js';
 
+export function readInitialSignInFailure() {
+  const location = new URL(window.location.href);
+  if (!location.searchParams.has('signInError')) return null;
+  const category = location.searchParams.get('signInError');
+  location.searchParams.delete('signInError');
+  window.history.replaceState(
+    window.history.state,
+    '',
+    `${location.pathname}${location.search}${location.hash}`
+  );
+  return ['denied', 'cancelled', 'temporary'].includes(category) ? category : null;
+}
+
 export function parseStaffRoute(href) {
   const stage = requestedStatusFromUrl(href);
   return Object.freeze({ stage, requestId: requestedRequestIdFromUrl(href),

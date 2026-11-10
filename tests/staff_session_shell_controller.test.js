@@ -7,7 +7,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 (async () => {
   await fixture(async ({ load, get }) => {
     const { createSessionIdentity } = await load('session-identity');
-    const { readInitialSignInFailure } = await load('session');
+    const { readInitialSignInFailure } = await load('router');
     const { createStaffShell } = await load('shell');
     const identity = createSessionIdentity();
     let readiness, viewChanges = 0;

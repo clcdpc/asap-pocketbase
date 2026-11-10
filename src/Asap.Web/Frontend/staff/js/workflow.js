@@ -1,9 +1,9 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createSessionIdentity } from './session-identity.js';
 import { createClaimsFilter } from './claims-filter.js';
-import { createSessionCoordinator, readInitialSignInFailure } from './session.js';
+import { createSessionCoordinator } from './session.js';
 import { createStaffShell } from './shell.js';
-import { createRouter } from './router.js';
+import { createRouter, readInitialSignInFailure } from './router.js';
 import { createNavigationController } from './navigation.js';
 import { createDetailHost } from './detail-host.js';
 import { createTitleQueue, createCopyQueue } from './queues.js';
