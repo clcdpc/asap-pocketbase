@@ -35,6 +35,40 @@ try {
         Assert-CommitDeploymentLabel -Label $tag -Commit $commit
     }
 
+    $eligibilityOutput = Join-Path $fixture 'eligibility.outputs'
+    $previousOutputPath = $env:GITHUB_OUTPUT
+    try {
+        $env:GITHUB_OUTPUT = $eligibilityOutput
+        Write-DeploymentEligibilityResult `
+            -Decision 'eligible' `
+            -ReasonCode 'eligible' `
+            -Reason 'Current main passed the fixture freshness check.' `
+            -Source 'automatic'
+        $eligibilityValues = @(Get-Content -LiteralPath $eligibilityOutput)
+        Assert-True ($eligibilityValues -join "`n" -ceq "decision=eligible`nreason_code=eligible`nreason=Current main passed the fixture freshness check.`nsource=automatic") 'Eligibility must emit all four canonical output fields.'
+
+        foreach ($invalidOutput in @(
+            @{ Decision = 'Eligible'; ReasonCode = 'eligible'; Reason = 'Fixture reason'; Source = 'automatic' },
+            @{ Decision = 'eligible'; ReasonCode = 'ELIGIBLE'; Reason = 'Fixture reason'; Source = 'automatic' },
+            @{ Decision = 'eligible'; ReasonCode = 'eligible'; Reason = 'Fixture reason'; Source = 'Automatic' },
+            @{ Decision = 'eligible'; ReasonCode = 'not-applicable'; Reason = 'Fixture reason'; Source = 'automatic' },
+            @{ Decision = 'skip'; ReasonCode = 'main-moved'; Reason = 'Fixture reason'; Source = 'manual' },
+            @{ Decision = 'eligible'; ReasonCode = 'unknown'; Reason = 'Fixture reason'; Source = 'automatic' }
+        )) {
+            Assert-Failure { Write-DeploymentEligibilityResult @invalidOutput } '*'
+        }
+        Assert-Failure {
+            Write-DeploymentEligibilityResult -Decision 'eligible' -ReasonCode 'eligible' -Reason '' -Source 'automatic'
+        } '*'
+        Assert-Failure {
+            Write-DeploymentEligibilityResult -Decision 'eligible' -ReasonCode 'eligible' -Reason '   ' -Source 'automatic'
+        } '*Deployment eligibility reason is missing*'
+        Assert-True ((Get-Content -LiteralPath $eligibilityOutput) -join "`n" -ceq ($eligibilityValues -join "`n")) 'Invalid eligibility outputs must not append partial fields.'
+    }
+    finally {
+        $env:GITHUB_OUTPUT = $previousOutputPath
+    }
+
     # Exercise the real HTTP adapter with a disposable API boundary. No live
     # GitHub/DEVWEB request is made, and API errors must not echo credentials.
     $env:GH_TOKEN = 'fixture-read-only-token'

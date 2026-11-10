@@ -296,19 +296,73 @@ async function main() {
     context.vars.ASAP_TEST_DEPLOYMENT_ENABLED = 'false';
     assert.equal(enabled(current, context), false);
   });
-  await check('actual deployment-step condition skips only a proven preflight skip and fails closed on malformed outputs', () => {
+  await check('actual eligibility validator rejects malformed outputs before the activation condition', () => {
+    const validator = step(deploy, 'Validate test-IIS eligibility outputs');
     const activation = step(deploy, 'Deploy exact tested artifact');
-    const shouldActivate = (outcome, decision, source) => evaluate(activation.if, {
-      steps: { eligibility: { outcome, outputs: { decision, source } } }
-    }) === 'true';
-    assert.equal(shouldActivate('success', 'eligible', 'automatic'), true, 'A successful explicit eligible decision runs activation');
-    assert.equal(shouldActivate('success', 'skip', 'automatic'), false, 'A proven freshness skip produces a gray skipped activation step');
-    assert.equal(shouldActivate('success', '', 'automatic'), false, 'Missing decision output must not authorize activation');
-    assert.equal(shouldActivate('success', 'unknown', 'automatic'), false, 'Malformed decision output must not authorize activation');
-    assert.equal(shouldActivate('success', 'eligible', ''), false, 'Missing source output must not authorize activation');
-    assert.equal(shouldActivate('success', 'eligible', 'unknown'), false, 'Malformed source output must not authorize activation');
-    assert.equal(shouldActivate('failure', 'eligible', 'automatic'), false, 'A failed preflight must not authorize activation');
-    assert.equal(shouldActivate('cancelled', 'eligible', 'automatic'), false, 'A cancelled preflight must not authorize activation');
+    const temporary = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'asap-eligibility-contract-'));
+    const eligibleAutomatic = { decision: 'eligible', reasonCode: 'eligible', reason: 'Current main passed the fixture freshness check.', source: 'automatic' };
+    const reasonMainMoved = `Superseded: current main is ${'e'.repeat(40)}; this artifact is ${'a'.repeat(40)}.`;
+    const cases = [
+      { name: 'eligible-automatic', ...eligibleAutomatic, valid: true, authorized: 'true' },
+      { name: 'eligible-manual', decision: 'eligible', reasonCode: 'not-applicable', reason: 'Authorized manual deployment.', source: 'manual', valid: true, authorized: 'true' },
+      { name: 'eligible-tagged', decision: 'eligible', reasonCode: 'not-applicable', reason: 'Authorized tagged deployment.', source: 'tagged', valid: true, authorized: 'true' },
+      { name: 'skip-main-moved', decision: 'skip', reasonCode: 'main-moved', reason: reasonMainMoved, source: 'automatic', valid: true, authorized: 'false' },
+      { name: 'skip-recorded-deployment', decision: 'skip', reasonCode: 'recorded-deployment-not-ancestor',
+        reason: `Superseded: recorded deployment ${'c'.repeat(40)} is newer than or unrelated to ${'a'.repeat(40)}; use an explicit dispatch for intentional redeployment.`,
+        source: 'automatic', valid: true, authorized: 'false' },
+      { name: 'missing-decision', ...eligibleAutomatic, decision: undefined, valid: false },
+      { name: 'missing-reason-code', ...eligibleAutomatic, reasonCode: undefined, valid: false },
+      { name: 'missing-reason', ...eligibleAutomatic, reason: undefined, valid: false },
+      { name: 'blank-reason', ...eligibleAutomatic, reason: '', valid: false },
+      { name: 'whitespace-reason', ...eligibleAutomatic, reason: '   ', valid: false },
+      { name: 'missing-source', ...eligibleAutomatic, source: undefined, valid: false },
+      { name: 'invalid-reason-code', ...eligibleAutomatic, reasonCode: 'unknown', valid: false },
+      { name: 'mismatched-automatic-reason-code', ...eligibleAutomatic, reasonCode: 'not-applicable', valid: false },
+      { name: 'mismatched-manual-reason-code', decision: 'eligible', reasonCode: 'eligible', reason: 'Fixture reason.', source: 'manual', valid: false },
+      { name: 'skip-with-inapplicable-code', decision: 'skip', reasonCode: 'not-applicable', reason: reasonMainMoved, source: 'automatic', valid: false },
+      { name: 'skip-manual-source', decision: 'skip', reasonCode: 'main-moved', reason: reasonMainMoved, source: 'manual', valid: false },
+      { name: 'wrong-decision-casing', ...eligibleAutomatic, decision: 'Eligible', valid: false },
+      { name: 'wrong-reason-code-casing', ...eligibleAutomatic, reasonCode: 'ELIGIBLE', valid: false },
+      { name: 'wrong-source-casing', ...eligibleAutomatic, source: 'Automatic', valid: false },
+      { name: 'wrong-skip-reason-casing', decision: 'skip', reasonCode: 'main-moved', reason: reasonMainMoved.replace('Superseded', 'superseded'), source: 'automatic', valid: false }
+    ];
+    function validate(item) {
+      const outputPath = path.join(temporary, `${item.name}.outputs`);
+      const env = { ...process.env, GITHUB_OUTPUT: outputPath };
+      for (const [property, variable] of Object.entries({ decision: 'ELIGIBILITY_DECISION', reasonCode: 'ELIGIBILITY_REASON_CODE', reason: 'ELIGIBILITY_REASON', source: 'ELIGIBILITY_SOURCE' })) {
+        delete env[variable];
+        if (Object.hasOwn(item, property) && item[property] !== undefined) {
+          env[variable] = item[property];
+        }
+      }
+      const run = cp.spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-EncodedCommand', Buffer.from(validator.run, 'utf16le').toString('base64')], {
+        encoding: 'utf8', env
+      });
+      assert.ifError(run.error);
+      const outputs = fs.existsSync(outputPath)
+        ? Object.fromEntries(fs.readFileSync(outputPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).map((line) => line.split('=')))
+        : {};
+      return { run, outputs };
+    }
+    function shouldActivate(preflightOutcome, validatorOutcome, authorized) {
+      return evaluate(activation.if, { steps: {
+        eligibility: { outcome: preflightOutcome },
+        eligibility_contract: { outcome: validatorOutcome, outputs: { activation_authorized: authorized } }
+      } }) === 'true';
+    }
+    try {
+      for (const item of cases) {
+        const { run, outputs } = validate(item);
+        assert.equal(run.status === 0, item.valid, `${item.name}: ${run.stderr || run.stdout}`);
+        assert.equal(shouldActivate('success', item.valid ? 'success' : 'failure', outputs.activation_authorized), Boolean(item.authorized === 'true'),
+          `${item.name} must ${item.authorized === 'true' ? '' : 'not '}authorize activation`);
+      }
+      assert.equal(shouldActivate('failure', 'skipped', ''), false, 'A failed preflight must not authorize activation');
+      assert.equal(shouldActivate('cancelled', 'skipped', ''), false, 'A cancelled preflight must not authorize activation');
+      assert.equal(shouldActivate('success', 'success', 'false'), false, 'A valid freshness skip leaves activation genuinely skipped');
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
   });
   await check('bounded native deployment queue retains rapid merges and never cancels active activation', () => {
     validateConcurrency(workflow);
@@ -377,27 +431,37 @@ async function main() {
     const temporary = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'asap-deployment-summary-'));
     try {
       const cases = [
-        { name: 'deployed', preflight: 'success', decision: 'eligible', reasonCode: 'eligible', source: 'automatic', activation: 'success', deploymentStatus: 'deployed', expected: 'Success', reason: 'fixture reason' },
-        { name: 'healthy', preflight: 'success', decision: 'eligible', reasonCode: 'eligible', source: 'automatic', activation: 'success', deploymentStatus: 'already-deployed', expected: 'Already deployed and healthy (no new activation)', reason: 'fixture reason' },
-        { name: 'plan-only', preflight: 'success', decision: 'eligible', reasonCode: 'not-applicable', source: 'tagged', activation: 'success', deploymentStatus: 'plan-only', expected: 'SQL plan only (no activation)', reason: 'fixture reason' },
-        { name: 'preflight-main-moved', preflight: 'success', decision: 'skip', reasonCode: 'main-moved', source: 'automatic', activation: 'skipped', eligibilityReason: 'Superseded: current main is ' + 'e'.repeat(40) + '; this artifact is ' + 'a'.repeat(40) + '.', expected: 'Skipped (superseded; no activation)', reason: 'Superseded: current main is ' + 'e'.repeat(40) + '; this artifact is ' + 'a'.repeat(40) + '.' },
-        { name: 'preflight-skip', preflight: 'success', decision: 'skip', reasonCode: 'recorded-deployment-not-ancestor', source: 'automatic', activation: 'skipped', eligibilityReason: 'Superseded: recorded deployment ' + 'c'.repeat(40) + ' is newer than or unrelated to ' + 'a'.repeat(40) + '; use an explicit dispatch for intentional redeployment.', expected: 'Skipped (superseded; no activation)', reason: 'Superseded: recorded deployment ' + 'c'.repeat(40) + ' is newer than or unrelated to ' + 'a'.repeat(40) + '; use an explicit dispatch for intentional redeployment.' },
-        { name: 'malformed-skip-reason', preflight: 'success', decision: 'skip', reasonCode: 'main-moved', source: 'automatic', activation: 'skipped', eligibilityReason: 'Superseded: garbage', expected: 'Failure', reason: 'Eligibility requested a skip without a complete, matching preflight result.', failSummary: true },
-        { name: 'activation-failure', preflight: 'success', decision: 'eligible', reasonCode: 'not-applicable', source: 'manual', activation: 'failure', deploymentStatus: '', expected: 'Failure', reason: 'Installer failed before reporting a successful deployment outcome.' },
-        { name: 'preflight-failure', preflight: 'failure', decision: '', source: '', activation: 'skipped', expected: 'Failure', reason: 'Deployment eligibility preflight failed; activation was not started.' },
-        { name: 'cancelled', preflight: 'cancelled', decision: '', source: '', activation: 'skipped', expected: 'Cancelled', reason: 'Workflow cancellation prevented deployment completion.' },
-        { name: 'missing-decision', preflight: 'success', decision: '', source: 'automatic', activation: 'skipped', expected: 'Failure', reason: 'Eligibility preflight succeeded without a valid decision.', failSummary: true },
-        { name: 'missing-source', preflight: 'success', decision: 'eligible', source: '', activation: 'skipped', expected: 'Failure', reason: 'Eligibility approved activation, but the deployment step did not run.', failSummary: true },
-        { name: 'eligible-but-skipped', preflight: 'success', decision: 'eligible', source: 'automatic', activation: 'skipped', expected: 'Failure', reason: 'Eligibility approved activation, but the deployment step did not run.', failSummary: true }
+        { name: 'deployed', download: 'success', preflight: 'success', contract: 'success', decision: 'eligible', reasonCode: 'eligible', source: 'automatic', activation: 'success', deploymentStatus: 'deployed', expected: 'Success', reason: 'fixture reason' },
+        { name: 'healthy', download: 'success', preflight: 'success', contract: 'success', decision: 'eligible', reasonCode: 'eligible', source: 'automatic', activation: 'success', deploymentStatus: 'already-deployed', expected: 'Already deployed and healthy (no new activation)', reason: 'fixture reason' },
+        { name: 'plan-only', download: 'success', preflight: 'success', contract: 'success', decision: 'eligible', reasonCode: 'not-applicable', source: 'tagged', activation: 'success', deploymentStatus: 'plan-only', expected: 'SQL plan only (no activation)', reason: 'fixture reason' },
+        { name: 'preflight-main-moved', download: 'success', preflight: 'success', contract: 'success', decision: 'skip', reasonCode: 'main-moved', source: 'automatic', activation: 'skipped', eligibilityReason: 'Superseded: current main is ' + 'e'.repeat(40) + '; this artifact is ' + 'a'.repeat(40) + '.', expected: 'Skipped (superseded; no activation)', reason: 'Superseded: current main is ' + 'e'.repeat(40) + '; this artifact is ' + 'a'.repeat(40) + '.' },
+        { name: 'preflight-skip', download: 'success', preflight: 'success', contract: 'success', decision: 'skip', reasonCode: 'recorded-deployment-not-ancestor', source: 'automatic', activation: 'skipped', eligibilityReason: 'Superseded: recorded deployment ' + 'c'.repeat(40) + ' is newer than or unrelated to ' + 'a'.repeat(40) + '; use an explicit dispatch for intentional redeployment.', expected: 'Skipped (superseded; no activation)', reason: 'Superseded: recorded deployment ' + 'c'.repeat(40) + ' is newer than or unrelated to ' + 'a'.repeat(40) + '; use an explicit dispatch for intentional redeployment.' },
+        { name: 'malformed-skip-reason', download: 'success', preflight: 'success', contract: 'failure', decision: 'skip', reasonCode: 'main-moved', source: 'automatic', activation: 'skipped', eligibilityReason: 'Superseded: garbage', expected: 'Failure', reason: 'Deployment eligibility outputs were missing or inconsistent; activation was not started.', failSummary: true },
+        { name: 'blank-reason', download: 'success', preflight: 'success', contract: 'failure', decision: 'eligible', reasonCode: 'eligible', source: 'automatic', activation: 'skipped', eligibilityReason: '', expected: 'Failure', reason: 'Deployment eligibility outputs were missing or inconsistent; activation was not started.', failSummary: true },
+        { name: 'activation-failure', download: 'success', preflight: 'success', contract: 'success', decision: 'eligible', reasonCode: 'not-applicable', source: 'manual', activation: 'failure', workflowCancelled: true, deploymentStatus: '', expected: 'Failure', reason: 'Installer failed before reporting a successful deployment outcome.' },
+        { name: 'download-failure', download: 'failure', preflight: 'skipped', contract: 'skipped', decision: '', source: '', activation: 'skipped', expected: 'Failure', reason: 'Deployment artifact download failed; activation was not started.' },
+        { name: 'download-failure-before-cancellation', download: 'failure', preflight: 'skipped', contract: 'skipped', decision: '', source: '', activation: 'skipped', workflowCancelled: true, expected: 'Failure', reason: 'Deployment artifact download failed; activation was not started.' },
+        { name: 'cancelled-during-download', download: 'cancelled', preflight: 'skipped', contract: 'skipped', decision: '', source: '', activation: 'skipped', workflowCancelled: true, expected: 'Cancelled', reason: 'Workflow cancellation prevented deployment completion.' },
+        { name: 'preflight-failure', download: 'success', preflight: 'failure', contract: 'skipped', decision: '', source: '', activation: 'skipped', expected: 'Failure', reason: 'Deployment eligibility preflight failed; activation was not started.' },
+        { name: 'preflight-cancelled', download: 'success', preflight: 'cancelled', contract: 'skipped', decision: '', source: '', activation: 'skipped', workflowCancelled: true, expected: 'Cancelled', reason: 'Workflow cancellation prevented deployment completion.' },
+        { name: 'validation-failure-during-cancellation', download: 'success', preflight: 'success', contract: 'failure', decision: 'eligible', reasonCode: '', source: 'automatic', activation: 'skipped', workflowCancelled: true, expected: 'Failure', reason: 'Deployment eligibility outputs were missing or inconsistent; activation was not started.', failSummary: true },
+        { name: 'cancelled', download: 'success', preflight: 'cancelled', contract: 'skipped', decision: '', source: '', activation: 'skipped', workflowCancelled: true, expected: 'Cancelled', reason: 'Workflow cancellation prevented deployment completion.' },
+        { name: 'missing-decision', download: 'success', preflight: 'success', contract: 'success', decision: '', source: 'automatic', activation: 'skipped', expected: 'Failure', reason: 'Eligibility preflight succeeded without a valid decision.', failSummary: true },
+        { name: 'missing-source', download: 'success', preflight: 'success', contract: 'success', decision: 'eligible', source: '', activation: 'skipped', expected: 'Failure', reason: 'Eligibility approved activation, but the deployment step did not run.', failSummary: true },
+        { name: 'eligible-but-skipped', download: 'success', preflight: 'success', contract: 'success', decision: 'eligible', source: 'automatic', activation: 'skipped', expected: 'Failure', reason: 'Eligibility approved activation, but the deployment step did not run.', failSummary: true }
       ];
       for (const item of cases) {
         const output = path.join(temporary, `${item.name}.md`);
         const context = nonPr('push', 157);
         context.needs = { 'build-test-package': { outputs: { commit: context.github.sha, deployment_label: 'test-aaaaaaaaaaaa' } } };
+        const outcomes = [item.download || 'success', item.preflight, item.contract || 'success', item.activation];
+        context.job = { status: item.workflowCancelled ? 'cancelled' : outcomes.includes('failure') ? 'failure' : 'success' };
         context.steps = {
+          download: { outcome: item.download || 'success' },
           eligibility: { outcome: item.preflight, outputs: {
-            decision: item.decision, reason_code: item.reasonCode || '', reason: item.eligibilityReason || 'fixture reason', source: item.source
+            decision: item.decision, reason_code: item.reasonCode ?? '', reason: item.eligibilityReason ?? 'fixture reason', source: item.source
           } },
+          eligibility_contract: { outcome: item.contract || 'success', outputs: { activation_authorized: item.decision === 'eligible' ? 'true' : 'false' } },
           activate: { outcome: item.activation, outputs: {
             deployment_status: item.deploymentStatus, deployment_reason: item.activationReason || (item.activation === 'failure' ? '' : 'fixture reason'),
             deployment_source: item.activation === 'success' || item.activation === 'failure' ? item.source : ''

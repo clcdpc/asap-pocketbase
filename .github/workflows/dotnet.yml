@@ -951,6 +951,7 @@ jobs:
 
     steps:
       - name: Download exact tested deployment artifact
+        id: download
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.build-test-package.outputs.artifact_name }}
@@ -993,16 +994,53 @@ jobs:
             Remove-Item -LiteralPath $bootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Validate test-IIS eligibility outputs
+        id: eligibility_contract
+        if: ${{ steps.eligibility.outcome == 'success' }}
+        shell: pwsh
+        env:
+          ELIGIBILITY_DECISION: ${{ steps.eligibility.outputs.decision }}
+          ELIGIBILITY_REASON_CODE: ${{ steps.eligibility.outputs.reason_code }}
+          ELIGIBILITY_REASON: ${{ steps.eligibility.outputs.reason }}
+          ELIGIBILITY_SOURCE: ${{ steps.eligibility.outputs.source }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $decision = $env:ELIGIBILITY_DECISION
+          $reasonCode = $env:ELIGIBILITY_REASON_CODE
+          $reason = $env:ELIGIBILITY_REASON
+          $source = $env:ELIGIBILITY_SOURCE
+          if ([string]::IsNullOrWhiteSpace($reason)) {
+            throw 'Deployment eligibility reason is missing; activation is not authorized.'
+          }
+
+          $validContract = $false
+          if ($decision -ceq 'eligible') {
+            $validContract =
+              ($source -ceq 'automatic' -and $reasonCode -ceq 'eligible') -or
+              ($source -cin @('manual', 'tagged') -and $reasonCode -ceq 'not-applicable')
+          }
+          elseif ($decision -ceq 'skip' -and $source -ceq 'automatic') {
+            if ($reasonCode -ceq 'main-moved') {
+              $validContract = $reason -cmatch '^Superseded: current main is [0-9a-f]{40}; this artifact is [0-9a-f]{40}\.$'
+            }
+            elseif ($reasonCode -ceq 'recorded-deployment-not-ancestor') {
+              $validContract = $reason -cmatch '^Superseded: recorded deployment [0-9a-f]{40} is newer than or unrelated to [0-9a-f]{40}; use an explicit dispatch for intentional redeployment\.$'
+            }
+          }
+
+          if (-not $validContract) {
+            throw 'Deployment eligibility outputs are missing, malformed, or inconsistent; activation is not authorized.'
+          }
+          $activationAuthorized = if ($decision -ceq 'eligible') { 'true' } else { 'false' }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "activation_authorized=$activationAuthorized"
+
       - name: Deploy exact tested artifact
         id: activate
         if: >-
           ${{ steps.eligibility.outcome == 'success' &&
-              steps.eligibility.outputs.decision == 'eligible' &&
-              (
-                steps.eligibility.outputs.source == 'automatic' ||
-                steps.eligibility.outputs.source == 'manual' ||
-                steps.eligibility.outputs.source == 'tagged'
-              ) }}
+              steps.eligibility_contract.outcome == 'success' &&
+              steps.eligibility_contract.outputs.activation_authorized == 'true' }}
         shell: pwsh
         env:
           EXPECTED_ZIP_SHA256: ${{ needs.build-test-package.outputs.zip_sha256 }}
@@ -1071,7 +1109,9 @@ jobs:
         env:
           DEPLOYMENT_LABEL: ${{ needs.build-test-package.outputs.deployment_label }}
           TESTED_COMMIT: ${{ needs.build-test-package.outputs.commit }}
+          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
           ELIGIBILITY_OUTCOME: ${{ steps.eligibility.outcome }}
+          ELIGIBILITY_CONTRACT_OUTCOME: ${{ steps.eligibility_contract.outcome }}
           ELIGIBILITY_DECISION: ${{ steps.eligibility.outputs.decision }}
           ELIGIBILITY_REASON_CODE: ${{ steps.eligibility.outputs.reason_code }}
           ELIGIBILITY_REASON: ${{ steps.eligibility.outputs.reason }}
@@ -1080,6 +1120,7 @@ jobs:
           DEPLOYMENT_STATUS: ${{ steps.activate.outputs.deployment_status }}
           DEPLOYMENT_REASON: ${{ steps.activate.outputs.deployment_reason }}
           DEPLOYMENT_SOURCE: ${{ steps.activate.outputs.deployment_source }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           $sourceValue = if (-not [string]::IsNullOrWhiteSpace($env:DEPLOYMENT_SOURCE)) { $env:DEPLOYMENT_SOURCE } else { $env:ELIGIBILITY_SOURCE }
           $source = switch ($sourceValue) {
@@ -1097,21 +1138,52 @@ jobs:
           elseif ($env:ELIGIBILITY_REASON_CODE -ceq 'recorded-deployment-not-ancestor') {
             $validSkipReason = $env:ELIGIBILITY_REASON -cmatch '^Superseded: recorded deployment [0-9a-f]{40} is newer than or unrelated to [0-9a-f]{40}; use an explicit dispatch for intentional redeployment\.$'
           }
-          if ($env:ELIGIBILITY_OUTCOME -ceq 'cancelled' -or $env:ACTIVATION_OUTCOME -ceq 'cancelled') {
-            $status = 'Cancelled'
-            $reason = 'Workflow cancellation prevented deployment completion.'
+          if ($env:DOWNLOAD_OUTCOME -ceq 'failure') {
+            $status = 'Failure'
+            $reason = 'Deployment artifact download failed; activation was not started.'
           }
           elseif ($env:ELIGIBILITY_OUTCOME -ceq 'failure') {
             $status = 'Failure'
             $reason = 'Deployment eligibility preflight failed; activation was not started.'
+          }
+          elseif ($env:ELIGIBILITY_CONTRACT_OUTCOME -ceq 'failure') {
+            $status = 'Failure'
+            $reason = 'Deployment eligibility outputs were missing or inconsistent; activation was not started.'
+            $summaryError = $true
+          }
+          elseif ($env:ACTIVATION_OUTCOME -ceq 'failure') {
+            $status = 'Failure'
+            $reason = if ([string]::IsNullOrWhiteSpace($env:DEPLOYMENT_REASON)) {
+              'Installer failed before reporting a successful deployment outcome.'
+            }
+            else { $env:DEPLOYMENT_REASON }
+          }
+          elseif ($env:JOB_STATUS -ceq 'cancelled' -or
+              $env:DOWNLOAD_OUTCOME -ceq 'cancelled' -or
+              $env:ELIGIBILITY_OUTCOME -ceq 'cancelled' -or
+              $env:ELIGIBILITY_CONTRACT_OUTCOME -ceq 'cancelled' -or
+              $env:ACTIVATION_OUTCOME -ceq 'cancelled') {
+            $status = 'Cancelled'
+            $reason = 'Workflow cancellation prevented deployment completion.'
+          }
+          elseif ($env:DOWNLOAD_OUTCOME -cne 'success') {
+            $status = 'Failure'
+            $reason = 'Deployment artifact download did not complete successfully.'
+            $summaryError = $true
           }
           elseif ($env:ELIGIBILITY_OUTCOME -cne 'success') {
             $status = 'Failure'
             $reason = 'Deployment eligibility preflight did not complete successfully.'
             $summaryError = $true
           }
+          elseif ($env:ELIGIBILITY_CONTRACT_OUTCOME -cne 'success') {
+            $status = 'Failure'
+            $reason = 'Deployment eligibility output contract did not validate; activation was not authorized.'
+            $summaryError = $true
+          }
           elseif ($env:ELIGIBILITY_DECISION -ceq 'skip') {
-            if ($env:ACTIVATION_OUTCOME -ceq 'skipped' -and
+            if ($env:ELIGIBILITY_CONTRACT_OUTCOME -ceq 'success' -and
+                $env:ACTIVATION_OUTCOME -ceq 'skipped' -and
                 $validSkipReason -and
                 $sourceValue -ceq 'automatic') {
               $status = 'Skipped (superseded; no activation)'
@@ -1148,13 +1220,6 @@ jobs:
               else {
                 $reason = $env:DEPLOYMENT_REASON
               }
-            }
-            elseif ($env:ACTIVATION_OUTCOME -ceq 'failure') {
-              $status = 'Failure'
-              $reason = if ([string]::IsNullOrWhiteSpace($env:DEPLOYMENT_REASON)) {
-                'Installer failed before reporting a successful deployment outcome.'
-              }
-              else { $env:DEPLOYMENT_REASON }
             }
             else {
               $status = 'Failure'

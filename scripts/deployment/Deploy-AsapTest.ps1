@@ -272,7 +272,10 @@ function Write-DeploymentEligibilityResult {
     if ([string]::IsNullOrWhiteSpace($Reason)) {
         throw 'Deployment eligibility reason is missing.'
     }
-    if (($Decision -ceq 'skip' -and
+    if ($Decision -cnotin @('eligible', 'skip') -or
+        $ReasonCode -cnotin @('eligible', 'not-applicable', 'main-moved', 'recorded-deployment-not-ancestor') -or
+        $Source -cnotin @('automatic', 'manual', 'tagged') -or
+        ($Decision -ceq 'skip' -and
             ($Source -cne 'automatic' -or $ReasonCode -cnotin @('main-moved', 'recorded-deployment-not-ancestor'))) -or
         ($Decision -ceq 'eligible' -and
             (($Source -ceq 'automatic' -and $ReasonCode -cne 'eligible') -or
