@@ -10,7 +10,8 @@ namespace Asap.Web.Features.Staff;
 public sealed partial class TitleRequestMutationService
 {
     private sealed record ActionPreparation(int LibraryOrganizationId, bool ActorAdditionalCopyReminderDefault, bool ReminderRequested,
-        ActionClaimRuleSnapshot? ClaimRule, PatronSnapshot? Patron, bool TransportConfigured);
+        ActionClaimRuleSnapshot? ClaimRule, PatronSnapshot? Patron, bool TransportConfigured,
+        string? NotificationReadinessFailureReason);
 
     private async Task<(TitleRequestMutationResult? Failure, ActionPreparation? Preparation)> PrepareActionAsync(
         AsapDbContext context, CurrentStaff actor, long requestId, TitleRequestActionCommand input,
@@ -18,7 +19,8 @@ public sealed partial class TitleRequestMutationService
     {
         var notificationRequest = await context.TitleRequests.AsNoTracking().Where(item => item.Id == requestId)
             .Select(item => new { item.LibraryOrganizationId, item.Barcode, item.Status, item.Identifier, item.BibId,
-                item.MaterialFormatId, item.ClaimedByStaffUserId, item.ClaimType, item.RowVersion })
+                item.BibIdStaffVerified, item.AutoHold, item.MaterialFormatId, item.ClaimedByStaffUserId,
+                item.ClaimType, item.RowVersion })
             .SingleOrDefaultAsync(cancellationToken);
         if (notificationRequest is null ||
             !TitleRequestViewService.CanAccess(actor, notificationRequest.LibraryOrganizationId))
@@ -72,9 +74,13 @@ public sealed partial class TitleRequestMutationService
         var notificationTargetStatus = TitleRequestWorkflowPolicy.ResolveStatus(input.Action, input.Status, notificationRequest.Status,
             ProjectBibAfterMutation(previewIdentifierChanged, previewBibChanged,
                 previewStaffSelectedBib, previewProposedBib));
+        var purchaseTaskReminderRequested = input.Action == "purchase" && reminderRequested &&
+            notificationRequest.Status == RequestStatus.Suggestion && notificationRequest.BibId is > 0 &&
+            notificationRequest.BibIdStaffVerified && !notificationRequest.AutoHold &&
+            !previewIdentifierChanged && !previewBibChanged && !previewStaffSelectedBib && !input.Autohold.IsSupplied;
         var notificationRequested = input.Action is "reject" or "alreadyOwn" ||
             input.Action == "purchase" && notificationTargetStatus == RequestStatus.OutstandingPurchase ||
-            input.Action == "additionalCopy" && reminderRequested;
+            input.Action == "additionalCopy" && reminderRequested || purchaseTaskReminderRequested;
         PatronSnapshot? currentPatron = null;
         if (input.Action is "reject" or "alreadyOwn" ||
             input.Action == "purchase" && notificationTargetStatus == RequestStatus.OutstandingPurchase)
@@ -99,6 +105,7 @@ public sealed partial class TitleRequestMutationService
             }
         }
         var transportConfigured = false;
+        string? notificationReadinessFailureReason = null;
         if (notificationRequested)
         {
             try
@@ -110,7 +117,13 @@ public sealed partial class TitleRequestMutationService
             catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
-                return (new TitleRequestMutationResult("notification_dependency_unavailable"), null);
+                if (!purchaseTaskReminderRequested)
+                {
+                    return (new TitleRequestMutationResult("notification_dependency_unavailable"), null);
+                }
+                notificationReadinessFailureReason = "notification_dependency_unavailable";
+                logger.LogWarning(exception,
+                    "Purchase task reminder readiness failed before task creation for request {RequestId}.", requestId);
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             {
@@ -118,7 +131,7 @@ public sealed partial class TitleRequestMutationService
             }
         }
         return (null, new ActionPreparation(notificationRequest.LibraryOrganizationId, actionActor.AdditionalCopyReminderDefault,
-            reminderRequested, claimRuleSnapshot, currentPatron, transportConfigured));
+            reminderRequested, claimRuleSnapshot, currentPatron, transportConfigured, notificationReadinessFailureReason));
     }
 
     // Use the caller's tracked request and transaction. SaveChanges in the notification/task
@@ -277,6 +290,19 @@ public sealed partial class TitleRequestMutationService
         var previousAutohold = request.AutoHold;
         var previousCustomFields = request.CustomFieldsJson;
 
+        var purchaseTask = input.Action == "purchase" && request.Status == RequestStatus.Suggestion &&
+            requestedTarget == RequestStatus.PendingHold && targetStatus == RequestStatus.Closed && !proposedAutoHold &&
+            !autoHoldSupplied && request.BibId is > 0 && request.BibIdStaffVerified &&
+            !identifierChanged && !bibChanged && !staffSelectedBib;
+        if (input.Action == "purchase" && input.OperationId.HasValue && !purchaseTask)
+        {
+            return (new TitleRequestMutationResult("invalid_queue_action"), null);
+        }
+        if (purchaseTask && !input.OperationId.HasValue)
+        {
+            return (new TitleRequestMutationResult("operation_id_required"), null);
+        }
+
         if (identifierChanged)
         {
             request.Identifier = Clean(proposedIdentifier);
@@ -318,7 +344,7 @@ public sealed partial class TitleRequestMutationService
         {
             request.AutoHold = proposedAutoHold;
         }
-        if (directQueue && validatedBib is { } verifiedBib)
+        if (directQueue && validatedBib is { } verifiedBib && !purchaseTask)
         {
             request.Title = Clean(verifiedBib.Title) ?? request.Title;
             await ReconcileQueueIdentifierAsync(context, request, verifiedBib, cancellationToken);
@@ -453,7 +479,9 @@ public sealed partial class TitleRequestMutationService
             AddEvent(context, request, actor, "autohold_opt_out",
                 input.Action == "alreadyOwn"
                     ? "Closed without hold because Already Own was selected and automatic hold placement was disabled."
-                    : "Closed without hold because a BIB ID was supplied and automatic hold placement was disabled.");
+                    : purchaseTask
+                        ? "Closed with a linked purchasing task because automatic hold placement was disabled."
+                        : "Closed without hold because a BIB ID was supplied and automatic hold placement was disabled.");
         }
         if (rejectionTemplateId.HasValue)
         {
@@ -480,25 +508,29 @@ public sealed partial class TitleRequestMutationService
         string? patronNotificationReason = null;
         long? patronNotificationOutboxId = null;
         AdditionalCopyRequest? additionalCopy = null;
-        if (input.Action == "additionalCopy")
+        if (input.Action == "additionalCopy" || purchaseTask)
         {
             if (await context.AdditionalCopyRequests.AnyAsync(item =>
                     item.SourceTitleRequestId == request.Id && item.Status == "open", cancellationToken))
             {
                 return (new TitleRequestMutationResult("additional_copy_exists"), null);
             }
-            additionalCopy = await AddQueuedCopyAsync(context, request, locked.Staff[actor.Id], cancellationToken);
-            AddEvent(context, request, actor, "additional_copy_created",
-                $"Additional-copy task {additionalCopy.Id} created for BIB {request.BibId}; automatic hold placement enabled and request queued.",
+            additionalCopy = await AddQueuedCopyAsync(context, request, locked.Staff[actor.Id], cancellationToken,
+                purchaseTask ? validatedBib : null);
+            AddEvent(context, request, actor, "additional_copy_created", purchaseTask
+                ? $"Additional-copy task {additionalCopy.Id} created from Purchase for BIB {request.BibId}; this request closed without placing a hold."
+                : $"Additional-copy task {additionalCopy.Id} created for BIB {request.BibId}; automatic hold placement enabled and request queued.",
                 new { input.OperationId, additionalCopyRequestId = additionalCopy.Id.ToString(CultureInfo.InvariantCulture),
-                    bibId = request.BibId, previousAutoHold = previousAutohold, autoHold = true });
-            notificationStatus = "not_requested";
+                    bibId = request.BibId, previousAutoHold = previousAutohold, autoHold = !purchaseTask,
+                    purchaseTask });
+            notificationStatus = reminderRequested ? "suppressed" : "not_requested";
             if (reminderRequested)
             {
                 var outbox = await AddStaffNotificationAsync(context, locked.Staff[actor.Id], request,
                     $"additional-copy-reminder:{additionalCopy.Id}", "additional_copy_reminder", "ASAP additional-copy reminder",
                     $"Additional-copy task {additionalCopy.Id} for {request.Title} (BIB {request.BibId}) was created.",
-                    transportConfigured, cancellationToken);
+                    transportConfigured, cancellationToken,
+                    purchaseTask ? preparation.NotificationReadinessFailureReason : null);
                 notificationStatus = outbox?.Status == "pending" ? "queued" : "suppressed";
                 notificationReason = outbox?.SuppressionReason ?? "recipient_missing";
                 if (outbox?.Status == "pending")
@@ -527,7 +559,7 @@ public sealed partial class TitleRequestMutationService
                 outboxIds.Add(outbox.Id);
             }
         }
-        else if (input.Action == "purchase")
+        else if (input.Action == "purchase" && !purchaseTask)
         {
             notificationStatus = reminderRequested ? "not_applicable" : "not_requested";
         }

@@ -175,12 +175,23 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     assert.equal(await status(target).isVisible(), true);
     assert.equal(await target.locator('#close-request').isVisible(), true);
     assert.equal(await panel.evaluate(node => node.contains(document.activeElement)), true, 'Focus enters the inline panel');
+    assert.deepEqual(await panel.evaluate(node => {
+      const modal = node.closest('#request-dialog'), bar = modal.querySelector('.action-bar');
+      const patron = modal.querySelector('.patron-context'), tabs = modal.querySelector('.request-detail-tabs');
+      const follows = (left, right) => Boolean(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING);
+      return { workflowSlot: node.closest('.request-workflow-panel') !== null,
+        afterActionBar: follows(bar, node), beforePatronSummary: follows(node, patron), beforeTabs: follows(node, tabs) };
+    }), { workflowSlot: true, afterActionBar: true, beforePatronSummary: true, beforeTabs: true },
+    'The active review sits after the action bar and before the patron summary and tabs.');
     assert.equal(await target.evaluate(() => {
       const style = getComputedStyle(document.activeElement);
       return style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0 || style.boxShadow !== 'none';
     }), true, 'Focused control has a visible indicator');
   }
   async function choose(name, target = page) {
+    if (name === 'Purchase') {
+      assert.equal(await opener(name, target).locator('.fa-shopping-cart').count(), 1, 'The modal Purchase action keeps its cart icon.');
+    }
     await opener(name, target).press('Enter');
     const panel = review(target); await panel.waitFor();
     await panel.locator('button[type=submit]:not([disabled])').waitFor();
@@ -540,6 +551,13 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     });
     await open(untouchedId);
     const openCancellationActionCount = report.actions.length;
+    await opener('Close silently').press('Enter');
+    const silentReview = review(); await silentReview.waitFor();
+    await panelState(silentReview);
+    assert.match(await silentReview.getByRole('heading').textContent(), /Close silently/);
+    assert.match(await silentReview.textContent(), /without a rejection email/);
+    assert.equal(report.actions.length, openCancellationActionCount, 'Opening Close silently remains pending review only.');
+    await cancel(silentReview, 'Close silently');
     for (const name of ['Purchase', 'Reject']) {
       let panel = await choose(name);
       if (name === 'Purchase') assert.equal(await panel.getByRole('checkbox', { name: 'Send purchase reminder' }).isChecked(), true);
@@ -631,6 +649,95 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     assert.equal(await dialog().getByLabel('Notes', { exact: true }).inputValue(), untouched.notes);
     assert.deepEqual(await getDetail(untouchedId), untouched); report.cancellation = true;
 
+    // An automatic-hold edit invalidates the pending branch review until the
+    // existing Save action completes and authoritative request details return.
+    await open(savedBibId);
+    let holdReview = await choose('Purchase');
+    let holdPreference = dialog().getByLabel('Automatically place hold', { exact: true });
+    await holdPreference.uncheck();
+    assert.equal(await holdReview.locator('button[type=submit]').isDisabled(), true);
+    assert.equal(await holdReview.getByRole('alert').textContent(), 'Save the automatic-hold change before continuing.');
+    const reviewActionCount = report.actions.length;
+    await holdReview.locator('button[type=submit]').press('Enter');
+    assert.equal(report.actions.length, reviewActionCount, 'An invalidated branch review posts no workflow action.');
+    const middle = dialog().locator('.request-middle');
+    const deepScroll = await middle.evaluate(node => {
+      const maximum = node.scrollHeight - node.clientHeight;
+      node.scrollTop = Math.round(maximum * 0.8);
+      const pane = node.getBoundingClientRect();
+      const paneTop = pane.top + node.clientTop;
+      const paneBottom = paneTop + node.clientHeight;
+      const focus = document.querySelector('.action-choice button[type="submit"]').getBoundingClientRect();
+      return { top: node.scrollTop, maximum,
+        focusIntersectsPane: focus.bottom > paneTop && focus.top < paneBottom };
+    });
+    assert.ok(deepScroll.maximum > 0 && deepScroll.top > deepScroll.maximum * 0.5 && deepScroll.top < deepScroll.maximum,
+      `The refresh starts from a deep mid-scroll position: ${JSON.stringify(deepScroll)}`);
+    assert.equal(deepScroll.focusIntersectsPane, false,
+      'The restored review target starts outside the deep-scrolled pane.');
+    const preservedScroll = deepScroll.top;
+    const preferenceOff = page.waitForResponse(response => response.request().method() === 'POST' &&
+      new URL(response.url()).pathname.endsWith(`/title-requests/${savedBibId}/action`) && response.status() === 200);
+    await decideConfirmation(page, () => dialog().locator('.edit-form').evaluate(form => {
+      form.requestSubmit(document.querySelector('.request-save-footer button[type="submit"]'));
+    }), decision => {
+      assert.match(decision.message(), /Save with automatic hold off/);
+      return decision.accept();
+    });
+    await preferenceOff;
+    await page.waitForFunction(() => document.querySelector('.action-choice')?.textContent.includes('A matching BIB exists and the patron does not want a hold'));
+    holdReview = review(); await panelState(holdReview);
+    assert.equal(await holdReview.getByRole('heading', { name: 'Purchase an additional copy', exact: true }).count(), 1);
+    assert.equal(await holdReview.getByRole('checkbox', { name: 'Email me a purchase reminder', exact: true }).isChecked(), true);
+    assert.equal(await holdReview.getByRole('button', { name: 'Create purchasing task', exact: true }).count(), 1);
+    const restoredReviewViewport = await middle.evaluate(node => {
+      const focused = document.activeElement;
+      const focusBounds = focused.getBoundingClientRect();
+      const pane = node.getBoundingClientRect();
+      const paneTop = pane.top + node.clientTop;
+      const paneBottom = paneTop + node.clientHeight;
+      const modal = node.closest('#request-dialog');
+      const panel = modal.querySelector('.action-choice');
+      const style = getComputedStyle(focused);
+      return { submitFocused: focused === panel.querySelector('button[type="submit"]'),
+        focusIntersectsPane: focusBounds.bottom > paneTop && focusBounds.top < paneBottom,
+        focusFullyVisible: focusBounds.top >= paneTop - 1 && focusBounds.bottom <= paneBottom + 1,
+        focusRect: { top: focusBounds.top, bottom: focusBounds.bottom },
+        paneViewport: { top: paneTop, bottom: paneBottom },
+        focusClearance: (parseFloat(style.outlineWidth) || 0) + (parseFloat(style.outlineOffset) || 0),
+        overflow: panel.scrollWidth > panel.clientWidth + 1 || node.scrollWidth > node.clientWidth + 1 ||
+          modal.scrollWidth > modal.clientWidth + 1,
+        documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        top: node.scrollTop };
+    });
+    report.automaticHoldReviewRestore = { before: deepScroll, after: restoredReviewViewport };
+    assert.equal(restoredReviewViewport.submitFocused, true, 'The review submit control regains focus after save and refresh.');
+    assert.equal(restoredReviewViewport.focusIntersectsPane, true,
+      'The restored review focus intersects the request middle scroll viewport.');
+    assert.equal(restoredReviewViewport.focusFullyVisible, true,
+      `The restored review control is fully visible in the request middle scroll viewport: ${JSON.stringify(restoredReviewViewport)}`);
+    assert.equal(restoredReviewViewport.overflow, false, 'The restored review introduces no modal horizontal overflow.');
+    assert.equal(restoredReviewViewport.documentOverflow, false, 'The restored review introduces no document horizontal overflow.');
+    assert.ok(Math.abs(restoredReviewViewport.top - preservedScroll) < 400,
+      `The refresh preserves as much of the deep scroll context as possible: ${JSON.stringify(restoredReviewViewport)}`);
+    assert.match(await page.locator('#app-status').textContent(), /Automatic holds are now off/);
+    holdPreference = dialog().getByLabel('Automatically place hold', { exact: true });
+    await holdPreference.check();
+    assert.equal(await holdReview.locator('button[type=submit]').isDisabled(), true);
+    assert.equal(await holdReview.getByRole('alert').textContent(), 'Save the automatic-hold change before continuing.');
+    const preferenceOn = page.waitForResponse(response => response.request().method() === 'POST' &&
+      new URL(response.url()).pathname.endsWith(`/title-requests/${savedBibId}/action`) && response.status() === 200);
+    await dialog().locator('.edit-form').evaluate(form => {
+      form.requestSubmit(document.querySelector('.request-save-footer button[type="submit"]'));
+    });
+    await preferenceOn;
+    await page.waitForFunction(() => document.querySelector('.action-choice')?.textContent.includes('Pending hold for automatic hold placement'));
+    holdReview = review(); await panelState(holdReview);
+    assert.match(await page.locator('#app-status').textContent(), /Automatic holds are now on/);
+    const refreshedSavedBib = await getDetail(savedBibId);
+    assert.equal(refreshedSavedBib.autohold, true, 'Both saved preference directions return to the original fixture state.');
+    await cancel(holdReview, 'Purchase');
+
     const extension = path.join(__dirname, 'native-zoom-extension');
     const zoomContext = await chromium.launchPersistentContext(path.join(artifacts, 'zoom-profile'), {
       channel: 'chromium', headless: true, viewport: null, extraHTTPHeaders: headers,
@@ -693,11 +800,64 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     report.retries = true;
 
     for (const [id, expected] of [[savedBibId, 'Pending hold'], [optoutId, 'Closed']]) {
-      await open(id); panel = await holdOpeningEnter('Purchase');
-      assert.equal(await panel.getByRole('checkbox').count(), 0);
-      assert.match(await panel.textContent(), /purchase reminder does not apply/);
-      assert.match(await panel.textContent(), expected === 'Pending hold' ? /Pending hold for automatic hold placement/ : /closes this request without placing a hold/);
-      await panel.locator('button[type=submit]').press('Enter'); await status().filter({ hasText: expected }).waitFor(); await bar().waitFor();
+      await open(id);
+      if (id === savedBibId) {
+        panel = await holdOpeningEnter('Purchase');
+        assert.equal(await panel.getByRole('checkbox').count(), 0);
+        assert.match(await panel.textContent(), /purchase reminder does not apply/);
+        assert.match(await panel.textContent(), /Pending hold for automatic hold placement/);
+        await panel.locator('button[type=submit]').press('Enter');
+      } else {
+        const sourceBeforePurchaseTask = await getDetail(id);
+        await opener('Purchase').press('Enter');
+        panel = review(); await panel.waitFor(); await panelState(panel);
+        assert.equal(await panel.getByRole('heading', { name: 'Purchase an additional copy', exact: true }).count(), 1);
+        assert.match(await panel.textContent(), /A matching BIB exists and the patron does not want a hold\./);
+        const reminder = panel.getByRole('checkbox', { name: 'Email me a purchase reminder', exact: true });
+        assert.equal(await reminder.isChecked(), true, 'The saved staff reminder default populates the Purchase task choice.');
+        await scan('purchase-task-confirmation');
+        const actionsBefore = report.actions.length;
+        const acceptedResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
+          new URL(response.url()).pathname.endsWith(`/title-requests/${optoutId}/action`) && response.status() === 200);
+        await panel.getByRole('button', { name: 'Create purchasing task', exact: true }).press('Enter');
+        const accepted = await (await acceptedResponse).json();
+        assert.equal(accepted.committed, true);
+        assert.equal(accepted.status, 'closed');
+        assert.equal(accepted.finalStatus, 'closed');
+        assert.equal(accepted.notificationStatus, 'queued');
+        assert.match(accepted.additionalCopyRequestId, /^[1-9]\d{0,18}$/);
+        assert.match(accepted.operationId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+        assert.equal(report.actions.length, actionsBefore + 1);
+        assert.deepEqual(Object.keys(report.actions.at(-1)).filter(key => key !== 'url').sort(),
+          ['action', 'emailPurchaseReminder', 'operationId', 'requestType', 'version'].sort());
+        assert.equal(report.actions.at(-1).action, 'purchase');
+        assert.equal(report.actions.at(-1).requestType, 'title_request');
+        assert.equal(report.actions.at(-1).emailPurchaseReminder, true);
+        await status().filter({ hasText: 'Closed' }).waitFor(); await bar().waitFor();
+        await dialog().locator('.related-additional-copy a').waitFor();
+        assert.equal(await dialog().locator('.related-additional-copy a').getAttribute('href'),
+          `/staff/?request=${accepted.additionalCopyRequestId}&stage=additional_copies`);
+        assert.equal(await dialog().locator('.related-additional-copy a').textContent(), `Task ${accepted.additionalCopyRequestId}`);
+        const savedTask = await getDetail(optoutId);
+        assert.equal(savedTask.additionalCopyRequestId, accepted.additionalCopyRequestId);
+        assert.equal(savedTask.closeReason, 'purchased_no_hold');
+        assert.equal(savedTask.title, sourceBeforePurchaseTask.title,
+          'Purchase task creation preserves the source request title.');
+        assert.equal(savedTask.identifier, sourceBeforePurchaseTask.identifier,
+          'Purchase task creation preserves the source request identifier.');
+        const patronActions = await context.request.get(`${baseURL}/api/asap/staff/title-requests/${optoutId}`);
+        assert.equal((await patronActions.json()).activity.some(item => item.eventType === 'patron_action_email'), false);
+        const recoveryLink = dialog().locator('.related-additional-copy a');
+        await recoveryLink.press('Enter');
+        await page.waitForURL(url => url.searchParams.get('request') === accepted.additionalCopyRequestId &&
+          url.searchParams.get('stage') === 'additional_copies');
+        await dialog().waitFor({ state: 'visible' });
+        assert.equal(await page.locator('#request-dialog-title').textContent(), 'Catalog title 9001');
+        report.purchaseTask = { operationId: accepted.operationId, taskId: accepted.additionalCopyRequestId, linkOpened: true };
+        await open(id);
+        assert.match(await status().textContent(), /Closed.*Purchased, no hold/);
+      }
+      await status().filter({ hasText: expected }).waitFor(); await bar().waitFor();
       if (expected === 'Closed') {
         const closed = await getDetail(id), actionCount = report.actions.length;
         assert.equal(await footerClose().isVisible(), true, 'Already closed requests retain the footer Close button.');
@@ -716,6 +876,46 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
       }
     }
     report.otherPanels = true; assert.deepEqual(report.errors, []); assert.deepEqual(report.external, []);
+
+    await page.goto(`${baseURL}/staff/?scope=2&stage=suggestion`, { waitUntil: 'networkidle' });
+    const purchaseRow = page.locator(`#request-grid tr:has([data-request-id="${untouchedId}"])`);
+    await purchaseRow.locator('.request-row-actions[data-ready]').waitFor();
+    assert.equal(await page.locator('#library-scope').inputValue(), '2', 'The queue remains scoped to library 2.');
+    const sourceBeforeMore = await getDetail(untouchedId);
+    assert.equal(sourceBeforeMore.libraryOrgId, 2, 'The row request belongs to the selected library scope.');
+    const rowPurchase = purchaseRow.locator('[data-request-action="purchase"]');
+    assert.equal(await rowPurchase.count(), 1, 'The row exposes exactly one Purchase command.');
+    assert.equal(await purchaseRow.locator('.request-row-actions > [data-request-action="purchase"]').count(), 0,
+      'Purchase is menu-only and is never duplicated as a direct row action.');
+    const more = page.getByRole('button', { name: `More actions for request ${untouchedId}`, exact: true });
+    await more.waitFor(); await more.press('Enter');
+    const menuPurchase = purchaseRow.locator('.request-table-menu:popover-open [data-request-action="purchase"]');
+    await menuPurchase.waitFor();
+    assert.equal((await menuPurchase.textContent()).trim(), 'Purchase');
+    assert.equal(await rowPurchase.count(), 1, 'Opening More retains one Purchase command.');
+    assert.equal(await menuPurchase.locator('.fa-shopping-cart').count(), 1, 'The table More menu Purchase action keeps its cart icon.');
+    const actionCountBeforeMore = report.actions.length;
+    await menuPurchase.press('Enter');
+    await dialog().waitFor({ state: 'visible' }); await review().waitFor();
+    const openedURL = new URL(page.url());
+    assert.equal(openedURL.searchParams.get('scope'), '2', 'More-menu Purchase opens the request in the selected scope.');
+    assert.equal(openedURL.searchParams.get('request'), untouchedId);
+    assert.match(await page.locator('#request-dialog-kicker').textContent(), new RegExp(`Request ${untouchedId}`));
+    await panelState(review());
+    assert.equal((await getDetail(untouchedId)).libraryOrgId, 2, 'The reviewed request remains in library 2.');
+    assert.equal(report.actions.length, actionCountBeforeMore, 'More-menu Purchase opens its pending review without dispatching.');
+    await cancel(review(), 'Purchase');
+    await page.keyboard.press('Escape'); await dialog().waitFor({ state: 'hidden' });
+    assert.equal(report.actions.length, actionCountBeforeMore, 'Canceling the menu review dispatches no Purchase action.');
+    assert.deepEqual(await getDetail(untouchedId), sourceBeforeMore, 'Canceling leaves the scoped source request unchanged.');
+    await page.waitForFunction(id => {
+      const opener = [...document.querySelectorAll('#request-grid .grid-open')].find(button => {
+        const label = button.getAttribute('aria-label') || '';
+        return label === `Open request ${id}` || label.startsWith(`Open request ${id}: `);
+      });
+      return opener && document.activeElement === opener && opener.matches(':focus-visible');
+    }, untouchedId);
+    report.moreMenuPurchase = true;
   } catch (error) {
     report.failure = error.stack; await page.screenshot({ path: path.join(artifacts, 'failure.png'), fullPage: true }).catch(() => {}); throw error;
   } finally {

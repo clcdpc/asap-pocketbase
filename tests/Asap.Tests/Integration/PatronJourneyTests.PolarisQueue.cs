@@ -8,6 +8,7 @@ using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Testing;
 using Asap.Web.Infrastructure.Security;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
@@ -225,10 +226,16 @@ public sealed partial class PatronJourneyTests
     [DataRow("catalogFound", true)]
     [DataRow("additionalCopy", true)]
     [DataRow("additionalCopy", false)]
+    [DataRow("purchase", true)]
+    [DataRow("purchase", false)]
     public async Task PolarisQueueConcurrentAndRepeatedSubmissionsHaveOneDurableOutcome(string action, bool identical)
     {
         await using var fixture = await SeedPolarisQueueAsync();
-        var first = QueueCommand(fixture.Source, action);
+        if (action == "purchase")
+        {
+            await SetSavedPurchaseBibAsync(fixture, autoHold: false);
+        }
+        var first = action == "purchase" ? PurchaseTaskCommand(fixture.Source, false) : QueueCommand(fixture.Source, action);
         var second = identical ? first : first with { OperationId = Guid.NewGuid() };
         var results = await Task.WhenAll(
             QueueService().ActionAsync(fixture.Actor, fixture.Source.Id, first, CancellationToken.None),
@@ -244,24 +251,33 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual("operation_conflict", (await QueueService().ActionAsync(fixture.Actor, fixture.Source.Id,
             winningCommand with { EmailPurchaseReminder = true }, CancellationToken.None)).Code);
         await using var verify = await fixture.Contexts.CreateDbContextAsync();
-        Assert.AreEqual(action == "additionalCopy" ? 1 : 0, await verify.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == fixture.Source.Id));
+        Assert.AreEqual(action is "additionalCopy" or "purchase" ? 1 : 0,
+            await verify.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == fixture.Source.Id));
         Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(item =>
             item.TitleRequestId == fixture.Source.Id && item.EventType == "polaris_queue_completed"));
         Assert.AreEqual(0, fixture.Provider.CreateCommands.Count);
     }
 
     [TestMethod]
-    [DataRow("AdditionalCopyRequest")]
-    [DataRow("TitleRequest")]
-    [DataRow("TitleRequestEvent")]
-    [DataRow("EmailOutbox")]
-    public async Task PolarisQueueRollsBackTaskTransitionHistoryReceiptAndReminder(string table)
+    [DataRow("AdditionalCopyRequest", "additionalCopy")]
+    [DataRow("TitleRequest", "additionalCopy")]
+    [DataRow("TitleRequestEvent", "additionalCopy")]
+    [DataRow("EmailOutbox", "additionalCopy")]
+    [DataRow("AdditionalCopyRequest", "purchase")]
+    [DataRow("TitleRequest", "purchase")]
+    [DataRow("TitleRequestEvent", "purchase")]
+    [DataRow("EmailOutbox", "purchase")]
+    public async Task PolarisQueueRollsBackTaskTransitionHistoryReceiptAndReminder(string table, string action)
     {
-        await using var fixture = await SeedPolarisQueueAsync();
+        await using var fixture = await SeedPolarisQueueAsync(reminderDefault: true);
+        if (action == "purchase")
+        {
+            await SetSavedPurchaseBibAsync(fixture, autoHold: false);
+        }
         var probe = new QueueWriteProbe(table);
         var contexts = new QueueProbeContextFactory(databaseConnectionString, probe);
         var service = QueueServiceWithContexts(contexts, fixture.Provider);
-        var command = QueueCommand(fixture.Source, "additionalCopy", true);
+        var command = action == "purchase" ? PurchaseTaskCommand(fixture.Source, true) : QueueCommand(fixture.Source, action, true);
         await Assert.ThrowsAsync<DbUpdateException>(() => service.ActionAsync(fixture.Actor, fixture.Source.Id,
             command, CancellationToken.None));
         Assert.IsTrue(probe.Executed, "The SQL write must have executed before injecting failure.");
@@ -274,12 +290,18 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task PolarisQueueTimeoutAroundSqlCommitRecoversWithoutDuplicateTask(bool afterCommit)
+    [DataRow(false, "additionalCopy")]
+    [DataRow(true, "additionalCopy")]
+    [DataRow(false, "purchase")]
+    [DataRow(true, "purchase")]
+    public async Task PolarisQueueTimeoutAroundSqlCommitRecoversWithoutDuplicateTask(bool afterCommit, string action)
     {
         await using var fixture = await SeedPolarisQueueAsync();
-        var command = QueueCommand(fixture.Source, "additionalCopy");
+        if (action == "purchase")
+        {
+            await SetSavedPurchaseBibAsync(fixture, autoHold: false);
+        }
+        var command = action == "purchase" ? PurchaseTaskCommand(fixture.Source, false) : QueueCommand(fixture.Source, action);
         var contexts = new QueueCommitProbeFactory(databaseConnectionString, afterCommit);
         var service = QueueServiceWithContexts(contexts, fixture.Provider);
         await Assert.ThrowsAsync<OperationCanceledException>(() => service.ActionAsync(
@@ -288,12 +310,18 @@ public sealed partial class PatronJourneyTests
         {
             await AssertQueueUnchangedAsync(fixture);
         }
+        else
+        {
+            fixture.Provider.SetFailure(new(TestingPolarisOperation.BibValidation, 2, NativeId: 9001),
+                new PolarisOperationalException("test", "Polaris unavailable after SQL commit."));
+        }
         var recovery = await QueueService().ActionAsync(fixture.Actor, fixture.Source.Id, command, CancellationToken.None);
         Assert.AreEqual("updated", recovery.Code);
         Assert.AreEqual(afterCommit, recovery.Replayed);
         await using var verify = await fixture.Contexts.CreateDbContextAsync();
         Assert.AreEqual(1, await verify.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == fixture.Source.Id));
-        Assert.IsTrue((await verify.TitleRequests.SingleAsync(item => item.Id == fixture.Source.Id)).AutoHold);
+        Assert.AreEqual(action == "additionalCopy",
+            (await verify.TitleRequests.SingleAsync(item => item.Id == fixture.Source.Id)).AutoHold);
     }
 
     [TestMethod]
@@ -504,9 +532,9 @@ public sealed partial class PatronJourneyTests
             Bibid = 9001, StaffSelectedBibId = 9001, EmailPurchaseReminder = reminder
         }.ToCommand();
 
-    private async Task<HttpClient> PolarisQueueClientAsync(CurrentStaff actor)
+    private async Task<HttpClient> PolarisQueueClientAsync(CurrentStaff actor, WebApplicationFactory<Program>? targetFactory = null)
     {
-        var client = factory!.CreateClient();
+        var client = (targetFactory ?? factory)!.CreateClient();
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
         return client;

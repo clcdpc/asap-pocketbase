@@ -219,6 +219,11 @@ async function runJourney(scenario, pipelineOverlap = false, registrationOverlap
     const unclaimedOpener = opener();
     const unchangedTaskOpener = opener('92');
     [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Claim').click();
+    if (titleRequest) {
+      await until(() => dialog.querySelector('.action-choice button[type="submit"]'),
+        'A title request Claim opens its inline review');
+      dialog.querySelector('.action-choice button[type="submit"]').click();
+    }
     await until(() => (replacesFocusedOpener
       ? opener() && opener() !== unclaimedOpener && claimLabel()?.textContent === staff.displayName && claimLabel().classList.contains('mine')
       : !opener()) && opener('92') && opener('92') !== unchangedTaskOpener &&

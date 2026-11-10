@@ -6,6 +6,7 @@ import { createRequestEditor } from './request-editor.js';
 import { researchRecordUrl, researchRecordValue } from './research.js';
 import { createRequestWorkflows } from './request-workflows.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
+import { validRequestId } from './recent-requests.js';
 import { element, icon, commandButton, statusLabel, dateTime, text, closeReasonLabel, timeoutLabel, addDetail } from './ui.js';
 
 export function createTitleDetailController({ host, sessionIdentity, polarisLookup, copyCreation, announce,
@@ -20,6 +21,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   let drafts = createDraftScope(), renderRevision = null, editor = null, workflows = null, copyParent = null, disposed = false, targetGeneration = 0;
   let selectedTab = 'details', tabRequestId = null;
   let inlineOpeningEnter = false;
+  let automaticHoldRefreshRequired = false, automaticHoldRefreshMessage = null, automaticHoldRefreshRetry = null;
   // Duplicate recovery can sit above retained BIB linking; dismiss the latest
   // panel first and restore the toolbar only when both owners have finished.
   const inlineActions = new Map();
@@ -50,11 +52,17 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   }
   function allowRequestMutation(snapshot, declaration) {
     if (!isCurrentSelection(snapshot) || current.version !== snapshot.version || hasPendingMutation()) return false;
+    if (automaticHoldRefreshRequired) {
+      announce('Refresh the current request before performing another action.', 'warning');
+      return false;
+    }
     if (editor?.needsBibLinkReload()) {
       editor.showBibLinkError('Reload the current request before trying another change.', true);
       return false;
     }
-    const admission = drafts.admit(declaration);
+    const preserves = declaration?.consumes === editor?.draft() ? workflows?.preservedDraftsForEditorSave() || [] : [];
+    const admission = drafts.admit({ ...declaration,
+      preserves: [...(declaration?.preserves || []), ...preserves] });
     if (!admission.allowed) {
       announce(admission.kind === 'editor' ? 'Save or revert the current request edits before performing a workflow action.'
         : admission.reason === 'competing_draft' ? 'Finish or cancel the current request changes before performing another action.'
@@ -112,6 +120,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     closeCopy({ navigation: true, force: true }); copyParent = null;
     editor?.dispose(); workflows?.dispose(); editor = null; workflows = null;
     drafts.dispose();
+    automaticHoldRefreshRequired = false; automaticHoldRefreshMessage = null; automaticHoldRefreshRetry = null;
   }
   function disposeMounted() {
     invalidate(); disposeChildren(); lease = null; actor = null; current = null; returnFocus = null; activeAttempt = null;
@@ -301,22 +310,106 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         : error.message || 'The title request was not deleted. Review its current state.', uncertain ? 'warning' : 'error');
     } finally { attempt.pending = false; releaseAttempt(attempt); restore(); }
   }
-  async function mutateRequest(snapshot, path, body, successMessage, draft = null, retainEditor = false) {
-    if (!allowRequestMutation(snapshot, { consumes: draft })) return;
+
+  function requireAutomaticHoldReviewRefresh(snapshot, review, scrollTop, message, retainedDraft) {
+    automaticHoldRefreshRequired = true;
+    automaticHoldRefreshMessage = message;
+    automaticHoldRefreshRetry = () => refreshAutomaticHoldReview(snapshot, review, scrollTop, retainedDraft);
+    editor?.requireAuthoritativeRefresh(message);
+    workflows?.requireAutomaticHoldReviewRefresh(message, automaticHoldRefreshRetry);
+    lease?.content.querySelector('.automatic-hold-review-refresh button')?.focus({ preventScroll: true });
+  }
+
+  function focusAutomaticHoldReviewInPane(middle) {
+    const submit = lease?.content.querySelector('.action-choice button[type="submit"]');
+    if (!submit) return false;
+    submit.focus({ preventScroll: true });
+    if (!middle) return true;
+    const pane = middle.getBoundingClientRect();
+    const visibleTop = pane.top + middle.clientTop;
+    const visibleBottom = visibleTop + middle.clientHeight;
+    const focused = submit.getBoundingClientRect();
+    const style = window.getComputedStyle(submit);
+    const focusClearance = Math.max(0, Number.parseFloat(style.outlineWidth) || 0) +
+      Math.max(0, Number.parseFloat(style.outlineOffset) || 0);
+    if (focused.top < visibleTop + focusClearance) {
+      middle.scrollTop -= visibleTop + focusClearance - focused.top;
+    } else if (focused.bottom > visibleBottom - focusClearance) {
+      middle.scrollTop += focused.bottom - (visibleBottom - focusClearance);
+    }
+    return true;
+  }
+
+  async function refreshAutomaticHoldReview(snapshot, review, scrollTop, retainedDraft = null) {
+    const mounted = lease, owner = actor, generation = getNavigationGeneration(), scope = getScope();
+    const stillCurrent = () => isPresentationCurrent(mounted, owner) && isNavigationCurrent(generation) &&
+      getScope() === scope && current?.id === snapshot.id && automaticHoldRefreshRequired;
+    try {
+      const target = await prepare(snapshot.id, { scope });
+      if (!stillCurrent() || !target?.isCurrent()) return false;
+      const latestDraft = editor?.captureDraft() ?? retainedDraft;
+      onUpdated(target.request);
+      automaticHoldRefreshRequired = false; automaticHoldRefreshMessage = null; automaticHoldRefreshRetry = null;
+      renderRequest(target.request, target.configuration, null, latestDraft);
+      const restored = Boolean(workflows?.restoreAutomaticHoldReview(review));
+      const middle = lease?.content.querySelector('.request-middle');
+      if (middle && scrollTop !== null) middle.scrollTop = scrollTop;
+      if (restored) {
+        focusAutomaticHoldReviewInPane(middle);
+        announce(`Current request refreshed. Automatic holds are now ${target.request.autohold ? 'on' : 'off'}; review the updated outcome before continuing.`, 'warning');
+      } else {
+        host.focusClose();
+      }
+      return true;
+    } catch (error) {
+      if (!stillCurrent() || isAbortError(error)) return false;
+      const message = error.status === 401 || error.status === 403 || error.status === 404
+        ? 'Current request details are unavailable in this staff session or scope. Retry before continuing.'
+        : 'Current request details could not refresh. Retry before continuing.';
+      requireAutomaticHoldReviewRefresh(snapshot, review, scrollTop, message, editor?.captureDraft() ?? retainedDraft);
+      announce(message, 'error');
+      return false;
+    }
+  }
+
+  async function mutateRequest(snapshot, path, body, successMessage, draft = null, retainEditor = false, receiptRecovery = false) {
+    const recoveryAdmitted = receiptRecovery && isCurrentSelection(snapshot) && sessionIdentity.isCurrent(actor) &&
+      !hasPendingMutation() && !drafts.isDirty() && !automaticHoldRefreshRequired && !editor?.needsBibLinkReload() &&
+      body?.action === 'purchase' && body?.requestType === 'title_request' && validRequestId(snapshot.id);
+    if (receiptRecovery ? !recoveryAdmitted : !allowRequestMutation(snapshot, { consumes: draft })) {
+      if (receiptRecovery) announce('The saved Purchase recovery no longer belongs to this request view. Reload before continuing.', 'warning');
+      return { outcome: 'rejected', operationResolved: false };
+    }
+    const automaticHoldReview = body.action === 'edit' && body.autohold !== snapshot.autohold
+      ? workflows?.captureAutomaticHoldReview() : null;
+    const reviewScrollTop = automaticHoldReview
+      ? lease?.content.querySelector('.request-middle')?.scrollTop ?? 0 : null;
     const retained = retainEditor ? editor.captureDraft() : null;
     const attempt = beginAttempt(snapshot, path, body), restore = disableControls(attempt);
+    let reviewRefreshPending = false;
     announce('Saving request...');
     try {
       const result = await send(path, { method: 'POST', body: attempt.body });
       if (!isCommittedRequestResponse(result, snapshot.id)) throw unconfirmedResponseError();
+      const purchaseTaskOperation = body.action === 'purchase' && body.requestType === 'title_request' &&
+        typeof body.operationId === 'string';
+      const purchaseTaskId = body.action === 'purchase' && validRequestId(result.additionalCopyRequestId)
+        ? String(result.additionalCopyRequestId) : null;
+      if (purchaseTaskOperation && (result.operationId !== body.operationId || !purchaseTaskId ||
+          (result.queueCommittedStatus || result.finalStatus) !== 'closed' ||
+          (result.request?.status || result.status || result.finalStatus || result.queueCommittedStatus) !== 'closed')) {
+        throw unconfirmedResponseError();
+      }
+      if (receiptRecovery && !purchaseTaskOperation) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
       let detail = result.request || (result.id ? result : null);
       const status = detail?.status || result.finalStatus;
       const label = body.action === 'reject' ? 'Rejection email' : path.endsWith('/assign') ? 'Assignment notification'
-        : body.action === 'purchase' ? 'Purchase reminder' : 'Notification';
+        : purchaseTaskId ? 'Additional-copy reminder' : body.action === 'purchase' ? 'Purchase reminder' : 'Notification';
       const notification = notificationOutcome(result.notificationStatus, result.notificationReason, label);
       const patronNotification = notificationOutcome(result.patronNotificationStatus, result.patronNotificationReason, 'Purchase approval email');
-      let message = `${successMessage}${status ? ` Final state: ${statusLabel(status)}.` : ''}${notification.text}${patronNotification.text}`;
+      let message = `${successMessage}${purchaseTaskId ? ` Task ${purchaseTaskId}.` : ''}${status ? ` Final state: ${statusLabel(status)}.` : ''}${notification.text}${patronNotification.text}`;
+      if (purchaseTaskOperation) workflows?.clearPurchaseTaskOperation(body.operationId, body);
       recordReceipt(attempt, `${message} Sign in again to review the committed request.`, Boolean(detail));
       if (!attempt.isCurrent()) return;
       if (!detail) {
@@ -339,27 +432,61 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         const recovery = `${message} Current details could not refresh. Reload before making another change.`;
         editor.showBibLinkError(recovery, true);
         showBibLinkOutcome(recovery, true);
+      } else if (automaticHoldReview) {
+        const recovery = 'Request changes were saved, but the automatic-hold review could not refresh. Retry before continuing.';
+        requireAutomaticHoldReviewRefresh(snapshot, automaticHoldReview, reviewScrollTop, recovery, editor?.captureDraft());
+        reviewRefreshPending = true;
+        message = recovery;
       } else {
         disposeChildren(); current = Object.freeze({ id: snapshot.id, version: null });
         attempt.mounted.heading(snapshot.title, `${snapshot.libraryOrgName} · Request ${snapshot.id}`);
         showDetailsUnavailable(attempt.mounted, 'The action committed. Reload this request to review current details.');
       }
-      host.focusClose(); announce(message, notification.partial || patronNotification.partial ? 'warning' : 'success');
+      const reviewRestored = Boolean(detail && automaticHoldReview && workflows?.restoreAutomaticHoldReview(automaticHoldReview));
+      if (reviewRestored) {
+        const middle = lease?.content.querySelector('.request-middle');
+        if (middle && reviewScrollTop !== null) middle.scrollTop = reviewScrollTop;
+        focusAutomaticHoldReviewInPane(middle);
+        message = `Request changes saved. Automatic holds are now ${detail?.autohold ? 'on' : 'off'}; review the updated outcome before continuing.`;
+      } else if (!reviewRefreshPending) {
+        host.focusClose();
+      }
+      announce(message, notification.partial || patronNotification.partial ? 'warning' : 'success');
       releaseAttempt(attempt);
       const refreshed = await refreshQueue({ skipDeepLink: true, silent: true });
       if (attempt.isCurrent()) announce(refreshed === false ? `${message} The queue could not refresh.` : message,
         notification.partial || patronNotification.partial || refreshed === false ? 'warning' : 'success');
+      return { refreshRequired: reviewRefreshPending };
     } catch (error) {
       if (attempt.outcome === 'committed') {
-        if (attempt.isCurrent()) announce(`${successMessage} Details and activity could not refresh.`, 'warning'); return;
+        if (attempt.isCurrent()) announce(`${successMessage} Details and activity could not refresh.`, 'warning');
+        return { outcome: 'committed' };
       }
       const recordedProviderOutcome = error.response?.providerOutcomeRecorded === true;
       const definiteNoCommit = ['bib_validation_unavailable', 'notification_dependency_unavailable'].includes(error.response?.code);
       const uncertain = !definiteNoCommit && (error.outcomeUnknown === true || !error.status || isAbortError(error) || error.status === 408 || error.status >= 500 ||
         ['request_outcome_unconfirmed', 'hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code));
+      const purchaseTaskResolved = receiptRecovery && !recordedProviderOutcome && !uncertain &&
+        (definiteNoCommit || ['stale_version', 'additional_copy_exists'].includes(error.response?.code));
       attempt.outcome = recordedProviderOutcome ? 'provider_recorded' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 && error.response?.code === 'duplicate_open_request') {
+        if (body.action === 'purchase' && body.operationId) workflows?.clearPurchaseTaskOperation(body.operationId, body);
         if (attempt.isCurrent()) await showDuplicateRecovery(attempt, error.response.duplicate, retained); return;
+      }
+      if (purchaseTaskResolved) workflows?.clearPurchaseTaskOperation(body.operationId, body);
+      if (automaticHoldReview && (error.status === 409 || error.status === 403 || error.status === 404 || uncertain || recordedProviderOutcome)) {
+        const retainedDraft = editor?.captureDraft();
+        const refreshMessage = error.status === 403 || error.status === 404
+          ? 'Staff access or request availability changed. Refresh the current request before continuing.'
+          : uncertain ? 'The automatic-hold save outcome could not be confirmed. Refresh before continuing.'
+            : 'The request changed before the automatic-hold review was saved. Refresh before continuing.';
+        requireAutomaticHoldReviewRefresh(snapshot, automaticHoldReview, reviewScrollTop, refreshMessage, retainedDraft);
+        const refreshed = await refreshAutomaticHoldReview(snapshot, automaticHoldReview, reviewScrollTop, retainedDraft);
+        if (refreshed && attempt.isCurrent()) {
+          await refreshQueue({ skipDeepLink: true, silent: true });
+          announce('Current request state refreshed. Review the saved automatic-hold outcome before continuing.', 'warning');
+        }
+        return { outcome: uncertain ? 'uncertain' : 'rejected', message: refreshMessage, code: error.response?.code };
       }
       const holdReview = path.endsWith('/place-hold') && error.status === 409;
       const pickupReview = path.endsWith('/pickup-preference') && Boolean(error.response?.operationId);
@@ -371,7 +498,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
             : error.message || 'The request changed. Review the refreshed version before trying again.';
       if (needsReceipt) recordReceipt(attempt, `${message} Sign in again to check the authoritative result before retrying.`);
       if (!attempt.isCurrent()) return;
-      if (error.status === 409 || uncertain || recordedProviderOutcome) {
+      if (error.status === 409 || uncertain || recordedProviderOutcome || purchaseTaskResolved) {
         const review = await reloadAfterMutation(attempt, retained);
         if (needsReceipt && review?.refreshed === true && review.detailLoaded === true) clearReceipt(attempt);
         if (review?.isCurrent()) {
@@ -383,13 +510,23 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
             editor.showBibLinkError(review.detailLoaded ? feedback : 'Current request details could not be loaded. Reload before retrying the action.', !review.detailLoaded);
           }
         }
-        return { outcome: uncertain && !review?.detailLoaded ? 'uncertain' : 'rejected', message, code: error.response?.code };
+        return { outcome: uncertain ? 'uncertain' : 'rejected', message, code: error.response?.code,
+          operationResolved: purchaseTaskResolved };
       } else if (error.status !== 401 && !isAbortError(error)) {
         const message = error.message || 'The request could not be updated.';
         announce(message, 'error');
-        return { outcome: 'rejected', message, code: error.response?.code };
+        return { outcome: 'rejected', message, code: error.response?.code,
+          operationResolved: purchaseTaskResolved };
       }
-    } finally { attempt.pending = false; releaseAttempt(attempt); restore(); }
+      if (receiptRecovery) return { outcome: 'uncertain', message: 'The Purchase result needs recovery after sign-in.',
+        operationResolved: false };
+    } finally {
+      attempt.pending = false; releaseAttempt(attempt); restore();
+      if (automaticHoldRefreshRequired && automaticHoldRefreshMessage && automaticHoldRefreshRetry) {
+        editor?.requireAuthoritativeRefresh(automaticHoldRefreshMessage);
+        workflows?.requireAutomaticHoldReviewRefresh(automaticHoldRefreshMessage, automaticHoldRefreshRetry);
+      }
+    }
   }
   function showBibLinkOutcome(message, error = false) {
     const panel = lease?.content.querySelector('.request-workflow-panel');
@@ -472,12 +609,11 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       panel.remove(); mounted.content.querySelector('.edit-form input[inputmode="numeric"]')?.focus(); announce('The request remains open. Edit it or select another BIB.');
     } }, 'Continue editing');
     const closeDuplicate = element('button', { type: 'button', className: 'secondary-button', onclick: () => {
-      if (panel.isConnected && live()) void child.runAction('closeDuplicate');
+      if (panel.isConnected && live()) void child.runAction('closeDuplicate', { confirmed: true, returnFocus: closeDuplicate });
     } }, 'Close current request as duplicate');
     panel.append(element('div', { className: 'form-actions' }, snapshot.status === 'closed' ? [edit] : [closeDuplicate, edit]));
     const slot = mounted.content.querySelector('.request-workflow-panel');
     if (slot) {
-      mounted.content.querySelector('.request-detail-tabs [role="tab"]')?.click();
       slot.append(panel);
     } else mounted.content.querySelector('.action-bar')?.after(panel);
     beginInlineAction(panel, () => edit.click());
@@ -518,7 +654,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     const context = Object.freeze({ request: snapshot, actor: owner, root: mounted.content, scope,
       isCurrent: live, isPending: hasPendingMutation,
       showDetails: () => activateTab('details'),
-      hasInlineAction: () => inlineActions.size > 0,
+      hasInlineAction: () => inlineActions.size > 0 || document.querySelector('#additional-copy-create-dialog')?.open === true,
       beginInlineAction: (panel, cancel) => { if (live()) beginInlineAction(panel, cancel); },
       endInlineAction: panel => { if (live()) endInlineAction(panel); },
       cancelInlineAction: () => live() && cancelInlineAction(),
@@ -536,6 +672,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         return await confirmAction({ ...options, isCurrent }) && isCurrent();
       },
       mutate: (path, body, message, draft = null) => live() ? mutateRequest(snapshot, path, body, message, draft) : Promise.resolve(),
+      mutateRecovery: (path, body, message) => live()
+        ? mutateRequest(snapshot, path, body, message, null, false, true)
+        : Promise.resolve({ outcome: 'rejected' }),
       completeBibLink: (bibId, draft) => live() ? mutateRequest(snapshot,
         `/api/asap/staff/title-requests/${snapshot.id}/action`,
         { version: snapshot.version, action: 'alreadyOwn', bibid: bibId, staffSelectedBibId: bibId },
@@ -546,7 +685,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       openCopy: opener => live() ? openCopy(snapshot, context, opener) : Promise.resolve(false)
     });
     editor = createRequestEditor({ context, configuration, polarisLookup, announce, footerRoot,
-      closeDetail: () => host.requestClose(), onDirtyChange: dirty => { if (live()) updateBibLinkDraftStatus(dirty); },
+      closeDetail: () => host.requestClose(), onDirtyChange: (dirty, autoHoldChanged) => {
+        if (live()) { updateBibLinkDraftStatus(dirty); workflows?.editorAutomaticHoldDraftChanged(autoHoldChanged); }
+      },
       onResearchConfiguration: research => { if (live()) updatePatronResearch(research); },
       verified, retained, request: send });
     workflows = createRequestWorkflows({ context, editor, announce, request: send });
@@ -562,8 +703,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       element('span', { text: request.claimedByDisplayName ? `Claimed by ${request.claimedByDisplayName}` : 'Unclaimed' })
     ]);
     body.append(element('div', { className: 'request-heading-context' }, [meta, workflows.buildActions()]));
+    const workflowPanel = element('div', { className: 'request-workflow-panel' });
+    body.append(workflowPanel);
     const detailsPanel = element('section', { className: 'request-details-panel' });
-    detailsPanel.append(element('div', { className: 'request-workflow-panel' }));
     const patronContext = element('div', { className: 'patron-context' });
     const patronName = [request.nameFirst, request.nameLast].filter(Boolean).join(' ');
     const patronValue = element('span', { className: 'patron-name-actions' }, [researchRecordValue(patronName, request.research, 'patron')]);
@@ -658,6 +800,13 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     detailsPanel.append(element('p', { className: 'field-help request-metadata',
       text: [`Identifier check: ${text(request.isbnCheckStatus)}`, `Phase entered ${dateTime(request.phaseEnteredAt)}`,
         request.status === 'closed' ? `Close reason: ${closeReasonLabel(request.closeReason)}` : ''].filter(Boolean).join(' · ') }));
+    if (request.additionalCopyRequestId) {
+      const taskId = String(request.additionalCopyRequestId);
+      detailsPanel.append(element('p', { className: 'related-additional-copy' }, [
+        element('span', { text: 'Linked additional-copy task: ' }),
+        element('a', { href: `/staff/?request=${encodeURIComponent(taskId)}&stage=additional_copies`, text: `Task ${taskId}` })
+      ]));
+    }
 
     if (request.workflowTags && request.workflowTags.length) {
       const tags = element('div', { className: 'tags', 'aria-label': 'Workflow tags' });
@@ -720,6 +869,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     body.append(middle, footerRoot);
     lease.content.replaceChildren(body);
     activateTab(selectedTab);
+    workflows.mountPurchaseTaskRecovery();
     editor.restoreBibLink();
     void editor.loadResearch();
   }

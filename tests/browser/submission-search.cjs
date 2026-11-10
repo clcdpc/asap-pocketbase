@@ -60,8 +60,8 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
   };
   const dialog = page => page.locator('#search-dialog');
   const summary = page => page.locator('#search-dialog [data-search="summary"]');
-  const open = async (page, detail = false) => {
-    await page.locator(detail ? '#detail-search-asap' : '#search-asap').click();
+  const open = async page => {
+    await page.locator('#search-asap').click();
     await dialog(page).waitFor();
     assert.equal(await page.locator('#search-quick-input').evaluate(node => document.activeElement === node), true);
   };
@@ -162,9 +162,9 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await page.keyboard.press('Enter'); await page.locator('#request-dialog[open]').waitFor();
     assert.equal(await page.locator('#status-tabs [data-status="closed"]').getAttribute('aria-selected'), 'true');
     assert.ok(page.url().includes(fixture.bigId));
-    await open(page, true); assert.equal(await page.locator('#request-dialog').isVisible(), false);
-    await close(page); assert.equal(await page.locator('#request-dialog[open]').isVisible(), true);
-    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#detail-search-asap').count(), 0, 'Request details do not have a modal-local Search ASAP launcher.');
+    await page.keyboard.press('Control+k'); assert.equal(await page.locator('#search-dialog').isVisible(), false, 'Global shortcut defers to the request modal.');
+    await page.keyboard.press('Escape'); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
 
     await page.locator('.view-tab[data-view="settings"]').click();
     await page.locator('#settings-nav-patron').click();
@@ -223,24 +223,27 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await page.locator('.view-tab[data-view="queue"]').click(); await open(page); await search(page, 'needle-suggestion');
     await page.locator('#search-option-0').click(); await page.locator('#request-dialog[open]').waitFor();
     const title = page.locator('#request-dialog').getByLabel('Title', { exact: true }); await title.fill('Unsaved title search source');
-    await open(page, true); await search(page, 'EXACT-BARCODE');
-    await decideConfirmation(page, () => page.locator('#search-option-0').click(), decision => decision.dismiss());
+    await decideConfirmation(page, () => page.locator('#close-request').click(), decision => decision.dismiss());
     assert.equal(await title.inputValue(), 'Unsaved title search source');
     assert.equal(await page.locator('#request-dialog[open]').count(), 1); report.dirtyTitle = true;
-    await open(page, true); await search(page, '467222');
-    await decideConfirmation(page, () => page.locator('#search-option-0').click(), decision => decision.accept());
+    await decideConfirmation(page, () => page.locator('#close-request').click(), decision => decision.accept());
+    await page.locator('#request-dialog').waitFor({ state: 'hidden' });
+
+    await open(page); await search(page, '467222'); await page.locator('#search-option-0').click();
     await page.locator('#request-dialog[open]').waitFor();
     await page.locator('#request-dialog-kicker').filter({ hasText: 'Additional copy' }).waitFor();
     await page.locator('#request-dialog').getByRole('button', { name: 'Assign', exact: true }).click();
     const assign = page.getByLabel('Assign additional-copy task'); await assign.waitFor();
     const candidates = await assign.locator('option').evaluateAll(options => options.map(option => option.value));
-    if (candidates.length > 1) await assign.selectOption(candidates[1]);
-    await open(page, true); await search(page, 'EXACT-BARCODE');
-    await decideConfirmation(page, () => page.locator('#search-option-0').click(), decision => decision.dismiss());
-    assert.equal(await assign.isVisible(), true); report.dirtyCopy = true;
-    await open(page, true); await search(page, 'EXACT-BARCODE');
-    await decideConfirmation(page, () => page.locator('#search-option-0').click(), decision => decision.accept());
-    await page.locator('#request-dialog-kicker').filter({ hasText: `Request ${fixture.bigId}` }).waitFor(); await page.keyboard.press('Escape');
+    assert.ok(candidates.length > 1, 'The assignment draft has a staff choice to retain.');
+    await assign.selectOption(candidates[1]);
+    const retainedAssignment = await assign.inputValue();
+    assert.ok(retainedAssignment, 'The assignment draft selects a staff member before closing.');
+    await decideConfirmation(page, () => page.locator('#close-request').click(), decision => decision.dismiss());
+    assert.equal(await assign.inputValue(), retainedAssignment, 'Dismissing the request close warning keeps the assignment draft.');
+    report.dirtyCopy = true;
+    await decideConfirmation(page, () => page.locator('#close-request').click(), decision => decision.accept());
+    await page.locator('#request-dialog').waitFor({ state: 'hidden' });
 
     await open(page); await search(page, 'none-found-anywhere'); assert.match(await summary(page).textContent(), /No matching/);
     injection = { kind: 'failure' }; await page.locator('#search-quick-input').fill('needle');

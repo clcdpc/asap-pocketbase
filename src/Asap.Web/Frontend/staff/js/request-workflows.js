@@ -3,7 +3,11 @@ import { createLatestLoad } from '../../shared/latest-load.js';
 import { byDisplayLabel } from './display-order.js';
 import { positivePolarisId } from './research.js';
 import { eligibleRowActions } from './request-row-actions.js';
+import { actorKey } from './session-identity.js';
+import { validRequestId } from './recent-requests.js';
 import { element, icon, commandButton, statusLabel, labeledInput } from './ui.js';
+
+const purchaseTaskOperationId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function createRequestWorkflows({ context, editor, announce, request: send = authorizedJson }) {
   const { request, actor, root, scope: interactionScope, isCurrent, isPending } = context;
@@ -11,7 +15,65 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
   const dialogForms = new WeakMap();
   let actionChoice = null;
   const isCurrentDialogRequest = () => isCurrent();
-  const allowRequestMutation = (snapshot, declaration) => isCurrent() && context.admit(declaration);
+  const purchaseTask = snapshot => snapshot.status === 'suggestion' && snapshot.bibidStaffVerified === true &&
+    positivePolarisId(snapshot.bibid) !== null && snapshot.autohold === false;
+  function purchaseTaskOperationKey(requestId = request.id) {
+    const key = actorKey(actor), id = String(requestId);
+    return key && validRequestId(id)
+      ? `asap.staff.purchaseTask.${encodeURIComponent(key)}.${id}` : null;
+  }
+  function readPurchaseTaskOperation(requestId = request.id) {
+    const key = purchaseTaskOperationKey(requestId);
+    if (!key) return null;
+    try {
+      const raw = window.sessionStorage.getItem(key);
+      if (!raw) return null;
+      const saved = JSON.parse(raw), body = saved?.body;
+      if (saved?.actorKey !== actorKey(actor) || saved.requestId !== String(requestId) || !body ||
+          body.action !== 'purchase' || body.requestType !== 'title_request' ||
+          typeof body.version !== 'string' || !body.version || !purchaseTaskOperationId.test(body.operationId) ||
+          typeof body.emailPurchaseReminder !== 'boolean' ||
+          Object.keys(body).some(name => !['version', 'operationId', 'requestType', 'action', 'emailPurchaseReminder'].includes(name))) {
+        return null;
+      }
+      return { key, raw, body: Object.freeze({ ...body }) };
+    } catch {
+      return null;
+    }
+  }
+  function savePurchaseTaskOperation(body) {
+    const key = purchaseTaskOperationKey();
+    if (!key) return null;
+    const raw = JSON.stringify({ actorKey: actorKey(actor), requestId: String(request.id), body });
+    try {
+      window.sessionStorage.setItem(key, raw);
+      return window.sessionStorage.getItem(key) === raw ? { key, raw, body } : null;
+    } catch {
+      return null;
+    }
+  }
+  function clearPurchaseTaskOperation(operationId = null, expectedBody = null) {
+    const saved = readPurchaseTaskOperation();
+    if (!saved || operationId && saved.body.operationId !== operationId ||
+        expectedBody && JSON.stringify(saved.body) !== JSON.stringify(expectedBody)) return false;
+    try {
+      if (window.sessionStorage.getItem(saved.key) !== saved.raw) return false;
+      window.sessionStorage.removeItem(saved.key);
+      root.querySelector('.purchase-task-recovery')?.remove();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const dependsOnAutomaticHold = (action, snapshot = request) => Boolean(snapshot.bibid) &&
+    ['purchase', 'alreadyOwn', 'catalogFound'].includes(action);
+  const allowRequestMutation = (snapshot, declaration) => {
+    if (readPurchaseTaskOperation()) {
+      announce('Recover the previous Purchase result before making another request change.', 'warning');
+      return false;
+    }
+    return isCurrent() && context.admit(declaration);
+  };
   const confirmCurrent = (snapshot, label, message, draft = null, tone = 'normal') =>
     context.confirm({ title: label, message, confirmLabel: label, tone }, draft);
   const mutateRequest = (snapshot, path, body, message, draft = null) => context.mutate(path, body, message, draft);
@@ -60,6 +122,65 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     if (choice.returnFocus?.isConnected) choice.returnFocus.focus();
   }
 
+  function invalidateAutomaticHoldReview(choice, changed) {
+    if (!choice || !dependsOnAutomaticHold(choice.action, choice.request)) return;
+    choice.automaticHoldChanged = changed;
+    choice.submit.disabled = changed || !choice.ready || choice.refreshRequired;
+    let explanation = choice.panel.querySelector('.automatic-hold-review-invalidated');
+    if (changed) {
+      if (!explanation) {
+        explanation = element('p', { className: 'automatic-hold-review-invalidated', role: 'alert',
+          text: 'Save the automatic-hold change before continuing.' });
+        choice.panel.insertBefore(explanation, choice.panel.querySelector('.form-actions'));
+      }
+    } else {
+      explanation?.remove();
+    }
+  }
+
+  function focusAutomaticHoldReview(choice) {
+    const submit = choice?.submit;
+    if (!submit) return;
+    submit.classList.add('automatic-hold-review-focus');
+    submit.addEventListener('blur', () => submit.classList.remove('automatic-hold-review-focus'), { once: true });
+    submit.focus({ preventScroll: true, focusVisible: true });
+  }
+
+  function editorAutomaticHoldDraftChanged(changed) {
+    invalidateAutomaticHoldReview(actionChoice, changed);
+  }
+
+  function preservedDraftsForEditorSave() {
+    const choice = actionChoice;
+    return choice?.automaticHoldChanged && choice.action === 'purchase' && choice.draft
+      ? [choice.draft] : [];
+  }
+
+  function captureAutomaticHoldReview() {
+    const choice = actionChoice;
+    if (!choice?.automaticHoldChanged || !dependsOnAutomaticHold(choice.action, choice.request)) return null;
+    return Object.freeze({ requestId: String(choice.request.id), status: choice.request.status,
+      bibid: choice.request.bibid == null ? null : String(choice.request.bibid), action: choice.action,
+      emailPurchaseReminder: choice.input?.type === 'checkbox' ? choice.input.checked : undefined });
+  }
+
+  function requireAutomaticHoldReviewRefresh(message, retry) {
+    const choice = actionChoice;
+    if (!choice?.panel.isConnected) return;
+    choice.refreshRequired = true;
+    choice.submit.disabled = true;
+    choice.panel.querySelector('.automatic-hold-review-refresh')?.remove();
+    const retryButton = commandButton('Retry current request', 'refresh', async () => {
+      if (retryButton.disabled || actionChoice !== choice || !isCurrentDialogRequest()) return;
+      retryButton.disabled = true;
+      await retry();
+      if (actionChoice === choice && retryButton.isConnected) retryButton.disabled = false;
+    });
+    choice.panel.append(element('div', { className: 'automatic-hold-review-refresh' }, [
+      element('p', { role: 'alert', text: message }), retryButton
+    ]));
+  }
+
   function showForm(form, cancel) {
     context.beginInlineAction(form, cancel);
     const panel = root.querySelector('.request-workflow-panel');
@@ -76,14 +197,13 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       if (request.claimedByStaffUserId === actor?.id) {
         bar.append(commandButton('Unclaim', 'user-times', () => mutateSimple(request, 'unclaim')));
       } else if (!request.claimedByStaffUserId) {
-        bar.append(commandButton('Claim', 'user-plus', () => mutateSimple(request, 'claim'), 'primary-button'));
+        bar.append(commandButton('Claim', 'user-plus', event => showActionConfirmation(request, 'claim', 'Claim request',
+          `Claim this request for yourself? It will remain in ${statusLabel(request.status)}.`,
+          'Claim', () => mutateSimple(request, 'claim'), event.currentTarget), 'primary-button'));
       } else if (['admin', 'super_admin'].includes(actor?.role)) {
-        bar.append(commandButton('Clear claim', 'user-times', async () => {
-          if (await confirmCurrent(request, 'Clear claim',
-            `Clear ${request.claimedByDisplayName || 'another staff member'}'s claim? The request will remain in ${statusLabel(request.status)} and become unclaimed.`)) {
-            mutateSimple(request, 'clear-claim');
-          }
-        }));
+        bar.append(commandButton('Clear claim', 'user-times', event => showActionConfirmation(request, 'clear-claim', 'Clear claim',
+          `Clear ${request.claimedByDisplayName || 'another staff member'}'s claim? The request will remain in ${statusLabel(request.status)} and become unclaimed.`,
+          'Clear claim', () => mutateSimple(request, 'clear-claim'), event.currentTarget)));
       }
       assign = commandButton('Assign', 'users', event => showAssignment(request, event.currentTarget));
       if (request.status !== 'suggestion') bar.append(assign);
@@ -93,47 +213,72 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         commandButton('Purchase', 'shopping-cart', event => showActionChoice(request, 'purchase', event.currentTarget), 'primary-button', !allowedActions.has('purchase')),
         assign,
         commandButton('Already own', 'book', event => runAction(request, 'alreadyOwn', undefined, {}, null, event.currentTarget), 'secondary-button', !allowedActions.has('alreadyOwn')),
-        commandButton('Close silently', 'archive', () => runAction(request, 'silentClose'), 'secondary-button', !allowedActions.has('silentClose')),
+        commandButton('Close silently', 'archive', event => runAction(request, 'silentClose', undefined, {}, null, event.currentTarget), 'secondary-button', !allowedActions.has('silentClose')),
         commandButton('Reject', 'ban', event => showActionChoice(request, 'reject', event.currentTarget), 'danger-button', !allowedActions.has('reject'))
       );
     } else if (request.status === 'outstanding_purchase') {
-      bar.append(commandButton(request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', () => runAction(request, 'catalogFound'),
+      bar.append(commandButton(request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', event => runAction(request, 'catalogFound', undefined, {}, null, event.currentTarget),
         'primary-button', !allowedActions.has('catalogFound')));
     } else if (request.status === 'pending_hold') {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
       bar.append(commandButton('Pickup', 'map-marker', event => showPickup(request, event.currentTarget), 'secondary-button',
         workflowBlocked && request.capabilities?.blockingReason !== 'pickup_reconciliation_required'));
       if (request.capabilities?.canPlaceHold === true) {
-        bar.append(commandButton('Place hold', 'bookmark', async () => {
-          if (await confirmCurrent(request, 'Place hold',
-            `Place a Polaris hold for BIB ${request.bibid} and this patron? If the provider outcome is uncertain, recovery will be required before another attempt.`)) {
-            mutateSimple(request, 'place-hold');
-          }
-        }, 'primary-button', workflowBlocked));
+        bar.append(commandButton('Place hold', 'bookmark', event => showActionConfirmation(request, 'place-hold', 'Place hold',
+          `Place a Polaris hold for BIB ${request.bibid} and this patron? If the provider outcome is uncertain, recovery will be required before another attempt.`,
+          'Place hold', () => mutateSimple(request, 'place-hold'), event.currentTarget), 'primary-button', workflowBlocked));
       }
       if ((request.workflowTags || []).includes('Hold exists (same patron)')) {
-        bar.append(commandButton('Close duplicate', 'clone', () => runAction(request, 'closeDuplicate'), 'secondary-button', !allowedActions.has('closeDuplicate')));
+        bar.append(commandButton('Close duplicate', 'clone', event => runAction(request, 'closeDuplicate', undefined, {}, null, event.currentTarget), 'secondary-button', !allowedActions.has('closeDuplicate')));
       }
     } else if (request.status === 'hold_placed') {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
-      bar.append(commandButton('Close request', 'check', () => runAction(request, 'close'), 'primary-button', !allowedActions.has('close')));
+      bar.append(commandButton('Close request', 'check', event => runAction(request, 'close', undefined, {}, null, event.currentTarget), 'primary-button', !allowedActions.has('close')));
     } else if (request.status === 'closed') {
       if (allowedActions.has('reopen')) {
-        bar.append(commandButton('Reopen', 'undo', () => runAction(request, 'reopen'), 'primary-button'));
+        bar.append(commandButton('Reopen', 'undo', event => runAction(request, 'reopen', undefined, {}, null, event.currentTarget), 'primary-button'));
       }
       if (['admin', 'super_admin'].includes(actor?.role)) {
-        bar.append(commandButton('Permanently delete request', 'trash', async () => {
-          if (await confirmCurrent(request, 'Delete permanently',
-            `Permanently delete closed title request ${request.id}? This cannot be undone. Its deletion audit will remain.`, null, 'danger')) {
-            deleteTitleRequest(request);
-          }
-        }, 'danger-button'));
+        bar.append(commandButton('Permanently delete request', 'trash', event => showActionConfirmation(request, 'delete', 'Delete permanently',
+          `Permanently delete closed title request ${request.id}? This cannot be undone. Its deletion audit will remain.`,
+          'Delete permanently', deleteTitleRequest, event.currentTarget, 'danger'), 'danger-button'));
       }
     }
     if (request.capabilities && request.capabilities.canRetryIdentifierCheck) {
       bar.insertBefore(commandButton('Retry identifier check', 'refresh', () => mutateSimple(request, 'retry-identifier-check')), bar.querySelector('.danger-button'));
     }
+    if (readPurchaseTaskOperation()) {
+      for (const button of bar.querySelectorAll('button')) button.disabled = true;
+    }
     return bar;
+  }
+
+  function mountPurchaseTaskRecovery() {
+    const saved = readPurchaseTaskOperation();
+    if (!saved || !isCurrentDialogRequest()) return false;
+    const panel = element('section', { className: 'action-choice purchase-task-recovery', 'aria-labelledby': 'purchase-task-recovery-title' });
+    const recover = element('button', { type: 'button', className: 'primary-button', text: 'Recover identical Purchase' });
+    recover.addEventListener('click', async () => {
+      if (recover.disabled || !isCurrentDialogRequest() || isPending()) return;
+      recover.disabled = true;
+      const result = await context.mutateRecovery(
+        `/api/asap/staff/title-requests/${encodeURIComponent(request.id)}/action`, saved.body,
+        'Purchase result recovered.');
+      if (result?.operationResolved === true) {
+        clearPurchaseTaskOperation(saved.body.operationId, saved.body);
+      } else if (recover.isConnected) {
+        recover.disabled = false;
+      }
+    });
+    panel.append(element('h3', { id: 'purchase-task-recovery-title', text: 'Purchase result unconfirmed' }),
+      element('p', { text: 'A previous Purchase may have created a purchasing task. Recover the original result before starting another action.' }),
+      element('div', { className: 'form-actions' }, recover));
+    const workflowPanel = root.querySelector('.request-workflow-panel');
+    if (!workflowPanel) return false;
+    workflowPanel.prepend(panel);
+    recover.focus({ preventScroll: true });
+    announce('A previous Purchase result is unconfirmed. Recover the same action before continuing.', 'warning');
+    return true;
   }
 
   async function mutateSimple(request, operation) {
@@ -152,35 +297,42 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     await mutateRequest(request, path, { version: request.version }, messages[operation]);
   }
 
-  function showActionChoice(request, action, returnFocus) {
+  function showActionChoice(request, action, returnFocus, preserved = null) {
     if (context.hasInlineAction() || !allowRequestMutation(request, { consumes: null })) return;
-    context.showDetails?.();
     cancelActionChoiceLoad();
     root.querySelector('.action-choice')?.remove();
-    const panel = element('form', { className: 'action-choice', 'aria-label': `${action} options` });
-    const heading = element('h3', { text: action === 'reject' ? 'Reject suggestion' : 'Purchase suggestion' });
+    const createsPurchaseTask = action === 'purchase' && purchaseTask(request);
+    const panel = element('form', { className: 'action-choice', 'aria-label': createsPurchaseTask ? 'Purchase an additional copy options' : `${action} options` });
+    const heading = element('h3', { text: action === 'reject' ? 'Reject suggestion' : createsPurchaseTask ? 'Purchase an additional copy' : 'Purchase suggestion' });
     const submit = element('button', { type: 'submit', className: action === 'reject' ? 'danger-button' : 'primary-button',
-      disabled: action === 'reject' }, action === 'reject' ? 'Reject and close' : 'Confirm purchase');
+      disabled: action === 'reject' }, action === 'reject' ? 'Reject and close' : createsPurchaseTask ? 'Create purchasing task' : 'Confirm purchase');
     const cancel = commandButton('Cancel', 'times', dismissActionChoice);
     let input;
     if (action === 'purchase') {
       const entersPendingHold = Boolean(request.bibid);
-      input = entersPendingHold ? null : element('input', { type: 'checkbox', checked: actor.purchaseReminderDefault });
-      panel.append(heading, element('p', { text: request.bibid
-        ? `${request.autohold ? 'Purchase moves this verified BIB to Pending hold for automatic hold placement' : 'Automatic hold is off. Purchase closes this request without placing a hold'} after server verification. A purchase reminder does not apply. The final state comes from the server.`
-        : 'Purchase moves this request to Outstanding purchase. A reminder is optional.' }));
+      input = createsPurchaseTask
+        ? element('input', { type: 'checkbox', checked: actor.additionalCopyReminderDefault })
+        : entersPendingHold ? null : element('input', { type: 'checkbox', checked: actor.purchaseReminderDefault });
+      const explanation = createsPurchaseTask
+        ? 'A matching BIB exists and the patron does not want a hold. A purchasing task will be created and this request will close without placing a hold.'
+        : request.bibid
+          ? `${request.autohold ? 'Purchase moves this verified BIB to Pending hold for automatic hold placement' : 'Automatic hold is off. Purchase closes this request without placing a hold'} after server verification. A purchase reminder does not apply. The final state comes from the server.`
+          : 'Purchase moves this request to Outstanding purchase. A reminder is optional.';
+      panel.append(heading, element('p', { text: explanation }));
       if (input) panel.append(element('label', { className: 'check-field' },
-        [input, element('span', { text: 'Send purchase reminder' })]));
+        [input, element('span', { text: createsPurchaseTask ? 'Email me a purchase reminder' : 'Send purchase reminder' })]));
     } else {
       input = element('select', { 'aria-label': 'Rejection template' });
       input.append(element('option', { value: '', text: 'Default rejection email' }));
       panel.append(heading, element('p', { text: 'Reject closes this request. A patron rejection email is queued only when a template and delivery are available.' }),
         labeledInput('Rejection template', input));
     }
-    const choice = { request, action, panel, returnFocus };
+    const choice = { request, action, panel, returnFocus, input, submit, createsPurchaseTask,
+      ready: action !== 'reject', automaticHoldChanged: false };
     actionChoice = choice;
     panel.append(element('div', { className: 'form-actions' }, [submit, cancel]));
     let draft = action === 'reject' ? null : trackDialogFormDraft(panel);
+    choice.draft = draft;
     panel.addEventListener('submit', async event => {
       event.preventDefault();
       if (submit.disabled || actionChoice !== choice || !isCurrentDialogRequest(request, 'title_request')) return;
@@ -194,7 +346,11 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       }
     });
     showForm(panel, dismissActionChoice);
-    (input || submit).focus();
+    (input || submit).focus({ preventScroll: true });
+    if (preserved && input?.type === 'checkbox' && typeof preserved.emailPurchaseReminder === 'boolean') {
+      input.checked = preserved.emailPurchaseReminder;
+      choice.draft = draft = trackDialogFormDraft(panel);
+    }
     if (action !== 'reject') return;
     const load = reads.begin('action-choice');
     send(`/api/asap/staff/title-requests/${encodeURIComponent(request.id)}/rejection-templates`,
@@ -207,6 +363,8 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         }
         input.value = data.defaultTemplateId || '';
         draft = trackDialogFormDraft(panel);
+        choice.draft = draft;
+        choice.ready = true;
         submit.disabled = false;
       })
       .catch(error => {
@@ -218,7 +376,57 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       .finally(() => reads.finish('action-choice', load.token));
   }
 
-  async function runAction(request, action, targetStatus, choices = {}, draft = null, returnFocus = null) {
+  function showActionConfirmation(request, action, title, message, confirmLabel, onConfirm, returnFocus = null, tone = 'normal') {
+    if (context.hasInlineAction() || !allowRequestMutation(request, { consumes: null })) return;
+    cancelActionChoiceLoad();
+    const heading = element('h3', { id: 'request-action-confirmation-title', text: title });
+    const panel = element('form', { className: 'action-choice', 'aria-labelledby': heading.id });
+    const submit = element('button', { type: 'submit', className: tone === 'danger' ? 'danger-button' : 'primary-button' }, confirmLabel);
+    const cancel = commandButton('Cancel', 'times', dismissActionChoice);
+    const choice = { request, action, panel, returnFocus, submit, ready: true, automaticHoldChanged: false };
+    actionChoice = choice;
+    panel.append(heading, element('p', { text: message }), element('div', { className: 'form-actions' }, [submit, cancel]));
+    panel.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (submit.disabled || actionChoice !== choice || !isCurrentDialogRequest(request, 'title_request')) return;
+      submit.disabled = true;
+      try {
+        await onConfirm();
+      } finally {
+        if (actionChoice === choice && panel.isConnected) submit.disabled = false;
+      }
+    });
+    showForm(panel, dismissActionChoice);
+    submit.focus({ preventScroll: true });
+  }
+
+  function restoreAutomaticHoldReview(saved) {
+    if (!saved || saved.requestId !== String(request.id) || !isCurrentDialogRequest()) return false;
+    const allowed = new Set(request.capabilities?.allowedActions || []);
+    if (request.status !== saved.status || String(request.bibid ?? '') !== String(saved.bibid ?? '') ||
+        !dependsOnAutomaticHold(saved.action, request) || !allowed.has(saved.action) ||
+        saved.action === 'alreadyOwn' && (request.bibidStaffVerified !== true || positivePolarisId(request.bibid) === null)) {
+      announce('The request or its permissions changed. Review the current request before continuing.', 'warning');
+      return false;
+    }
+    const buttonLabel = saved.action === 'purchase' ? 'Purchase'
+      : saved.action === 'alreadyOwn' ? 'Already own'
+        : request.autohold ? 'Ready for hold' : 'Close without hold';
+    const trigger = [...root.querySelectorAll('.action-bar button')]
+      .find(button => button.textContent.trim() === buttonLabel);
+    if (!trigger || trigger.disabled) {
+      announce('The request or its permissions changed. Review the current request before continuing.', 'warning');
+      return false;
+    }
+    if (saved.action === 'purchase') showActionChoice(request, 'purchase', trigger, saved);
+    else runAction(request, saved.action, undefined, {}, null, trigger);
+    if (!actionChoice) return false;
+    invalidateAutomaticHoldReview(actionChoice, editor.isAutomaticHoldDraftChanged());
+    focusAutomaticHoldReview(actionChoice);
+    return true;
+  }
+
+  async function runAction(request, action, targetStatus, choices = {}, draft = null, returnFocus = null, confirmed = false) {
     if (action === 'alreadyOwn' &&
         (request.bibidStaffVerified !== true || positivePolarisId(request.bibid) === null)) {
       editor.beginBibLink(returnFocus);
@@ -250,21 +458,39 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     };
     const labels = { alreadyOwn: 'Already own', catalogFound: request.autohold ? 'Ready for hold' : 'Close without hold',
       silentClose: 'Close silently', closeDuplicate: 'Close duplicate', close: 'Close request', reopen: 'Reopen request' };
-    if (confirmations[action] && !await confirmCurrent(request, labels[action], confirmations[action], draft)) return;
-    const result = await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, {
+    if (confirmations[action] && !confirmed) {
+      showActionConfirmation(request, action, labels[action], confirmations[action], labels[action],
+        () => runAction(request, action, targetStatus, choices, draft, returnFocus, true), returnFocus);
+      return;
+    }
+    const createsPurchaseTask = action === 'purchase' && purchaseTask(request);
+    const body = {
       version: request.version,
       action,
       status: targetStatus,
       ...choices
-    }, 'Workflow action completed.', draft);
+    };
+    if (createsPurchaseTask) {
+      if (typeof window.crypto?.randomUUID !== 'function') {
+        announce('This browser cannot save a safe Purchase retry. Refresh or use a supported browser before continuing.', 'error');
+        return;
+      }
+      Object.assign(body, { operationId: window.crypto.randomUUID(), requestType: 'title_request' });
+      if (!savePurchaseTaskOperation(body)) {
+        announce('This browser could not save the Purchase action for safe retry. Enable site storage before continuing.', 'error');
+        return;
+      }
+    }
+    const result = await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, body,
+      createsPurchaseTask ? 'Purchasing task created.' : 'Workflow action completed.', draft);
     if (action === 'alreadyOwn' && ['bib_not_found', 'invalid_bib', 'bib_unverified', 'bib_required'].includes(result?.code)) {
+      dismissActionChoice();
       editor.beginBibLink(returnFocus, result.message);
     }
   }
 
   async function showAssignment(request, returnFocus) {
     if (!isCurrentDialogRequest(request, 'title_request') || isPending() || context.hasInlineAction()) return;
-    context.showDetails?.();
     const load = reads.begin('assignment-candidates');
     announce('Loading eligible staff...');
     try {
@@ -295,7 +521,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         }, 'Request assigned.', draft);
       });
       showForm(form, () => cancelDialogFormDraft(form, returnFocus));
-      if (!root.querySelector('.request-details-panel')?.hidden) select.focus();
+        if (!root.querySelector('.request-details-panel')?.hidden) select.focus({ preventScroll: true });
       announce(candidates.length ? 'Choose an assignee.' : 'No eligible staff are available.');
     } catch (error) {
       if (load.isCurrent() && isCurrentDialogRequest(request, 'title_request') &&
@@ -309,7 +535,6 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
 
   async function showPickup(request, returnFocus) {
     if (!isCurrentDialogRequest(request, 'title_request') || isPending() || context.hasInlineAction()) return;
-    context.showDetails?.();
     const load = reads.begin('pickup-options');
     const clearLoading = announce('Loading current pickup preference...');
     try {
@@ -368,7 +593,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       form.append(commandButton('Cancel', 'times', () => cancelDialogFormDraft(form, returnFocus)));
       const draft = trackDialogFormDraft(form);
       showForm(form, () => cancelDialogFormDraft(form, returnFocus));
-      if (!root.querySelector('.request-details-panel')?.hidden) select.focus();
+        if (!root.querySelector('.request-details-panel')?.hidden) select.focus({ preventScroll: true });
     } catch (error) {
       if (load.isCurrent() && isCurrentDialogRequest(request, 'title_request') &&
           error.status !== 401 && !(isAbortError(error) && load.signal.aborted)) {
@@ -539,7 +764,15 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
   return {
     buildActions: () => buildActionBar(request),
     buildHold: () => request.holdOperation ? buildHoldOperation(request, request.holdOperation) : null,
-    runAction: action => runAction(request, action),
+    mountPurchaseTaskRecovery,
+    clearPurchaseTaskOperation,
+    editorAutomaticHoldDraftChanged,
+    preservedDraftsForEditorSave,
+    captureAutomaticHoldReview,
+    restoreAutomaticHoldReview,
+    requireAutomaticHoldReviewRefresh,
+    runAction: (action, options = {}) => runAction(request, action, undefined, {}, null,
+      options.returnFocus || null, options.confirmed === true),
     startAction(action) {
       if (!isCurrent() || isPending()) return;
       if (action === 'edit') { context.showDetails?.(); root.querySelector('.edit-form input')?.focus(); return; }

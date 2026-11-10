@@ -9,6 +9,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
   const reads = createLatestLoad();
   let editControls = null, editorDirty = false, editorDraft = null, verifiedBib = verified, research = null, lookupContext = null;
   let formEvents = null, linkNeedsReload = false;
+  let refreshRequiredMessage = null, saveControl = null, revertControl = null, saveStateControl = null;
   let beginBibLink = () => {}, cancelBibLink = () => false, captureDraft = () => null, showBibLinkError = () => {}, needsBibLinkReload = () => false;
   function isVerifiedDraft(request) {
     return verifiedBib?.requestId === String(request.id) &&
@@ -277,6 +278,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     const customFields = element('div', { className: 'custom-fields wide' });
     let customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value);
     const controls = { title, author, identifier, bib, publication, exactDate, format, notes, autohold };
+    editControls.autohold = autohold;
     const value = control => control.type === 'checkbox' ? control.checked : control.value;
     const baseline = Object.fromEntries(Object.entries(controls).map(([key, control]) => [key, value(control)]));
     captureDraft = () => ({
@@ -304,6 +306,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     const pendingPreview = element('p', { className: 'pending-audit-preview wide', role: 'status' });
     const saveState = element('strong', { className: 'request-save-state', role: 'status', 'aria-live': 'polite' });
     const save = element('button', { type: 'submit', form: form.id, className: 'primary-button' }, [icon('save'), 'Save changes']);
+    saveControl = save; saveStateControl = saveState;
     const revert = commandButton('Revert changes', 'undo', async () => {
       if (!form.isConnected || !isCurrent() || isPending()) return;
       if (editorDirty && !await confirmChanges({ title: 'Revert request changes?',
@@ -319,6 +322,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       (updated.closest('[hidden]') ? root.querySelector('[role="tab"][aria-selected="true"]') : updated.querySelector('input'))?.focus();
       announce('Unsaved request changes discarded.');
     });
+    revertControl = revert;
     const close = commandButton('Close', 'times', () => {
       if (form.isConnected && isCurrent()) closeDetail();
     });
@@ -353,9 +357,9 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       pendingPreview.hidden = !editorDirty;
       saveState.textContent = editorDirty ? 'Unsaved changes' : 'All changes saved';
       saveState.dataset.state = editorDirty ? 'dirty' : 'clean';
-      save.disabled = !editorDirty;
-      revert.disabled = !editorDirty;
-      onDirtyChange(editorDirty);
+      save.disabled = Boolean(refreshRequiredMessage) || !editorDirty;
+      revert.disabled = Boolean(refreshRequiredMessage) || !editorDirty;
+      onDirtyChange(editorDirty, autohold.checked !== Boolean(request.autohold));
     }
     listen(format, 'change', () => {
       customFieldControls = renderCustomFieldEditor(customFields, request, configuration, format.value, customFieldControls);
@@ -440,6 +444,8 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
         notes: notes.value === baselineNotes ? request.notes || '' : notes.value,
         customFields: collectCustomFields(request, customFieldControls)
       }, 'Request changes saved.', draft);
+      if (outcome?.refreshRequired) return;
+      if (refreshRequiredMessage) return;
       if (isCurrent() && form.isConnected) {
         updatePreview();
         saveState.textContent = `Changes were not saved. ${outcome?.message || 'Review the error before trying again.'}`;
@@ -456,6 +462,16 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     build: () => buildEditForm(request, configuration),
     loadResearch: () => loadResearchConfiguration(request),
     isDirty: () => editorDirty, draft: () => editorDraft,
+    isAutomaticHoldDraftChanged: () => Boolean(editControls?.autohold?.checked) !== Boolean(request.autohold),
+    requireAuthoritativeRefresh(message) {
+      refreshRequiredMessage = message;
+      if (saveControl?.isConnected) saveControl.disabled = true;
+      if (revertControl?.isConnected) revertControl.disabled = true;
+      if (saveStateControl?.isConnected) {
+        saveStateControl.textContent = message;
+        saveStateControl.dataset.state = 'error';
+      }
+    },
     isVerifiedDraft: () => isVerifiedDraft(request), hasAuthoritativeBib: () => hasAuthoritativeBib(request),
     beginBibLink: (...args) => beginBibLink(...args), cancelBibLink: () => cancelBibLink(),
     captureDraft: () => captureDraft(), showBibLinkError: (...args) => showBibLinkError(...args),

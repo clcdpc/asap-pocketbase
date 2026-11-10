@@ -35,6 +35,13 @@ const snapshot = { id: '9223372036854775807', version: 'v1', title: 'A', library
       const label = operation === 'claim' ? 'Claim' : operation === 'delete' ? 'Permanently delete request' : 'Reconcile provider state';
       const control = [...get('#request-dialog').querySelectorAll('button')].find(button => button.textContent.trim() === label);
       control.click(); await new Promise(resolve => setImmediate(resolve));
+      if (operation === 'claim' || operation === 'delete') {
+        const review = get('#request-dialog').querySelector('.action-choice');
+        assert.ok(review, `${operation} opens its inline confirmation`);
+        assert.equal(posted.length, 0, `${operation} review does not mutate before approval`);
+        review.querySelector('button[type="submit"]').click();
+        await new Promise(resolve => setImmediate(resolve));
+      }
       assert.ok(complete, `${operation} dispatched`);
       assert.equal(posted[0].init.signal, undefined, `${operation} cannot use read cancellation`);
       if (operation === 'delete') assert.equal(posted[0].init.body.actorVersion, 'actor-v2', 'capture current actor rowversion at dispatch after a same-actor preference revision');

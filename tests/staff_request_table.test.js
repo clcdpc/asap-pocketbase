@@ -29,7 +29,7 @@ async function until(predicate, message) {
     const actor = { id: '20', role: 'staff', organizationId: 2 };
     const record = { libraryOrgId: 2, claimedByStaffUserId: '20' };
     for (const [status, capabilities, expected] of [
-      ['suggestion', { allowedActions: ['purchase', 'reject', 'alreadyOwn', 'silentClose'] }, ['purchase', 'reject', 'alreadyOwn', 'assign', 'silentClose']],
+      ['suggestion', { allowedActions: ['purchase', 'reject', 'alreadyOwn', 'silentClose'] }, ['reject', 'alreadyOwn', 'assign', 'silentClose', 'purchase']],
       ['suggestion', {}, ['assign']],
       ['outstanding_purchase', { allowedActions: ['catalogFound'] }, ['catalogFound', 'assign']],
       ['outstanding_purchase', {}, ['assign']],
@@ -77,27 +77,45 @@ async function until(predicate, message) {
     await resized(20);
     assert.equal(host.children.length, 1, 'Even an extremely narrow sole action stays direct');
     host.firstElementChild.click(); assert.deepEqual(dispatched.at(-1)[2], { action: 'claim' }); unmount();
-    const actions = ['purchase', 'reject', 'alreadyOwn', 'assign'].map(key => ({ key, label: key, glyph: 'pencil' }));
+    const actions = [
+      { key: 'reject', label: 'Reject', glyph: 'ban', tone: 'danger-button' },
+      { key: 'alreadyOwn', label: 'Already own', glyph: 'book' },
+      { key: 'assign', label: 'Assign', glyph: 'users' },
+      { key: 'purchase', label: 'Purchase', glyph: 'shopping-cart', tone: 'primary-button' }
+    ];
     unmount = mount(actions); await resized(400);
     const inline = () => [...host.querySelectorAll(':scope > [data-request-action]')].map(n => n.dataset.requestAction);
-    assert.deepEqual(inline(), actions.map(a => a.key)); assert.equal(host.querySelector('[popover]'), null);
-    await resized(200); // Two natural 80px buttons plus More fit exactly.
-    assert.deepEqual(inline(), ['purchase', 'reject']);
-    assert.deepEqual([...host.querySelectorAll('[popover] button')].map(n => n.dataset.requestAction), ['alreadyOwn', 'assign']);
+    assert.deepEqual(inline(), ['assign', 'reject', 'alreadyOwn']);
+    assert.deepEqual([...host.querySelectorAll('[popover] button')].map(n => n.dataset.requestAction), ['purchase'],
+      'Purchase stays in the single More menu entry even when the other actions fit directly.');
+    let more = host.querySelector('.request-row-more');
+    assert.ok(more, 'The More trigger remains available for the Purchase entry.');
+    const purchase = host.querySelector('[popover] [data-request-action="purchase"]');
+    assert.equal(purchase.textContent, 'Purchase');
+    assert.equal(purchase.querySelector('i')?.classList.contains('fa-shopping-cart'), true);
     assert.equal(host.querySelectorAll('[data-request-action]').length, 4, 'Each command exists exactly once');
     const prior = dispatched.length;
-    host.querySelector('[data-request-action="assign"]').click();
-    assert.equal(dispatched.length, prior + 1); assert.deepEqual(dispatched.at(-1)[2], { action: 'assign' });
-    assert.equal(dispatched.at(-1)[1], host.querySelector('.request-row-more'), 'Overflow uses its connected trigger as the workflow opener');
+    purchase.click();
+    assert.equal(dispatched.length, prior + 1); assert.deepEqual(dispatched.at(-1)[2], { action: 'purchase' });
+    assert.equal(dispatched.at(-1)[1], more, 'More-menu Purchase opens the scoped request workflow from its connected trigger.');
+    await resized(160);
+    assert.deepEqual(inline(), ['assign']);
+    assert.deepEqual([...host.querySelectorAll('[popover] button')].map(n => n.dataset.requestAction), ['purchase', 'reject', 'alreadyOwn']);
+    more = host.querySelector('.request-row-more');
+    const reject = host.querySelector('[popover] [data-request-action="reject"]');
+    reject.click();
+    assert.equal(dispatched.length, prior + 2);
+    assert.deepEqual(dispatched.at(-1)[2], { action: 'reject' });
+    assert.equal(dispatched.at(-1)[1], more, 'Other overflow actions retain the same More trigger.');
     host.querySelector('[data-request-action="alreadyOwn"]').focus();
     await resized(400);
     assert.equal(document.activeElement.dataset.requestAction, 'alreadyOwn', 'Promoted command retains focus');
-    assert.equal(host.querySelector('[popover], .request-row-more'), null);
-    await resized(120); assert.deepEqual(inline(), ['purchase']);
+    assert.ok(host.querySelector('[popover] [data-request-action="purchase"]'), 'Responsive reflow keeps Purchase in More.');
+    await resized(120); assert.deepEqual(inline(), ['assign']);
     current = false;
-    host.querySelector('[data-request-action]').click(); assert.equal(dispatched.length, prior + 1, 'Revoked context cannot dispatch');
+    host.querySelector('[data-request-action]').click(); assert.equal(dispatched.length, prior + 2, 'Revoked context cannot dispatch');
     const retired = host.firstElementChild; unmount(); retired.click();
-    assert.equal(dispatched.length, prior + 1, 'Retired controls have no handlers');
+    assert.equal(dispatched.length, prior + 2, 'Retired controls have no handlers');
     assert.equal(observers.size, 0, 'Unmount retires every observer');
     dom.window.HTMLElement.prototype.getBoundingClientRect = rect;
   });

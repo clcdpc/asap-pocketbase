@@ -293,6 +293,10 @@ public sealed partial class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult("invalid_action");
         }
+        if (input.Action == "purchase" && input.Autohold.IsSupplied)
+        {
+            return new TitleRequestMutationResult("invalid_action");
+        }
 
         if (input.ValidationError is { } validationError)
         {
@@ -516,7 +520,7 @@ public sealed partial class TitleRequestMutationService(
             {
                 return ("bib_not_found", null);
             }
-            if (input.OperationId.HasValue)
+            if (input.OperationId.HasValue && input.Action != "purchase")
             {
                 failureCode = "holdings_unavailable";
                 var holdings = await staffPolarisProvider.GetBibHoldingsAsync(
@@ -854,7 +858,8 @@ public sealed partial class TitleRequestMutationService(
         string subject,
         string body,
         bool transportConfigured,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? readinessFailureReason = null)
     {
         var system = await context.EmailSettings.AsNoTracking()
             .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
@@ -877,7 +882,7 @@ public sealed partial class TitleRequestMutationService(
         }
         else if (!transportConfigured)
         {
-            suppressionReason = "mail_not_configured";
+            suppressionReason = readinessFailureReason ?? "mail_not_configured";
         }
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var outbox = new EmailOutbox
