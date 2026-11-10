@@ -1,5 +1,7 @@
+using Microsoft.IdentityModel.Tokens;
 using NLog;
 using NLog.Config;
+using NLog.Filters;
 using NLog.Layouts;
 using NLog.Targets;
 
@@ -7,6 +9,10 @@ namespace Asap.Web.Infrastructure.Logging;
 
 public static class NLogConfiguration
 {
+    private const string OpenIdConnectHandlerLogger =
+        "Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectHandler";
+    private const int OpenIdConnectExceptionProcessingEventId = 17;
+
     public static void Configure(
         string? configuredLogPath,
         string contentRootPath,
@@ -56,6 +62,15 @@ public static class NLogConfiguration
         AddRule(configuration, "Microsoft.EntityFrameworkCore.*", NLog.LogLevel.Warn, targets);
         AddRule(configuration, "System.Net.Http.HttpClient.*", NLog.LogLevel.Warn, targets);
         AddRule(configuration, "*", NLog.LogLevel.Warn, targets);
+        foreach (var rule in configuration.LoggingRules.Where(rule => rule.NameMatches(OpenIdConnectHandlerLogger)))
+        {
+            // OpenIdConnectHandler logs token-validation failures before invoking OnAuthenticationFailed.
+            // The app records this expected issuer rejection once at Warning with a stable reason.
+            rule.FilterDefaultAction = FilterResult.Log;
+            rule.Filters.Add(new WhenMethodFilter(logEvent =>
+                IsExpectedIssuerRejection(logEvent) ? FilterResult.Ignore : FilterResult.Neutral));
+        }
+
         LogManager.Configuration = configuration;
     }
 
@@ -81,4 +96,12 @@ public static class NLogConfiguration
         rule.Final = true;
         configuration.LoggingRules.Add(rule);
     }
+
+    private static bool IsExpectedIssuerRejection(LogEventInfo logEvent) =>
+        string.Equals(logEvent.LoggerName, OpenIdConnectHandlerLogger, StringComparison.Ordinal) &&
+        logEvent.Level == NLog.LogLevel.Error &&
+        logEvent.Message == "Exception occurred while processing message." &&
+        logEvent.Exception is SecurityTokenInvalidIssuerException &&
+        logEvent.Properties.TryGetValue("EventId", out var eventId) &&
+        eventId is int id && id == OpenIdConnectExceptionProcessingEventId;
 }

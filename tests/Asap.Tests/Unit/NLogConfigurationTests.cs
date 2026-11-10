@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.Tokens;
 using NLog;
 using NLog.Config;
 using NLog.Layouts;
@@ -61,6 +62,18 @@ public sealed class NLogConfigurationTests
                 var aspNet = loggerFactory.CreateLogger("Microsoft.AspNetCore.Hosting.Diagnostics");
                 aspNet.LogWarning("framework-warning");
                 aspNet.LogError(new InvalidOperationException("framework-stack-detail"), "framework-error");
+                var oidcHandler = loggerFactory.CreateLogger(
+                    "Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectHandler");
+                oidcHandler.Log(
+                    Microsoft.Extensions.Logging.LogLevel.Error,
+                    new EventId(17, "ExceptionProcessingMessage"),
+                    new SecurityTokenInvalidIssuerException("expected-issuer-detail"),
+                    "Exception occurred while processing message.");
+                oidcHandler.Log(
+                    Microsoft.Extensions.Logging.LogLevel.Error,
+                    new EventId(17, "ExceptionProcessingMessage"),
+                    new InvalidOperationException("unexpected-oidc-detail"),
+                    "Exception occurred while processing message.");
                 loggerFactory.CreateLogger("Microsoft.EntityFrameworkCore.Database.Command")
                     .LogWarning("sql-warning");
                 var authenticationLogger = loggerFactory.CreateLogger("Asap.Web.Features.Staff.StaffAuthentication");
@@ -90,6 +103,13 @@ public sealed class NLogConfigurationTests
             Assert.IsFalse(ContainsMessage(entries, "http-client-request"));
             Assert.IsTrue(ContainsMessage(entries, "framework-warning"));
             Assert.IsTrue(ContainsMessage(entries, "framework-error"));
+            var oidcHandlerFailure = entries.Single(entry =>
+                entry.GetProperty("logger").GetString() == "Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectHandler" &&
+                entry.GetProperty("message").GetString() == "Exception occurred while processing message.");
+            Assert.AreEqual("ERROR", oidcHandlerFailure.GetProperty("level").GetString());
+            StringAssert.Contains(oidcHandlerFailure.GetProperty("exception").GetString()!, "unexpected-oidc-detail");
+            Assert.IsFalse(entries.Any(entry => entry.TryGetProperty("exception", out var exception) &&
+                exception.GetString()!.Contains("expected-issuer-detail", StringComparison.Ordinal)));
             Assert.IsTrue(ContainsMessage(entries, "sql-warning"));
             Assert.IsTrue(ContainsMessage(entries, "first-party-information"));
             Assert.IsTrue(ContainsMessage(entries, "first-party-warning"));

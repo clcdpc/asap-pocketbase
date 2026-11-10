@@ -1,6 +1,10 @@
-using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
 using System.Net;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Asap.Web.Features.Staff;
+using Asap.Web.Infrastructure.Logging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -14,8 +18,12 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Http;
+using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
+using NLog.Config;
+using NLog.Targets;
+using NLog.Web;
 
 namespace Asap.Tests.Unit;
 
@@ -234,6 +242,137 @@ public sealed class StaffAuthenticationTests
     }
 
     [TestMethod]
+    public async Task DisallowedIssuerCallbackLogsOnceAtWarning()
+    {
+        var previousNLogConfiguration = NLog.LogManager.Configuration;
+        var temporaryRoot = Directory.CreateTempSubdirectory("asap-oidc-auth-log-test-");
+        try
+        {
+            NLogConfiguration.Configure(Path.Combine(temporaryRoot.FullName, "logs"), FindRepositoryRoot());
+            var nlogConfiguration = NLog.LogManager.Configuration!;
+            var capture = new MemoryTarget("oidc-auth-capture")
+            {
+                Layout = new NLog.Layouts.JsonLayout
+                {
+                    Attributes =
+                    {
+                        new NLog.Layouts.JsonAttribute("level", "${level:uppercase=true}"),
+                        new NLog.Layouts.JsonAttribute("logger", "${logger}"),
+                        new NLog.Layouts.JsonAttribute("eventId", "${event-properties:item=EventId}"),
+                        new NLog.Layouts.JsonAttribute("eventName", "${event-properties:item=EventName}"),
+                        new NLog.Layouts.JsonAttribute("message", "${message}"),
+                        new NLog.Layouts.JsonAttribute("exception", "${exception:format=tostring}")
+                    }
+                }
+            };
+            nlogConfiguration.AddTarget(capture);
+            foreach (var rule in nlogConfiguration.LoggingRules)
+            {
+                rule.Targets.Add(capture);
+            }
+            NLog.LogManager.Configuration = nlogConfiguration;
+            NLog.LogManager.ReconfigExistingLoggers();
+
+            var externalConfiguration = TestConfigurationFactory.Create();
+            var allowedTenantId = Guid.Parse(externalConfiguration.Authentication.Entra.AllowedTenantIds![0]);
+            var allowedIssuer = $"https://login.microsoftonline.com/{allowedTenantId:D}/v2.0";
+            var rejectedIssuer = $"https://login.microsoftonline.com/{Guid.NewGuid():D}/v2.0";
+            var signingKey = new SymmetricSecurityKey(RandomNumberGenerator.GetBytes(32));
+            var oidcConfiguration = new OpenIdConnectConfiguration
+            {
+                Issuer = allowedIssuer,
+                AuthorizationEndpoint = "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+                TokenEndpoint = "https://login.microsoftonline.com/organizations/oauth2/v2.0/token"
+            };
+            oidcConfiguration.SigningKeys.Add(signingKey);
+
+            using var host = await new HostBuilder()
+                .ConfigureLogging(logging => logging.ClearProviders())
+                .ConfigureWebHost(webHost => webHost
+                    .UseTestServer()
+                    .UseEnvironment("Testing")
+                    .ConfigureServices(services =>
+                    {
+                        services.AddStaffAuthentication(
+                            externalConfiguration,
+                            new StubWebHostEnvironment("Testing"));
+                        services.PostConfigure<OpenIdConnectOptions>(
+                            StaffAuthenticationRegistration.EntraScheme,
+                            options => options.ConfigurationManager =
+                                new StaticConfigurationManager<OpenIdConnectConfiguration>(oidcConfiguration));
+                    })
+                    .Configure(app =>
+                    {
+                        app.UseAuthentication();
+                        app.Run(async context =>
+                        {
+                            if (context.Request.Path == "/challenge")
+                            {
+                                await context.ChallengeAsync(
+                                    StaffAuthenticationRegistration.EntraScheme,
+                                    new OpenIdConnectChallengeProperties { RedirectUri = "/staff/" });
+                                return;
+                            }
+
+                            context.Response.StatusCode = StatusCodes.Status404NotFound;
+                        });
+                    }))
+                .UseNLog(new NLogAspNetCoreOptions { RemoveLoggerFactoryFilter = false })
+                .StartAsync();
+
+            using var client = host.GetTestClient();
+            using var challenge = await client.GetAsync("/challenge");
+            Assert.AreEqual(HttpStatusCode.Redirect, challenge.StatusCode);
+            var challengeLocation = challenge.Headers.Location!;
+            var query = QueryHelpers.ParseQuery(challengeLocation.Query);
+            var cookies = challenge.Headers.GetValues("Set-Cookie")
+                .Select(value => value.Split(';', 2)[0]);
+            var idToken = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
+                issuer: rejectedIssuer,
+                audience: externalConfiguration.Authentication.Entra.ClientId,
+                claims: [new Claim("sub", "synthetic-issuer-rejection"), new Claim("nonce", query["nonce"].ToString())],
+                notBefore: DateTime.UtcNow.AddMinutes(-1),
+                expires: DateTime.UtcNow.AddMinutes(5),
+                signingCredentials: new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256)));
+            using var callbackRequest = new HttpRequestMessage(HttpMethod.Post, "/signin-oidc")
+            {
+                Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["id_token"] = idToken,
+                    ["state"] = query["state"].ToString()
+                })
+            };
+            callbackRequest.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", cookies));
+
+            using var callback = await client.SendAsync(callbackRequest);
+            Assert.AreEqual(HttpStatusCode.Redirect, callback.StatusCode);
+            Assert.AreEqual("/staff/?signInError=denied", callback.Headers.Location?.ToString());
+
+            NLog.LogManager.Flush();
+            var entries = capture.Logs.Select(ParseLogEntry).ToArray();
+            Assert.IsFalse(entries.Any(entry =>
+                entry.GetProperty("logger").GetString() == "Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectHandler" &&
+                entry.GetProperty("message").GetString() == "Exception occurred while processing message."));
+
+            var staffRejections = entries.Where(entry =>
+                entry.GetProperty("logger").GetString() == "Asap.Web.Features.Staff.StaffAuthentication" &&
+                entry.GetProperty("message").GetString()!.Contains(
+                    StaffAuthenticationRegistration.TenantNotAllowedReason,
+                    StringComparison.Ordinal)).ToArray();
+            Assert.AreEqual(1, staffRejections.Length);
+            var staffRejection = staffRejections[0];
+            Assert.AreEqual("WARN", staffRejection.GetProperty("level").GetString());
+        }
+        finally
+        {
+            NLog.LogManager.Flush();
+            NLog.LogManager.Configuration = previousNLogConfiguration;
+            NLog.LogManager.ReconfigExistingLoggers();
+            temporaryRoot.Delete(recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task HeaderBasedStaffAuthenticationSchemeExistsOnlyInTesting()
     {
         foreach (var (environmentName, expected) in new[]
@@ -299,6 +438,23 @@ public sealed class StaffAuthenticationTests
         context.TraceIdentifier = "auth-correlation-42";
         context.Response.Body = new MemoryStream();
         return context;
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Asap.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName ?? throw new InvalidOperationException("Could not locate the repository root.");
+    }
+
+    private static JsonElement ParseLogEntry(string message)
+    {
+        using var document = JsonDocument.Parse(message);
+        return document.RootElement.Clone();
     }
 
     private sealed class CapturingLoggerProvider : ILoggerProvider
