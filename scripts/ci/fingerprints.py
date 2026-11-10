@@ -17,6 +17,14 @@ import selection as test_selection
 ROOT = Path(__file__).resolve().parents[2]
 SUITES = ("dotnet", "browser", "frontend")
 SQL_TAG = "mcr.microsoft.com/mssql/server:2022-latest"
+SQL_REGISTRY_MANIFESTS = "https://mcr.microsoft.com/v2/mssql/server/manifests/{}"
+SQL_MANIFEST_ACCEPT = ", ".join((
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+))
+MAX_MANIFEST_BYTES = 1024 * 1024
 CONFIG = ROOT / "scripts/ci/test-reuse.json"
 SOURCE_ALGORITHM = "suite-inputs-v1"
 EXECUTORS = {
@@ -121,27 +129,44 @@ def selections(root=ROOT, verify=False):
 
 def sql_image():
     # Resolve the mutable tag without starting/downloading SQL. Execute the resolved digest.
-    request = urllib.request.Request(
-        "https://mcr.microsoft.com/v2/mssql/server/manifests/2022-latest",
-        headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json, "
-                           "application/vnd.oci.image.index.v1+json, "
-                           "application/vnd.docker.distribution.manifest.list.v2+json"})
-    with urllib.request.urlopen(request, timeout=15) as response:
-        body = response.read(1024 * 1024 + 1)
-        identity = response.headers.get("Docker-Content-Digest", "")
-    if len(body) > 1024 * 1024 or identity != "sha256:" + hashlib.sha256(body).hexdigest():
-        raise ValueError("SQL registry did not provide a verifiable manifest digest")
-    manifest = json.loads(body)
+    manifest, identity = sql_manifest("2022-latest")
     if "manifests" in manifest:
-        matches = [m for m in manifest["manifests"]
-                   if m.get("platform", {}).get("os") == "linux"
-                   and m.get("platform", {}).get("architecture") == "amd64"]
+        descriptors = manifest["manifests"]
+        if not isinstance(descriptors, list):
+            raise ValueError("SQL image index manifests are malformed")
+        matches = [descriptor for descriptor in descriptors
+                   if isinstance(descriptor, dict)
+                   and isinstance(descriptor.get("platform"), dict)
+                   and descriptor["platform"].get("os") == "linux"
+                   and descriptor["platform"].get("architecture") == "amd64"]
         if len(matches) != 1:
             raise ValueError("SQL Linux x64 manifest is ambiguous")
-        identity = matches[0]["digest"]
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", identity):
+        identity = matches[0].get("digest", "")
+        if not isinstance(identity, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", identity):
+            raise ValueError("SQL image digest is unavailable")
+    if not isinstance(identity, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", identity):
         raise ValueError("SQL image digest is unavailable")
+    manifest, identity = sql_manifest(identity, expected_digest=identity)
+    if "manifests" in manifest:
+        raise ValueError("SQL Linux x64 image descriptor did not resolve to a single manifest")
     return "mcr.microsoft.com/mssql/server@" + identity
+
+
+def sql_manifest(reference, expected_digest=None):
+    request = urllib.request.Request(SQL_REGISTRY_MANIFESTS.format(reference),
+                                     headers={"Accept": SQL_MANIFEST_ACCEPT})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        body = response.read(MAX_MANIFEST_BYTES + 1)
+        identity = response.headers.get("Docker-Content-Digest", "")
+    actual_digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    if (len(body) > MAX_MANIFEST_BYTES or not isinstance(identity, str)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", identity)
+            or identity != actual_digest or (expected_digest is not None and identity != expected_digest)):
+        raise ValueError("SQL registry did not provide a verifiable manifest digest")
+    manifest = json.loads(body)
+    if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 2:
+        raise ValueError("SQL registry returned a malformed image manifest")
+    return manifest, identity
 
 
 def nuget_identity(root=ROOT):

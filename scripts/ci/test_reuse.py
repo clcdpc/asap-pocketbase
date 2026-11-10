@@ -1088,6 +1088,14 @@ class ApiTests(unittest.TestCase):
 
 
 class EnvironmentTests(unittest.TestCase):
+    @staticmethod
+    def registry_response(body, identity=None):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = body
+        response.headers = {"Docker-Content-Digest": identity or "sha256:" + hashlib.sha256(body).hexdigest()}
+        return response
+
     def environment(self, extra=None, sql_error=False, tool_version="version-1", package_version="1"):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
@@ -1164,15 +1172,75 @@ class EnvironmentTests(unittest.TestCase):
         second, _, _ = self.environment({"RUNNER_NAME": "ephemeral-two"})
         self.assertEqual(first, second)
 
-    def test_registry_body_requires_its_immutable_sha256(self):
-        body = fp.canonical({"schemaVersion": 2})
-        response = mock.MagicMock()
-        response.__enter__.return_value = response
-        response.read.return_value = body
-        response.headers = {"Docker-Content-Digest": "sha256:" + hashlib.sha256(body).hexdigest()}
-        with mock.patch.object(fp.urllib.request, "urlopen", return_value=response):
-            self.assertEqual(fp.sql_image(), "mcr.microsoft.com/mssql/server@" + response.headers["Docker-Content-Digest"])
-            response.headers = {"Docker-Content-Digest": "sha256:" + "0" * 64}
+    def test_registry_accepts_native_oci_and_docker_single_manifests(self):
+        for media_type in ("application/vnd.oci.image.manifest.v1+json",
+                           "application/vnd.docker.distribution.manifest.v2+json"):
+            with self.subTest(media_type=media_type):
+                body = fp.canonical({"schemaVersion": 2, "mediaType": media_type, "config": {}, "layers": []})
+                identity = "sha256:" + hashlib.sha256(body).hexdigest()
+                with mock.patch.object(fp.urllib.request, "urlopen",
+                                       side_effect=[self.registry_response(body),
+                                                    self.registry_response(body)]) as urlopen:
+                    self.assertEqual(fp.sql_image(), "mcr.microsoft.com/mssql/server@" + identity)
+                self.assertEqual(urlopen.call_count, 2)
+                self.assertIn("application/vnd.oci.image.manifest.v1+json",
+                              urlopen.call_args.args[0].headers["Accept"])
+                self.assertIn("application/vnd.docker.distribution.manifest.v2+json",
+                              urlopen.call_args.args[0].headers["Accept"])
+                self.assertTrue(urlopen.call_args_list[1].args[0].full_url.endswith("/" + identity))
+
+    def test_registry_indexes_select_and_verify_only_the_linux_amd64_manifest(self):
+        child_body = fp.canonical({"schemaVersion": 2, "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+                                   "config": {}, "layers": []})
+        child_digest = "sha256:" + hashlib.sha256(child_body).hexdigest()
+        descriptors = [
+            {"digest": "sha256:" + "1" * 64, "platform": {"os": "linux", "architecture": "arm64"}},
+            {"digest": "sha256:" + "2" * 64, "platform": {"os": "windows", "architecture": "amd64"}},
+            {"digest": child_digest, "platform": {"os": "linux", "architecture": "amd64"}},
+        ]
+        for media_type in ("application/vnd.oci.image.index.v1+json",
+                           "application/vnd.docker.distribution.manifest.list.v2+json"):
+            with self.subTest(media_type=media_type):
+                index_body = fp.canonical({"schemaVersion": 2, "mediaType": media_type, "manifests": descriptors})
+                with mock.patch.object(fp.urllib.request, "urlopen",
+                                       side_effect=[self.registry_response(index_body),
+                                                    self.registry_response(child_body)]) as urlopen:
+                    self.assertEqual(fp.sql_image(), "mcr.microsoft.com/mssql/server@" + child_digest)
+                self.assertEqual(urlopen.call_count, 2)
+                self.assertTrue(urlopen.call_args_list[1].args[0].full_url.endswith("/" + child_digest))
+
+    def test_registry_rejects_malformed_or_mismatched_digest_responses(self):
+        valid_body = fp.canonical({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                                   "config": {}, "layers": []})
+        malformed_json = b"{not-json"
+        oversized = b"x" * (fp.MAX_MANIFEST_BYTES + 1)
+        invalid_responses = (
+            self.registry_response(valid_body, "invalid-digest"),
+            self.registry_response(valid_body, "sha256:" + "0" * 64),
+            self.registry_response(malformed_json),
+            self.registry_response(oversized),
+            self.registry_response(fp.canonical({"schemaVersion": 2, "manifests": {}})),
+        )
+        for registry_response in invalid_responses:
+            with self.subTest(identity=registry_response.headers["Docker-Content-Digest"],
+                              size=len(registry_response.read.return_value)), \
+                    mock.patch.object(fp.urllib.request, "urlopen", return_value=registry_response):
+                with self.assertRaises(ValueError):
+                    fp.sql_image()
+
+        index_body = fp.canonical({"schemaVersion": 2, "manifests": [{
+            "digest": "sha256:" + "3" * 64, "platform": {"os": "linux", "architecture": "amd64"}}]})
+        child_body = fp.canonical({"schemaVersion": 2, "config": {}, "layers": []})
+        with mock.patch.object(fp.urllib.request, "urlopen",
+                               side_effect=[self.registry_response(index_body),
+                                            self.registry_response(child_body)]):
+            with self.assertRaises(ValueError):
+                fp.sql_image()
+
+        duplicate_platforms = fp.canonical({"schemaVersion": 2, "manifests": [
+            {"digest": "sha256:" + "4" * 64, "platform": {"os": "linux", "architecture": "amd64"}},
+            {"digest": "sha256:" + "5" * 64, "platform": {"os": "linux", "architecture": "amd64"}}]})
+        with mock.patch.object(fp.urllib.request, "urlopen", return_value=self.registry_response(duplicate_platforms)):
             with self.assertRaises(ValueError):
                 fp.sql_image()
 
