@@ -7,8 +7,11 @@ import os
 from pathlib import Path
 import platform
 import re
+import socket
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 
 import selection as test_selection
@@ -17,6 +20,15 @@ import selection as test_selection
 ROOT = Path(__file__).resolve().parents[2]
 SUITES = ("dotnet", "browser", "frontend")
 SQL_TAG = "mcr.microsoft.com/mssql/server:2022-latest"
+SQL_MANIFEST_ACCEPT = ", ".join((
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+))
+MAX_MANIFEST_BYTES = 1024 * 1024
+SQL_REGISTRY_MAX_ATTEMPTS = 3
+SQL_REGISTRY_RETRY_BACKOFF_SECONDS = (0.25, 0.5)
 CONFIG = ROOT / "scripts/ci/test-reuse.json"
 SOURCE_ALGORITHM = "suite-inputs-v1"
 EXECUTORS = {
@@ -121,27 +133,83 @@ def selections(root=ROOT, verify=False):
 
 def sql_image():
     # Resolve the mutable tag without starting/downloading SQL. Execute the resolved digest.
-    request = urllib.request.Request(
-        "https://mcr.microsoft.com/v2/mssql/server/manifests/2022-latest",
-        headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json, "
-                           "application/vnd.oci.image.index.v1+json, "
-                           "application/vnd.docker.distribution.manifest.list.v2+json"})
-    with urllib.request.urlopen(request, timeout=15) as response:
-        body = response.read(1024 * 1024 + 1)
-        identity = response.headers.get("Docker-Content-Digest", "")
-    if len(body) > 1024 * 1024 or identity != "sha256:" + hashlib.sha256(body).hexdigest():
-        raise ValueError("SQL registry did not provide a verifiable manifest digest")
-    manifest = json.loads(body)
+    repository, tag, manifests_url = sql_image_source()
+    manifest, identity = sql_manifest(tag, manifests_url)
     if "manifests" in manifest:
-        matches = [m for m in manifest["manifests"]
-                   if m.get("platform", {}).get("os") == "linux"
-                   and m.get("platform", {}).get("architecture") == "amd64"]
+        descriptors = manifest["manifests"]
+        if not isinstance(descriptors, list):
+            raise ValueError("SQL image index manifests are malformed")
+        matches = [descriptor for descriptor in descriptors
+                   if isinstance(descriptor, dict)
+                   and isinstance(descriptor.get("platform"), dict)
+                   and descriptor["platform"].get("os") == "linux"
+                   and descriptor["platform"].get("architecture") == "amd64"]
         if len(matches) != 1:
             raise ValueError("SQL Linux x64 manifest is ambiguous")
-        identity = matches[0]["digest"]
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", identity):
+        identity = matches[0].get("digest", "")
+        if not isinstance(identity, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", identity):
+            raise ValueError("SQL image digest is unavailable")
+    if not isinstance(identity, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", identity):
         raise ValueError("SQL image digest is unavailable")
-    return "mcr.microsoft.com/mssql/server@" + identity
+    manifest, identity = sql_manifest(identity, manifests_url, expected_digest=identity)
+    if "manifests" in manifest:
+        raise ValueError("SQL Linux x64 image descriptor did not resolve to a single manifest")
+    return repository + "@" + identity
+
+
+def sql_image_source():
+    repository, separator, tag = SQL_TAG.rpartition(":")
+    if not separator or not tag or "@" in tag:
+        raise ValueError("Configured SQL image must include a repository and tag")
+    registry, separator, image = repository.partition("/")
+    if not separator or not registry or not image:
+        raise ValueError("Configured SQL image must include a registry and repository")
+    return repository, tag, f"https://{registry}/v2/{image}/manifests/"
+
+
+def sql_registry_failure_is_transient(error):
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code in (408, 429) or 500 <= error.code <= 599
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    return isinstance(reason, (TimeoutError, socket.timeout, ConnectionError))
+
+
+def sql_registry_failure_detail(error):
+    if isinstance(error, urllib.error.HTTPError):
+        return f"HTTP {error.code} {error.reason}"
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    return str(reason) or "connection timeout"
+
+
+def sql_registry_response(request):
+    for attempt in range(SQL_REGISTRY_MAX_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                return response.read(MAX_MANIFEST_BYTES + 1), response.headers.get("Docker-Content-Digest", "")
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, socket.timeout, ConnectionError) as error:
+            if not sql_registry_failure_is_transient(error):
+                raise
+            if attempt + 1 == SQL_REGISTRY_MAX_ATTEMPTS:
+                detail = sql_registry_failure_detail(error)
+                raise RuntimeError(
+                    f"SQL registry request failed after {SQL_REGISTRY_MAX_ATTEMPTS} attempts: {detail}"
+                ) from error
+            time.sleep(SQL_REGISTRY_RETRY_BACKOFF_SECONDS[attempt])
+
+
+def sql_manifest(reference, manifests_url, expected_digest=None):
+    request = urllib.request.Request(manifests_url + reference,
+                                     headers={"Accept": SQL_MANIFEST_ACCEPT})
+    body, identity = sql_registry_response(request)
+    actual_digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    if (len(body) > MAX_MANIFEST_BYTES or not isinstance(identity, str)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", identity)
+            or identity != actual_digest or (expected_digest is not None and identity != expected_digest)):
+        raise ValueError("SQL registry did not provide a verifiable manifest digest")
+    manifest = json.loads(body)
+    if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 2:
+        raise ValueError("SQL registry returned a malformed image manifest")
+    return manifest, identity
 
 
 def nuget_identity(root=ROOT):
