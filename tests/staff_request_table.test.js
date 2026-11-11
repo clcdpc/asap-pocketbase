@@ -47,8 +47,13 @@ async function until(predicate, message) {
       assert.deepEqual(eligibleRowActions(request, { ...actor, role: 'retired' }), [], 'Unknown role cannot offer commands');
     }
     for (const autohold of [true, false]) {
-      assert.equal(eligibleRowActions({ ...record, status: 'outstanding_purchase', autohold,
-        capabilities: { allowedActions: ['catalogFound'] } }, actor)[0].label, autohold ? 'Ready for hold' : 'Close without hold');
+      const missingBib = eligibleRowActions({ ...record, status: 'outstanding_purchase', autohold, bibid: null,
+        capabilities: { allowedActions: ['catalogFound'] } }, actor)[0];
+      assert.equal(missingBib.label, autohold ? 'Ready for hold' : 'Close without hold');
+      assert.equal(Boolean(missingBib.disabled), autohold, 'Ready for hold is disabled until the saved request has a BIB.');
+      const savedBib = eligibleRowActions({ ...record, status: 'outstanding_purchase', autohold: true, bibid: 9001,
+        capabilities: { allowedActions: ['catalogFound'] } }, actor)[0];
+      assert.equal(Boolean(savedBib.disabled), false, 'A saved BIB keeps the action capability available.');
     }
     const observers = new Set();
     dom.window.ResizeObserver = class {

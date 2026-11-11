@@ -3,7 +3,7 @@ import { createLatestLoad } from '../../shared/latest-load.js';
 import { createDraftScope } from './draft-scope.js';
 import { confirmAction, controlSnapshot } from './confirmation.js';
 import { createRequestEditor } from './request-editor.js';
-import { researchRecordUrl, researchRecordValue } from './research.js';
+import { positivePolarisId, researchRecordUrl, researchRecordValue } from './research.js';
 import { createRequestWorkflows } from './request-workflows.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
 import { validRequestId } from './recent-requests.js';
@@ -702,7 +702,27 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       element('span', { text: `Submitted ${dateTime(request.created)}` }),
       element('span', { text: request.claimedByDisplayName ? `Claimed by ${request.claimedByDisplayName}` : 'Unclaimed' })
     ]);
-    body.append(element('div', { className: 'request-heading-context' }, [meta, workflows.buildActions()]));
+    let bibPrerequisite = null;
+    if (request.status === 'outstanding_purchase' && request.autohold === true && positivePolarisId(request.bibid) === null) {
+      const headingId = `request-${request.id}-bib-prerequisite-heading`;
+      bibPrerequisite = element('section', { className: 'request-bib-prerequisite', 'aria-labelledby': headingId });
+      const link = element('a', { className: 'request-bib-prerequisite-link', href: `#request-${request.id}-bib-id`,
+        onclick: event => {
+          event.preventDefault();
+          if (!live() || !bibPrerequisite?.isConnected) return;
+          activateTab('details');
+          editor.focusBib();
+        } }, 'Go to BIB ID');
+      bibPrerequisite.append(
+        element('span', { className: 'request-bib-prerequisite-icon', 'aria-hidden': 'true' }, icon('info-circle')),
+        element('div', { className: 'request-bib-prerequisite-copy' }, [
+          element('h3', { id: headingId, text: 'Waiting for a BIB ID' }),
+          element('p', { text: 'Add and save a Polaris BIB ID before moving this request to Ready for hold.' }),
+          link
+        ])
+      );
+    }
+    body.append(element('div', { className: 'request-heading-context' }, [meta, bibPrerequisite, workflows.buildActions()]));
     const workflowPanel = element('div', { className: 'request-workflow-panel' });
     body.append(workflowPanel);
     const detailsPanel = element('section', { className: 'request-details-panel' });
