@@ -16,6 +16,12 @@ ephemeral credentials, loopback port and unconditional cleanup. Commands remain
 serial within each worker; reused native suites prepare no SQL/Chromium runtime.
 Evidence reuse remains independent for all three suites. Draft validation also
 uses Ubuntu 24.04; DEVWEB/IIS deployment retains its existing local runner.
+Chromium/system dependency installation retries once after a recognized transient
+DNS failure, with a 30-second delay and a 25-minute total step deadline. Each
+attempt keeps its complete output in the Actions log. Other installation errors,
+cancellation and a failed second attempt fail qualification; browser tests are
+never retried by this setup helper. This tolerates a brief mirror/DNS outage,
+but does not bypass an ongoing outage or change the runner's DNS/apt sources.
 The frontend worker owns root Node contracts and the declared portable
 acceptance authentication/runner files. Discovery, per-file execution receipts
 and fingerprints cover that same population; additional acceptance runtime,

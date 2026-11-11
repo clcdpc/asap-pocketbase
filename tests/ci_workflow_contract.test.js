@@ -695,6 +695,10 @@ async function main() {
     assert.equal(step(owners.dotnet, 'Run .NET and real SQL tests (non-browser partition)').run,
       'bash scripts/ci/run-with-performance.sh python3 -B scripts/ci/selection.py run');
     assert.equal(step(owners.browser, 'Run browser accessibility tests').run, 'bash scripts/ci/run-with-performance.sh npm run test:browser');
+    const browserInstall = step(owners.browser, 'Install browser acceptance dependencies');
+    assert.equal(browserInstall.run, 'bash scripts/ci/install-browser-dependencies.sh');
+    assert.equal(browserInstall['timeout-minutes'], 25);
+    assert.equal(browserInstall['continue-on-error'], undefined);
     for (const [context, expected] of [[await routed(pr('ready_for_review', false)), 3], [await routed(pr('converted_to_draft', true)), 1]]) {
       const active = Object.values(workflow.jobs).filter((job) => job['runs-on'] === 'ubuntu-24.04' && enabled(job, context));
       assert.equal(active.length, expected);

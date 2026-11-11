@@ -691,7 +691,8 @@ jobs:
 
       - name: Install browser acceptance dependencies
         if: ${{ steps.reuse.outputs.browser != 'true' }}
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 25
+        run: bash scripts/ci/install-browser-dependencies.sh
 
       - name: Run browser accessibility tests
         id: browser
