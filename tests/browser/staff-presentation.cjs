@@ -245,6 +245,109 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
           }));
           assert.deepEqual(feedback, { height: 0, top: '0px', bottom: '0px', role: 'status', live: 'polite' });
         };
+        const verifyGlobalStatus = async () => {
+          await page.evaluate(async () => {
+            const { createStaffShell } = await import('/staff/js/shell.js');
+            window.__staffStatusRegressionShell = createStaffShell({ root: document,
+              sessionIdentity: { preferences: () => null }, getContext: () => ({ activeView: 'queue', scope: '383091' }),
+              settingsScope: () => 'system', operationsScope: () => 'all', findTitle: () => null,
+              openRecentTitle() {}, onViewIntent() {}, onSignOutIntent() {} });
+          });
+          const bounds = () => page.evaluate(() => {
+            const rect = node => {
+              const box = node.getBoundingClientRect();
+              return { top: box.top, right: box.right, bottom: box.bottom, left: box.left, width: box.width, height: box.height };
+            };
+            return { tabs: rect(document.querySelector('.view-tabs')), workspace: rect(document.getElementById('workspace')),
+              content: rect(document.getElementById('queue-view')) };
+          });
+          const baseline = await bounds();
+          await page.evaluate(() => {
+            window.__staffStatusRegressionClear = window.__staffStatusRegressionShell.announce('Loading status layout check...');
+          });
+          const populated = await page.locator('#app-status').evaluate(node => {
+            const box = node.getBoundingClientRect(), style = getComputedStyle(node);
+            return { text: node.textContent, display: style.display, position: style.position, pointerEvents: style.pointerEvents,
+              role: node.getAttribute('role'), live: node.getAttribute('aria-live'), bounds: { top: box.top, right: box.right,
+                bottom: box.bottom, left: box.left, width: box.width, height: box.height },
+              viewport: { width: innerWidth, height: innerHeight } };
+          });
+          assert.equal(populated.text, 'Loading status layout check...');
+          assert.equal(populated.display, 'block');
+          assert.equal(populated.position, 'fixed');
+          assert.equal(populated.pointerEvents, 'none');
+          assert.equal(populated.role, 'status');
+          assert.equal(populated.live, 'polite');
+          assert.ok(populated.bounds.width > 0 && populated.bounds.height > 0, 'A populated global status is visible.');
+          assert.ok(populated.bounds.left >= 0 && populated.bounds.right <= populated.viewport.width,
+            'The global status remains within the viewport.');
+          assert.ok(populated.bounds.bottom <= populated.viewport.height,
+            'The global status remains above the viewport bottom.');
+          assert.ok(populated.bounds.width <= 420, 'The global status remains compact on wide viewports.');
+          assert.ok(populated.bounds.right >= populated.viewport.width - 32,
+            'The global status sits near the bottom-right corner.');
+          assert.ok(populated.bounds.bottom >= populated.viewport.height - 32,
+            'The global status sits near the viewport bottom.');
+          assert.deepEqual(await bounds(), baseline, 'Showing the global status does not move the tabs or workspace content.');
+          await page.evaluate(() => window.__staffStatusRegressionClear());
+          const empty = await page.locator('#app-status').evaluate(node => ({
+            display: getComputedStyle(node).display, height: node.getBoundingClientRect().height, text: node.textContent
+          }));
+          assert.deepEqual(empty, { display: 'none', height: 0, text: '' }, 'An empty global status leaves no visible notification or layout space.');
+          assert.deepEqual(await bounds(), baseline, 'Clearing the global status does not move the tabs or workspace content.');
+
+          const staleClear = await page.evaluate(() => {
+            const clearLoading = window.__staffStatusRegressionShell.announce('Loading settings...');
+            window.__staffStatusRegressionShell.announce('Saved current changes.', 'success');
+            clearLoading();
+            const status = document.getElementById('app-status');
+            return { text: status.textContent, className: status.className };
+          });
+          assert.deepEqual(staleClear, { text: 'Saved current changes.', className: 'status-message success' },
+            'A stale loading completion does not clear a newer announcement.');
+
+          for (const kind of ['error', 'warning', 'success']) {
+            const presentation = await page.evaluate(kind => {
+              const status = document.getElementById('app-status'), expected = document.createElement('span');
+              const token = kind === 'error' ? 'danger' : kind;
+              expected.style.cssText = `position:fixed;visibility:hidden;color:var(--${token})`;
+              document.body.append(expected);
+              const expectedColor = getComputedStyle(expected).color;
+              expected.remove();
+              window.__staffStatusRegressionShell.announce(`${kind} feedback`, kind);
+              const style = getComputedStyle(status);
+              return { text: status.textContent, className: status.className, color: style.color, expectedColor, fontWeight: style.fontWeight };
+            }, kind);
+            assert.equal(presentation.text, `${kind} feedback`);
+            assert.equal(presentation.className, `status-message ${kind}`);
+            assert.equal(presentation.color, presentation.expectedColor, `${kind} status retains its theme color.`);
+            assert.equal(presentation.fontWeight, '600', `${kind} status remains emphasized.`);
+          }
+
+          if (populated.viewport.width <= 760) {
+            const longMessage = `https://${'long-status-subdomain-'.repeat(20)}example.test/operation-result`;
+            const wrapped = await page.evaluate(message => {
+              const status = document.getElementById('app-status');
+              window.__staffStatusRegressionShell.announce(message);
+              const box = status.getBoundingClientRect(), style = getComputedStyle(status);
+              return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
+                statusWidth: box.width, statusRight: box.right, statusScrollWidth: status.scrollWidth,
+                clientWidth: status.clientWidth, overflowWrap: style.overflowWrap };
+            }, longMessage);
+            assert.equal(wrapped.overflowWrap, 'anywhere');
+            assert.ok(wrapped.statusWidth > 0 && wrapped.statusWidth <= wrapped.width - 32,
+              'A long mobile message wraps within the notification width.');
+            assert.ok(wrapped.statusScrollWidth <= wrapped.clientWidth + 1,
+              'A long mobile message has no horizontal overflow inside the notification.');
+            assert.ok(wrapped.statusRight <= wrapped.width, 'A long mobile message stays within the viewport.');
+            assert.ok(wrapped.scrollWidth <= wrapped.width, 'A long mobile message does not cause page overflow.');
+          }
+          await page.evaluate(() => {
+            window.__staffStatusRegressionShell.dispose();
+            delete window.__staffStatusRegressionShell;
+            delete window.__staffStatusRegressionClear;
+          });
+        };
         const scan = async state => {
           await recordSpacing(state);
           await page.evaluate(axe);
@@ -273,6 +376,12 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
         await page.locator('#workspace:not([hidden])').waitFor();
         await page.locator('#refresh-queue:not([disabled])').waitFor();
         await quietFeedback();
+        if (width === 390) {
+          await page.setViewportSize({ width: 320, height: 900 });
+          await verifyGlobalStatus();
+          await page.setViewportSize({ width, height: 900 });
+        }
+        await verifyGlobalStatus();
         await page.locator('#refresh-queue').click();
         await page.locator('#refresh-queue:not([disabled])').waitFor();
         await quietFeedback();
