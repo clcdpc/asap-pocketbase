@@ -147,11 +147,12 @@ async function main() {
       assert.equal(enabled(deploy, context), false);
     });
   }
-  await check('same-commit draft/ready transitions select new validation and the same cancellation group', async () => {
+  await check('same-commit draft/ready transitions select new validation without native cross-cancellation', async () => {
     const states = [pr('opened', true), pr('ready_for_review', false), pr('converted_to_draft', true), pr('ready_for_review', false)];
+    states.forEach((context, index) => { context.github.run_id += index; });
     await Promise.all(states.map((context) => routed(context)));
     assert.equal(new Set(states.map((c) => c.github.sha)).size, 1);
-    assert.equal(new Set(states.map((c) => template(workflow.concurrency.group, c))).size, 1);
+    assert.equal(new Set(states.map((c) => template(workflow.concurrency.group, c))).size, states.length);
     assert.deepEqual(states.map((c) => enabled(full, c)), [false, true, false, true]);
     assert.deepEqual(states.map((c) => evaluate(gate.name, c)),
       ['Draft CI result', 'Build, test and package', 'Draft CI result', 'Build, test and package']);
@@ -187,8 +188,8 @@ async function main() {
       staleRetry.github.run_attempt = 3;
       assert.notEqual(template(workflow.concurrency.group, staleRetry), template(workflow.concurrency.group, after),
         'Concurrency is evaluated before preflight, including when failed-job reruns reuse the original preflight');
-      assert.equal(template(workflow.concurrency.group, staleRetry), template(workflow.concurrency.group, before));
-      assert.equal(evaluate(workflow.concurrency['cancel-in-progress'], after), 'true');
+      assert.notEqual(template(workflow.concurrency.group, staleRetry), template(workflow.concurrency.group, before));
+      assert.equal(workflow.concurrency['cancel-in-progress'], false);
       await routed(staleRetry, after.github.event.pull_request);
       assert.equal(staleRetry.needs['validation-policy'].result, 'failure');
       for (const job of [...Object.values(owners), draft]) assert.equal(enabled(job, staleRetry), false);
@@ -196,17 +197,20 @@ async function main() {
       after.github.event.pull_request.head.sha = before.github.event.pull_request.head.sha;
       assert.notEqual(template(workflow.concurrency.group, before), template(workflow.concurrency.group, after));
     }
+    const otherPr = pr('opened', true, 18);
+    otherPr.github.run_id++;
     assert.notEqual(template(workflow.concurrency.group, pr('opened', true, 17)),
-      template(workflow.concurrency.group, pr('opened', true, 18)));
+      template(workflow.concurrency.group, otherPr));
   });
-  await check('same tested commit reruns retain cancellation without joining the former PR-only group', () => {
+  await check('same tested commit reruns are isolated from newer attempts and historical PR groups', () => {
     const context = pr('ready_for_review', false);
     const retry = structuredClone(context);
     retry.github.run_attempt++;
-    assert.equal(template(workflow.concurrency.group, context), template(workflow.concurrency.group, retry));
-    assert.equal(evaluate(workflow.concurrency['cancel-in-progress'], retry), 'true');
+    assert.notEqual(template(workflow.concurrency.group, context), template(workflow.concurrency.group, retry));
+    assert.equal(workflow.concurrency['cancel-in-progress'], false);
     assert.notEqual(template(workflow.concurrency.group, context), `${workflow.name}-pr-17`,
       'Historical runs retain the old workflow definition when rerun');
+    assert.notEqual(template(workflow.concurrency.group, context), `${workflow.name}-pr-17-${context.github.sha}`);
   });
   await check('manual, push, tag and rerun attempts cannot cross-cancel, even at the same SHA', async () => {
     const contexts = [
@@ -220,7 +224,7 @@ async function main() {
     assert.equal(new Set(groups).size, groups.length);
     for (const context of contexts) {
       await routed(context);
-      assert.equal(evaluate(workflow.concurrency['cancel-in-progress'], context), 'false');
+      assert.equal(workflow.concurrency['cancel-in-progress'], false);
       assert.equal(enabled(full, context), true);
       assert.equal(enabled(draft, context), false);
     }

@@ -1,4 +1,4 @@
 {
-  "safety": ["ci_workflow_contract.test.js", "test_iis_deployment_contract.test.js"],
+  "safety": ["ci_supersession_contract.test.js", "ci_workflow_contract.test.js", "test_iis_deployment_contract.test.js"],
   "portable": ["acceptance/authentication.test.cjs", "acceptance/runner.test.cjs"]
 }

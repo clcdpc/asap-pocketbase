@@ -505,8 +505,8 @@ class FrontendSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             self.runner_fixture(root)
-            files = ["ci_workflow_contract.test.js", "test_iis_deployment_contract.test.js", "ordinary.test.js",
-                     *json.loads((root / "frontend-tests.json").read_bytes())["portable"]]
+            declaration = json.loads((root / "frontend-tests.json").read_bytes())
+            files = [*declaration["safety"], "ordinary.test.js", *declaration["portable"]]
             marker = root / "executed"
             for file in files:
                 (root / file).write_text("require('fs').appendFileSync(process.env.FIXTURE_MARKER, __filename + '\\n');")

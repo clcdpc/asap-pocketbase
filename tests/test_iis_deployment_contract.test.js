@@ -44,10 +44,10 @@ assert.ok(workflow.includes('  workflow_dispatch:\n'), 'manual dispatch should b
 assert.deepEqual(
   YAML.parse(workflow, { uniqueKeys: true }).concurrency,
   {
-    group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.sha) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}",
-    'cancel-in-progress': "${{ github.event_name == 'pull_request' }}"
+    group: '${{ github.workflow }}-run-${{ github.run_id }}-${{ github.run_attempt }}',
+    'cancel-in-progress': false
   },
-  'workflow concurrency should isolate tested PR commits and non-PR executions while replacing same-commit PR runs'
+  'native concurrency must isolate every attempt; the trusted controller owns PR supersession'
 );
 assert.equal(YAML.parse(workflow, { uniqueKeys: true }).jobs['build-test-package'].concurrency, undefined,
   'build-test-package must not retain job-level concurrency');
