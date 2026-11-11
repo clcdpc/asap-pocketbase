@@ -31,7 +31,7 @@ async function until(predicate) {
           calls.push({ url, init });
           if (url === '/api/asap/staff/patron-lookup') return { status: 'verified', libraryOrgId: 2, patron: {
             patron: { barcode: '20000000000001', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101 } };
-          if (url === '/api/asap/staff/suggestion-configuration?libraryOrgId=2') return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+          if (url === '/api/asap/staff/suggestion-configuration?libraryOrgId=2') return { libraryOrgId: 2, configuration: { availableFormats: ['book'], formatRules: { book: { messageBehavior: 'none' } } } };
           assert.equal(url, '/api/asap/staff/suggestions');
           return { id, libraryOrgId: 2, notificationStatus: 'not_requested' };
         } });

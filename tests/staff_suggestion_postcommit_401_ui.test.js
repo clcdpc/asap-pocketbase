@@ -80,7 +80,7 @@ async function until(predicate, message) {
       if (url.endsWith('/suggestion-configuration?libraryOrgId=2')) {
         return response(200, { libraryOrgId: 2, configuration: {
           availableFormats: ['book'], formatLabels: { book: 'Book' },
-          formatRules: { book: { fields: { title: { mode: 'required', label: 'Title' } }, customFields: {} } },
+          formatRules: { book: { messageBehavior: 'none', fields: { title: { mode: 'required', label: 'Title' } }, customFields: {} } },
           publicationOptions: [], additionalFieldDefinitions: []
         } });
       }

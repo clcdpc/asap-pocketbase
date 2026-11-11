@@ -57,8 +57,8 @@ async function until(predicate, message) {
     };
     const organizations = [{ id: 2, name: 'Test Library' }];
     const configuration = {
-      availableFormats: ['book', 'comic', 'ebook'],
-      formatLabels: { book: 'Book', comic: 'Comic', ebook: 'eBook' },
+      availableFormats: ['book', 'comic', 'ebook', 'eaudiobook'],
+      formatLabels: { book: 'Book', comic: 'Comic', ebook: 'eBook', eaudiobook: 'eAudiobook' },
       formatRules: {
         book: {
           messageBehavior: 'none',
@@ -89,6 +89,16 @@ async function until(predicate, message) {
             publication: { mode: 'optional', label: 'Publication timing' }
           },
           customFields: { audience: { mode: 'required', label: 'Who is it for?' } }
+        },
+        eaudiobook: {
+          messageBehavior: 'none',
+          fields: {
+            title: { mode: 'required', label: 'eAudiobook title' },
+            author: { mode: 'required', label: 'eAudiobook author' },
+            identifier: { mode: 'optional', label: 'Identifier' },
+            publication: { mode: 'optional', label: 'Publication timing' }
+          },
+          customFields: { audience: { mode: 'required', label: 'Who is it for?' } }
         }
       },
       publicationOptions: ['not_published', 'published'],
@@ -103,7 +113,7 @@ async function until(predicate, message) {
     const createdRequest = {
       id: '9007199254740993', version: 'request-version', title: 'Staff title', author: 'Author',
       barcode: '20000000000001', nameFirst: 'Alex', nameLast: 'Example', email: 'alex@example.org',
-      libraryOrgId: 2, libraryOrgName: 'Test Library', status: 'suggestion', format: 'book', formatLabel: 'Book',
+      libraryOrgId: 2, libraryOrgName: 'Test Library', status: 'suggestion', format: 'eaudiobook', formatLabel: 'eAudiobook',
       identifier: null, bibid: null, publication: 'not_published', preferredPickupBranchId: 101,
       preferredPickupBranchName: 'Main Library', workflowTags: [], capabilities: {}
     };
@@ -111,6 +121,7 @@ async function until(predicate, message) {
     let suggestionRequests = 0;
     let duplicateNextSuggestion = false;
     let partialDuplicateNextSuggestion = false;
+    let rejectNextSuggestion = false;
     let expireNextSuggestion = false;
     let malformedNextSuggestion = false;
     let currentPickupAtLookup = 101;
@@ -194,6 +205,13 @@ async function until(predicate, message) {
         assert.equal(body.verifiedBibId, null);
         assert.equal(body.emailPatronConfirmation, false);
         if (!created) assert.equal(body.autohold, false);
+        if (rejectNextSuggestion) {
+          rejectNextSuggestion = false;
+          return response(409, {
+            code: 'submission_configuration_changed',
+            message: 'The suggestion form changed while it was being submitted. Refresh the form and try again.'
+          });
+        }
         if (malformedNextSuggestion) {
           malformedNextSuggestion = false;
           return {
@@ -259,6 +277,17 @@ async function until(predicate, message) {
       .some(label => label.textContent.includes('Who is it for?')),
     'format-specific custom-field label overrides must be rendered');
     const format = document.querySelector('#staff-suggestion-body select[aria-label="Material format"]');
+    assert.deepEqual([...format.options].map(option => option.value), ['', 'book', 'comic', 'eaudiobook'],
+      'Only enabled submission formats remain, in configured order, with their configured labels.');
+    assert.equal(format.value, 'book', 'The first eligible format is selected by default.');
+    assert.equal(format.options[0].textContent, 'Choose a material format');
+    format.value = 'eaudiobook';
+    format.dispatchEvent(new dom.window.Event('change'));
+    const author = document.querySelectorAll('.staff-suggestion-fields input[maxlength="500"]')[1];
+    author.value = 'Staff author';
+    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
+      'A submission-enabled digital format remains available.');
+    assert.equal(format.value, 'eaudiobook');
     format.value = 'comic';
     format.dispatchEvent(new dom.window.Event('change'));
     assert.equal(document.querySelector('#staff-suggestion-body input[aria-label="Author"]'), null,
@@ -272,29 +301,8 @@ async function until(predicate, message) {
     format.dispatchEvent(new dom.window.Event('change'));
     assert.ok([...document.querySelectorAll('#staff-suggestion-body label')]
       .some(label => label.textContent.includes('Who is it for?')));
-    format.value = 'ebook';
-    format.dispatchEvent(new dom.window.Event('change'));
-    const notice = document.querySelector('.staff-format-notice');
-    assert.equal(notice.textContent, configuration.ebookMessage);
-    assert.equal(notice.querySelector('p'), null);
-    assert.equal(notice.querySelector('a').getAttribute('href'), 'https://example.org/help');
-    assert.equal(notice.querySelector('a').textContent, 'https://example.org/help');
-    assert.equal(notice.querySelector('a').rel, 'noopener noreferrer');
-    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
-      'informational eBook format must remain available for staff creation');
-    assert.equal(document.querySelector('.staff-suggestion-fields input[maxlength="500"]').required, true);
-    configuration.ebookMessage = '<script>window.staffMessageScriptRan = true</script><a href="javascript:alert(1)">JS</a><a href="data:text/html,unsafe">Data</a><a href="vbscript:msgbox(1)">VB</a><span onclick="window.staffMessageEventRan = true">Safe text</span>';
-    format.dispatchEvent(new dom.window.Event('change'));
-    assert.equal(notice.querySelector('script'), null);
-    assert.equal(dom.window.staffMessageScriptRan, undefined);
-    assert.equal(notice.textContent, configuration.ebookMessage, 'Custom markup must remain literal text.');
-    assert.equal(notice.querySelectorAll('a, span').length, 0);
-    configuration.ebookMessage = '';
-    format.dispatchEvent(new dom.window.Event('change'));
-    assert.equal(notice.hidden, true);
-    assert.equal(notice.childNodes.length, 0);
-    format.value = 'book';
-    format.dispatchEvent(new dom.window.Event('change'));
+    assert.equal([...format.options].some(option => option.value === 'ebook'), false,
+      'Referral-only eBook formats are not offered in the staff creation form.');
     assert.ok([...document.querySelectorAll('#staff-suggestion-body button')]
       .some(button => button.textContent.includes('Search Polaris catalog')));
     const autohold = [...document.querySelectorAll('.staff-suggestion-fields label')]
@@ -311,13 +319,45 @@ async function until(predicate, message) {
       .find(control => control.getAttribute('aria-label')?.startsWith('Who is it for?'));
     assert.ok(audience, 'configured custom field must be visible');
     audience.value = 'adult';
+    const titleBeforeRejection = title.value;
+    rejectNextSuggestion = true;
+    document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await until(() => suggestionRequests === 1 && document.getElementById('staff-suggestion-status').textContent.includes('configuration changed'),
+      'a stale format configuration must produce actionable guidance');
+    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, true,
+      'A rejected stale format cannot be resubmitted by the error finalizer.');
+    assert.equal(title.value, titleBeforeRejection, 'The title draft must survive configuration rejection.');
+    document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await settle();
+    assert.equal(suggestionRequests, 1, 'A stale format is not sent again before explicit refresh.');
+    configuration.formatRules.book.messageBehavior = 'ebookMessage';
+    const formatRefresh = [...document.querySelectorAll('#staff-suggestion-body button')]
+      .find(button => button.textContent.includes('Refresh eligible formats'));
+    assert.ok(formatRefresh, 'Configuration rejection exposes a refresh action.');
+    formatRefresh.click();
+    await until(() => !formatRefresh.disabled && format.options.length === 3,
+      'the refreshed options must exclude the now referral-only book format');
+    assert.equal(format.value, '', 'A no-longer-eligible selection is cleared instead of silently replaced.');
+    assert.equal(format.options[1].value, 'comic');
+    assert.equal(format.options[2].value, 'eaudiobook');
+    assert.equal(title.value, titleBeforeRejection, 'Refreshing formats must retain other draft values.');
+    format.value = 'eaudiobook';
+    format.dispatchEvent(new dom.window.Event('change'));
+    document.querySelectorAll('.staff-suggestion-fields input[maxlength="500"]')[1].value = 'Staff author';
+    const refreshedAudience = [...document.querySelectorAll('.staff-suggestion-fields select')]
+      .find(control => control.getAttribute('aria-label')?.startsWith('Who is it for?'));
+    assert.equal(refreshedAudience.value, 'adult', 'Visible custom-field draft values survive the refresh.');
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
-    await until(() => suggestionRequests === 1, 'double submit must make one request');
+    await until(() => suggestionRequests === 2, 'double submit after reselection must make one new request');
+    assert.equal(requests.filter(item => item.url.endsWith('/suggestions')).length, 2);
+    assert.equal(JSON.parse(requests.filter(item => item.url.endsWith('/suggestions'))[1].options.body).format, 'eaudiobook',
+      'The explicitly selected eligible digital format is submitted unchanged.');
     await until(() => !document.getElementById('staff-suggestion-dialog').open, 'successful creation must close the dialog');
     assert.match(document.getElementById('app-status').textContent, /9007199254740993/);
     assert.match(document.getElementById('app-status').textContent, /No confirmation email was requested/);
     assert.equal(requests.filter(item => item.url.endsWith('/catalog-search')).length, 0);
+    configuration.formatRules.book.messageBehavior = 'none';
 
     document.getElementById('new-suggestion').click();
     currentPickupAtLookup = null;

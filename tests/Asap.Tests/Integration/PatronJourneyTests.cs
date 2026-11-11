@@ -436,6 +436,12 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             .Where(item => item.LibraryOrganizationId == 2 && item.ExternalSearchProviderId == provider2Id)
             .Select(item => new { item.IsEnabled, item.Label, item.UrlTemplate })
             .SingleOrDefaultAsync();
+        var eaudiobookId = await snapshot.MaterialFormats.AsNoTracking()
+            .Where(item => item.OwnerOrganizationId == 1 && item.Code == "eaudiobook")
+            .Select(item => item.Id)
+            .SingleAsync();
+        var originalEaudiobookOverride = await snapshot.MaterialFormatOverrides.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.LibraryOrganizationId == 2 && item.MaterialFormatId == eaudiobookId);
         try
         {
         using var client = factory.CreateClient();
@@ -466,6 +472,30 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 linkContext.Branding.Add(systemBranding);
             }
             systemBranding.LogoAltText = "Browser saved system alt";
+            var eaudiobookOverride = await linkContext.MaterialFormatOverrides.SingleOrDefaultAsync(item =>
+                item.LibraryOrganizationId == 2 && item.MaterialFormatId == eaudiobookId);
+            if (eaudiobookOverride is null)
+            {
+                eaudiobookOverride = new MaterialFormatOverride
+                {
+                    LibraryOrganizationId = 2,
+                    MaterialFormatId = eaudiobookId
+                };
+                linkContext.MaterialFormatOverrides.Add(eaudiobookOverride);
+            }
+            eaudiobookOverride.Label = "Library eAudiobook";
+            eaudiobookOverride.SortOrder = 3;
+            eaudiobookOverride.IsEnabled = true;
+            eaudiobookOverride.MessageBehavior = "none";
+            eaudiobookOverride.Message = null;
+            eaudiobookOverride.TitleMode = "required";
+            eaudiobookOverride.TitleLabel = "Title";
+            eaudiobookOverride.AuthorMode = "required";
+            eaudiobookOverride.AuthorLabel = "Author";
+            eaudiobookOverride.IdentifierMode = "optional";
+            eaudiobookOverride.IdentifierLabel = "Identifier number";
+            eaudiobookOverride.PublicationMode = "required";
+            eaudiobookOverride.PublicationLabel = "Publication Timing";
             await linkContext.SaveChangesAsync();
         }
 
@@ -551,9 +581,14 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         var (exitCode, stdout, stderr) = await OwnedTestProcess.RunAsync(startInfo, TestContext.CancellationToken);
         Assert.AreEqual(0, exitCode, $"{stdout}{Environment.NewLine}{stderr}");
 
+        long createdSuggestionId;
         using (var report = JsonDocument.Parse(
                    await File.ReadAllTextAsync(Path.Combine(artifactDirectory, "staff-browser-results.json"))))
         {
+            var staffSuggestion = report.RootElement.GetProperty("staffSuggestion");
+            Assert.AreEqual("eaudiobook", staffSuggestion.GetProperty("format").GetString());
+            createdSuggestionId = long.Parse(staffSuggestion.GetProperty("id").GetString()!,
+                System.Globalization.CultureInfo.InvariantCulture);
             Assert.HasCount(81, report.RootElement.GetProperty("states").EnumerateArray().ToArray());
             foreach (var flag in new[] { "disclosures", "independentDrafts", "singleEmail", "atomicSave", "conflictRecovery", "lifecycle", "create", "nativeValidationOwner", "keyboardFocus", "responsiveContainment", "activeFilter", "scopedCounts", "hiddenDrafts", "ownedFeedbackRecovery", "independentSaves", "preservedReviewRecovery" })
             {
@@ -635,6 +670,18 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
 
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
+        await using (var suggestion = verify.CreateCommand())
+        {
+            suggestion.CommandText =
+                "SELECT f.[Code], r.[BibId], r.[BibIdStaffVerified] FROM [asap].[TitleRequest] r " +
+                "JOIN [asap].[MaterialFormat] f ON f.[Id] = r.[MaterialFormatId] WHERE r.[Id] = @id;";
+            suggestion.Parameters.AddWithValue("@id", createdSuggestionId);
+            await using var acceptedSuggestion = await suggestion.ExecuteReaderAsync();
+            Assert.IsTrue(await acceptedSuggestion.ReadAsync());
+            Assert.AreEqual("eaudiobook", acceptedSuggestion.GetString(0));
+            Assert.AreEqual(9001, acceptedSuggestion.GetInt32(1));
+            Assert.IsTrue(acceptedSuggestion.GetBoolean(2));
+        }
         await using var command = verify.CreateCommand();
         command.CommandText =
             """
@@ -845,6 +892,31 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 provider2Override.IsEnabled = originalProvider2Override.IsEnabled;
                 provider2Override.Label = originalProvider2Override.Label;
                 provider2Override.UrlTemplate = originalProvider2Override.UrlTemplate;
+            }
+            var eaudiobookOverride = await restore.MaterialFormatOverrides.SingleOrDefaultAsync(item =>
+                item.LibraryOrganizationId == 2 && item.MaterialFormatId == eaudiobookId);
+            if (originalEaudiobookOverride is null)
+            {
+                if (eaudiobookOverride is not null)
+                {
+                    restore.MaterialFormatOverrides.Remove(eaudiobookOverride);
+                }
+            }
+            else if (eaudiobookOverride is not null)
+            {
+                eaudiobookOverride.Label = originalEaudiobookOverride.Label;
+                eaudiobookOverride.SortOrder = originalEaudiobookOverride.SortOrder;
+                eaudiobookOverride.IsEnabled = originalEaudiobookOverride.IsEnabled;
+                eaudiobookOverride.MessageBehavior = originalEaudiobookOverride.MessageBehavior;
+                eaudiobookOverride.Message = originalEaudiobookOverride.Message;
+                eaudiobookOverride.TitleMode = originalEaudiobookOverride.TitleMode;
+                eaudiobookOverride.TitleLabel = originalEaudiobookOverride.TitleLabel;
+                eaudiobookOverride.AuthorMode = originalEaudiobookOverride.AuthorMode;
+                eaudiobookOverride.AuthorLabel = originalEaudiobookOverride.AuthorLabel;
+                eaudiobookOverride.IdentifierMode = originalEaudiobookOverride.IdentifierMode;
+                eaudiobookOverride.IdentifierLabel = originalEaudiobookOverride.IdentifierLabel;
+                eaudiobookOverride.PublicationMode = originalEaudiobookOverride.PublicationMode;
+                eaudiobookOverride.PublicationLabel = originalEaudiobookOverride.PublicationLabel;
             }
             await restore.SaveChangesAsync();
         }

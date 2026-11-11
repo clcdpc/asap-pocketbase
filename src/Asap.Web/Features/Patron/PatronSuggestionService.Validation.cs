@@ -74,7 +74,6 @@ public sealed partial class PatronSuggestionService
     private static ValidatedSuggestion Validate(
         PatronSuggestionInput input,
         EffectivePatronConfiguration configuration,
-        bool allowInformationalMessage = false,
         bool? forcedAutoHold = null,
         DateOnly? exactPublicationDate = null,
         string? notes = null,
@@ -88,8 +87,7 @@ public sealed partial class PatronSuggestionService
             throw new PatronFlowException(400, "Choose a valid material format.");
         }
 
-        if (!allowInformationalMessage &&
-            !string.Equals(format.MessageBehavior, "none", StringComparison.Ordinal))
+        if (!string.Equals(format.MessageBehavior, "none", StringComparison.Ordinal))
         {
             var message = format.MessageBehavior switch
             {
@@ -131,6 +129,33 @@ public sealed partial class PatronSuggestionService
             customFields,
             format.Publication.Mode == "hidden" ? null : exactPublicationDate,
             cleanedNotes,
+            verifiedBibId);
+    }
+
+    private static ValidatedSuggestion ValidateStaffSubmission(
+        PatronSuggestionInput input,
+        EffectivePatronConfiguration configuration,
+        bool? forcedAutoHold = null,
+        DateOnly? exactPublicationDate = null,
+        string? notes = null,
+        int? verifiedBibId = null)
+    {
+        var formatCode = Clean(input.Format);
+        var format = formatCode is null
+            ? null
+            : configuration.Formats.SingleOrDefault(item =>
+                item.IsEnabled && string.Equals(item.Code, formatCode, StringComparison.Ordinal));
+        if (format is null || !string.Equals(format.MessageBehavior, "none", StringComparison.Ordinal))
+        {
+            throw SubmissionConfigurationChanged();
+        }
+
+        return Validate(
+            input,
+            configuration,
+            forcedAutoHold,
+            exactPublicationDate,
+            notes,
             verifiedBibId);
     }
 

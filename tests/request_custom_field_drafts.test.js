@@ -16,7 +16,7 @@ const fields = [
 ];
 const rules = Object.fromEntries(fields.map(field => [field.key, { mode: 'optional' }]));
 const configuration = { availableFormats: ['book', 'dvd'], additionalFieldDefinitions: fields,
-  formatRules: { book: { customFields: rules }, dvd: { customFields: rules } } };
+  formatRules: { book: { messageBehavior: 'none', customFields: rules }, dvd: { messageBehavior: 'none', customFields: rules } } };
 const draft = { audience: 'New audience', description: 'New multiline\ndescription', language: 'es' };
 const historical = { audience: 'Accepted audience', description: 'Accepted description', language: 'en' };
 

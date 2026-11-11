@@ -110,6 +110,10 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       ]
     };
     if (scenarioOptions.serverDeniesActions) request.capabilities.allowedActions = [];
+    if (scenarioOptions.historicalFormat) {
+      request.format = 'ebook';
+      request.formatLabel = 'eBook';
+    }
     if (scenarioOptions.pickupOperator) {
       request.pickupOperation = { id: '00000000-0000-0000-0000-000000000001', state: 1, targetBranchId: 10 };
       request.capabilities = { canEditIdentifier: false, canChangeBib: false, canChangeWorkflowState: false,
@@ -405,6 +409,14 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     assert.equal(document.querySelector('.request-activity svg'), null);
     assert.equal(document.querySelector('.request-activity img'), null);
     assert.equal(document.querySelector('.edit-form textarea').value, 'Editable note');
+    if (scenarioOptions.historicalFormat) {
+      const format = document.querySelector('.edit-form select[aria-label="Format"]');
+      assert.equal(format.value, 'ebook', 'An existing request keeps its historical format selection.');
+      assert.equal([...format.options].some(option => option.value === 'ebook'), true);
+      assert.equal([...format.options].find(option => option.value === 'ebook').textContent, 'eBook');
+      assert.equal(payload, null, 'Rendering a historical format must not mutate the request.');
+      return;
+    }
     if (scenarioOptions.unclaimedPreview) {
       assert.equal(document.querySelector('.pending-audit-preview').hidden, true);
       assert.equal(document.querySelector('.request-save-state').textContent, 'All changes saved');
@@ -1214,6 +1226,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('reject', false, false, { legacyNoHoldPendingEdit: true });
   await scenario('reject', false, false, { unclaimedPreview: true });
   await scenario('reject', false, false, { formatWarning: true });
+  await scenario('reject', false, false, { historicalFormat: true });
   await scenario('reject', false, false, { autoClaimOther: true });
   await scenario('reject', false, false, { manualFormat: true });
   await scenario('purchase', false, false, { pickupWrappedResponse: true });

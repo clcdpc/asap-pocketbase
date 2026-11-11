@@ -1262,57 +1262,227 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    public async Task StaffMayCreateInformationalEbookWhilePatronFormStillRejectsIt()
+    public async Task StaffSuggestionRequiresEffectiveNoMessageFormatAndHonorsLibraryOverride()
     {
         const string barcode = "20000000001333";
         var actor = await ReadConfiguredSuperAdminAsync();
-        var title = $"Staff informational ebook {Guid.NewGuid():N}";
-        using var client = factory!.CreateClient();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        var formatCode = $"referral-{Guid.NewGuid():N}";
+        var referralTitle = $"Blank referral route {Guid.NewGuid():N}";
+        var ebookTitle = $"Library eligible eBook {Guid.NewGuid():N}";
+        long ebookId = 0;
+        long customFormatId = 0;
+        var outboxBefore = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];");
+        var eventsBefore = await ReadCountAsync("SELECT COUNT(*) FROM [asap].[TitleRequestEvent];");
+        (string? Label, int? SortOrder, bool? IsEnabled, string? MessageBehavior, string? Message,
+            string? TitleMode, string? TitleLabel, string? AuthorMode, string? AuthorLabel,
+            string? IdentifierMode, string? IdentifierLabel, string? PublicationMode, string? PublicationLabel)? originalOverride = null;
+        try
+        {
+        await using (var setup = await contextFactory.CreateDbContextAsync())
+        {
+            ebookId = await setup.MaterialFormats.AsNoTracking()
+                .Where(item => item.OwnerOrganizationId == 1 && item.Code == "ebook")
+                .Select(item => item.Id).SingleAsync();
+            var existing = await setup.MaterialFormatOverrides.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.LibraryOrganizationId == 2 && item.MaterialFormatId == ebookId);
+            originalOverride = existing is null ? null : (
+                existing.Label,
+                existing.SortOrder,
+                existing.IsEnabled,
+                existing.MessageBehavior,
+                existing.Message,
+                existing.TitleMode,
+                existing.TitleLabel,
+                existing.AuthorMode,
+                existing.AuthorLabel,
+                existing.IdentifierMode,
+                existing.IdentifierLabel,
+                existing.PublicationMode,
+                existing.PublicationLabel);
+            var ebookOverride = await setup.MaterialFormatOverrides
+                .SingleOrDefaultAsync(item => item.LibraryOrganizationId == 2 && item.MaterialFormatId == ebookId);
+            if (ebookOverride is null)
+            {
+                ebookOverride = new MaterialFormatOverride
+                {
+                    LibraryOrganizationId = 2,
+                    MaterialFormatId = ebookId
+                };
+                setup.MaterialFormatOverrides.Add(ebookOverride);
+            }
+            // Force this first phase to inherit the system's referral behavior even if
+            // the fixture already has a library override.
+            ebookOverride.Label = null;
+            ebookOverride.SortOrder = null;
+            ebookOverride.IsEnabled = true;
+            ebookOverride.MessageBehavior = null;
+            ebookOverride.Message = null;
+            await setup.SaveChangesAsync();
+
+            var customFormat = new MaterialFormat
+            {
+                OwnerOrganizationId = 2,
+                Code = formatCode,
+                Label = "Library referral format",
+                SortOrder = 999,
+                IsEnabled = true,
+                MessageBehavior = "message",
+                Message = null,
+                TitleMode = "required",
+                AuthorMode = "optional",
+                IdentifierMode = "optional",
+                PublicationMode = "optional",
+                CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
+            };
+            setup.MaterialFormats.Add(customFormat);
+            await setup.SaveChangesAsync();
+            customFormatId = customFormat.Id;
+        }
+
+        var pickup = new ControllablePickupPatronProvider();
+        await using var scopedFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IPatronProvider>();
+                services.AddSingleton<IPatronProvider>(pickup);
+            }));
+        using var client = scopedFactory.CreateClient();
         AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
         client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
 
-        object Input(string? author) => new
+        object Input(string format, string title) => new
         {
             libraryOrgId = 2,
             barcode,
-            format = "ebook",
+            format,
             title,
-            author,
+            author = "Staff author",
             publication = "Coming soon",
             preferredPickupBranchId = 101,
             currentPreferredPickupBranchIdAtLoad = 101,
             currentPreferredPickupBranchObservedAtLoad = true,
-            autohold = true,
+            autohold = false,
             emailPatronConfirmation = false,
             customFields = new Dictionary<string, string?>()
         };
 
-        using (var invalid = await client.PostAsJsonAsync("/api/asap/staff/suggestions", Input(null)))
-        {
-            Assert.AreEqual(HttpStatusCode.BadRequest, invalid.StatusCode, await invalid.Content.ReadAsStringAsync());
-            StringAssert.Contains(await invalid.Content.ReadAsStringAsync(), "Author is required");
-        }
+            using (var configuration = await client.GetAsync("/api/asap/staff/suggestion-configuration?libraryOrgId=2"))
+            {
+                Assert.AreEqual(HttpStatusCode.OK, configuration.StatusCode,
+                    await configuration.Content.ReadAsStringAsync());
+                using var body = JsonDocument.Parse(await configuration.Content.ReadAsStringAsync());
+                var effective = body.RootElement.GetProperty("configuration");
+                Assert.AreEqual("ebookMessage", effective.GetProperty("formatRules").GetProperty("ebook")
+                    .GetProperty("messageBehavior").GetString());
+                CollectionAssert.Contains(
+                    effective.GetProperty("availableFormats").EnumerateArray().Select(item => item.GetString()).ToArray(),
+                    formatCode);
+                Assert.AreEqual("message", effective.GetProperty("formatRules").GetProperty(formatCode)
+                    .GetProperty("messageBehavior").GetString());
+                Assert.AreEqual(JsonValueKind.Null, effective.GetProperty("formatRules").GetProperty(formatCode)
+                    .GetProperty("message").ValueKind);
+            }
 
-        using (var created = await client.PostAsJsonAsync("/api/asap/staff/suggestions", Input("Staff author")))
-        {
-            Assert.AreEqual(HttpStatusCode.Created, created.StatusCode, await created.Content.ReadAsStringAsync());
-            using var body = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
-            Assert.AreEqual(JsonValueKind.String, body.RootElement.GetProperty("id").ValueKind);
-        }
+            foreach (var (format, title) in new[] { ("ebook", $"Inherited referral {Guid.NewGuid():N}"), (formatCode, referralTitle) })
+            {
+                using var rejected = await client.PostAsJsonAsync("/api/asap/staff/suggestions", Input(format, title));
+                Assert.AreEqual(HttpStatusCode.Conflict, rejected.StatusCode,
+                    await rejected.Content.ReadAsStringAsync());
+                using var body = JsonDocument.Parse(await rejected.Content.ReadAsStringAsync());
+                Assert.AreEqual("submission_configuration_changed", body.RootElement.GetProperty("code").GetString());
+                await using var verifyRejected = await contextFactory.CreateDbContextAsync();
+                Assert.AreEqual(0, await verifyRejected.TitleRequests.AsNoTracking()
+                    .CountAsync(item => item.Barcode == barcode && item.Title == title));
+            }
+            Assert.AreEqual(0, pickup.UpdateCount, "Ineligible formats must be rejected before pickup mutation.");
+            Assert.AreEqual(outboxBefore, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[EmailOutbox];"));
+            Assert.AreEqual(eventsBefore, await ReadCountAsync("SELECT COUNT(*) FROM [asap].[TitleRequestEvent];"));
 
-        var publicService = CreatePatronSuggestionService(["example.org"], new RecordingOutboxDispatcher());
-        var patronSession = await IssueTestPatronSessionAsync(barcode);
-        var rejected = await Assert.ThrowsExactlyAsync<PatronFlowException>(async () =>
-            await publicService.CreateAsync(
-                patronSession,
-                Suggestion($"Patron informational ebook {Guid.NewGuid():N}") with
+            await using (var overrideContext = await contextFactory.CreateDbContextAsync())
+            {
+                var ebookOverride = await overrideContext.MaterialFormatOverrides
+                    .SingleAsync(item => item.LibraryOrganizationId == 2 && item.MaterialFormatId == ebookId);
+                ebookOverride.Label = "Library eBook";
+                ebookOverride.SortOrder = 3;
+                ebookOverride.IsEnabled = true;
+                ebookOverride.MessageBehavior = "none";
+                await overrideContext.SaveChangesAsync();
+            }
+
+            using (var configuration = await client.GetAsync("/api/asap/staff/suggestion-configuration?libraryOrgId=2"))
+            {
+                using var body = JsonDocument.Parse(await configuration.Content.ReadAsStringAsync());
+                var effective = body.RootElement.GetProperty("configuration");
+                Assert.AreEqual("none", effective.GetProperty("formatRules").GetProperty("ebook")
+                    .GetProperty("messageBehavior").GetString());
+                Assert.AreEqual("Library eBook", effective.GetProperty("formatLabels").GetProperty("ebook").GetString());
+                CollectionAssert.Contains(
+                    effective.GetProperty("availableFormats").EnumerateArray().Select(item => item.GetString()).ToArray(),
+                    "ebook");
+            }
+
+            using (var created = await client.PostAsJsonAsync("/api/asap/staff/suggestions", Input("ebook", ebookTitle)))
+            {
+                Assert.AreEqual(HttpStatusCode.Created, created.StatusCode, await created.Content.ReadAsStringAsync());
+                using var body = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+                Assert.AreEqual(JsonValueKind.String, body.RootElement.GetProperty("id").ValueKind);
+            }
+
+            Assert.AreEqual(0, pickup.UpdateCount);
+            await using var verifyCreated = await contextFactory.CreateDbContextAsync();
+            var createdRequest = await verifyCreated.TitleRequests.AsNoTracking()
+                .SingleAsync(item => item.Barcode == barcode && item.Title == ebookTitle);
+            Assert.AreEqual(ebookId, createdRequest.MaterialFormatId);
+            Assert.AreEqual("suggestion", createdRequest.Status);
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync("""
+                DELETE FROM [asap].[TitleRequestEvent]
+                WHERE [TitleRequestId] IN (SELECT [Id] FROM [asap].[TitleRequest] WHERE [Barcode] = @barcode);
+                DELETE FROM [asap].[TitleRequest]
+                WHERE [Barcode] = @barcode AND [Title] IN (@referralTitle, @ebookTitle);
+                """, ("@barcode", barcode), ("@referralTitle", referralTitle), ("@ebookTitle", ebookTitle));
+            await using var restore = await contextFactory.CreateDbContextAsync();
+            await restore.FormatAutoClaimRules.Where(item => item.LibraryOrganizationId == 2 && item.MaterialFormatId == customFormatId)
+                .ExecuteDeleteAsync();
+            await restore.MaterialFormatCustomFieldRules.Where(item => item.LibraryOrganizationId == 2 && item.MaterialFormatId == customFormatId)
+                .ExecuteDeleteAsync();
+            var customFormat = await restore.MaterialFormats.SingleOrDefaultAsync(item => item.Id == customFormatId);
+            if (customFormat is not null)
+            {
+                restore.MaterialFormats.Remove(customFormat);
+            }
+            var currentOverride = await restore.MaterialFormatOverrides
+                .SingleOrDefaultAsync(item => item.LibraryOrganizationId == 2 && item.MaterialFormatId == ebookId);
+            if (originalOverride is null)
+            {
+                if (currentOverride is not null)
                 {
-                    Format = "ebook",
-                    Author = "Patron author"
-                },
-                CancellationToken.None));
-        Assert.AreEqual(400, rejected.StatusCode);
-        await DeleteTestPatronSessionAsync(patronSession.Id);
+                    restore.MaterialFormatOverrides.Remove(currentOverride);
+                }
+            }
+            else if (currentOverride is not null)
+            {
+                var original = originalOverride.Value;
+                currentOverride.Label = original.Label;
+                currentOverride.SortOrder = original.SortOrder;
+                currentOverride.IsEnabled = original.IsEnabled;
+                currentOverride.MessageBehavior = original.MessageBehavior;
+                currentOverride.Message = original.Message;
+                currentOverride.TitleMode = original.TitleMode;
+                currentOverride.TitleLabel = original.TitleLabel;
+                currentOverride.AuthorMode = original.AuthorMode;
+                currentOverride.AuthorLabel = original.AuthorLabel;
+                currentOverride.IdentifierMode = original.IdentifierMode;
+                currentOverride.IdentifierLabel = original.IdentifierLabel;
+                currentOverride.PublicationMode = original.PublicationMode;
+                currentOverride.PublicationLabel = original.PublicationLabel;
+            }
+            await restore.SaveChangesAsync();
+        }
     }
 
     [TestMethod]

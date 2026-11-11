@@ -355,7 +355,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.equal(await format.evaluate(node => node.tagName), 'SELECT');
     assert.deepEqual(
       await format.locator('option').allTextContents(),
-      ['Book', 'Audiobook (Physical CD)', 'DVD', 'Music CD', 'eBook', 'eAudiobook']
+      ['Library eAudiobook', 'Book', 'Audiobook (Physical CD)', 'DVD', 'Music CD', 'eBook']
     );
     assert.equal(await format.inputValue(), 'book');
     assert.equal(await publication.evaluate(node => node.tagName), 'SELECT');
@@ -2948,34 +2948,29 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
 
     const format = desktopPage.getByLabel('Material format', { exact: true });
     await format.waitFor();
+    const formatOptions = await format.locator('option').evaluateAll(options =>
+      options.map(option => ({ value: option.value, label: option.textContent.trim() })));
+    assert.equal(formatOptions.some(option => option.value === 'ebook'), false,
+      'Referral formats must be absent from staff creation choices');
+    assert.equal(formatOptions.find(option => option.value === 'eaudiobook')?.label, 'Library eAudiobook',
+      'The effective library label must be shown for an eligible digital format');
+    assert.ok(formatOptions.findIndex(option => option.value === 'eaudiobook') <
+      formatOptions.findIndex(option => option.value === 'book'),
+    'Eligible format choices must follow configured library order');
+    await format.selectOption('eaudiobook');
+    assert.equal(await format.isDisabled(), false);
     const title = desktopPage.locator('#staff-suggestion-form label')
       .filter({ hasText: /title/i }).locator('input').first();
     await title.fill(titleSeed);
     const manualAuthor = 'Manually entered staff suggestion author';
     await desktopPage.getByLabel(/^Author/).fill(manualAuthor);
-    const audience = desktopPage.getByLabel('Audience note', { exact: true });
-    await audience.waitFor();
-    await audience.fill('Created by the staff browser journey.');
-
-    await format.selectOption('ebook');
     const formatNotice = desktopPage.locator('.staff-format-notice');
-    await formatNotice.waitFor({ state: 'visible' });
-    assert.match(await formatNotice.textContent(), /This is an eBook suggestion/);
-    assert.equal(await formatNotice.textContent(), 'This is an eBook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm');
-    assert.equal(await formatNotice.evaluate(node => getComputedStyle(node).whiteSpace), 'pre-wrap');
-    assert.equal(await formatNotice.locator('a').getAttribute('href'),
-      'https://help.libbyapp.com/en-us/6260.htm');
-    assert.equal((await formatNotice.textContent()).includes('<p>'), false);
+    assert.equal(await formatNotice.isHidden(), true,
+      'A format with effective behavior none must not show a referral message');
     assert.equal(await desktopPage.getByRole('button', { name: 'Create suggestion', exact: true }).isDisabled(), false);
-    await format.selectOption('book');
-    assert.equal(await audience.isVisible(), true);
-    await audience.fill('Created by the staff browser journey.');
     const publication = desktopPage.locator('#staff-suggestion-form label')
       .filter({ hasText: /publication timing/i }).locator('select').first();
     await publication.selectOption({ index: 1 });
-    const binding = desktopPage.locator('#staff-suggestion-form label')
-      .filter({ hasText: /binding/i }).locator('select').first();
-    await binding.selectOption({ index: 1 });
 
     await desktopPage.getByRole('button', { name: 'Search Polaris catalog', exact: true }).click();
     await desktopPage.locator('#polaris-dialog[open]').waitFor();
@@ -2986,6 +2981,8 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     await desktopPage.getByRole('button', { name: 'Use BIB 9001' }).click();
     await desktopPage.locator('#polaris-dialog').waitFor({ state: 'hidden' });
     assert.match(await title.inputValue(), /Catalog title 9001/);
+    assert.equal(await format.inputValue(), 'eaudiobook',
+      'Selecting a Polaris BIB must not change the staff-selected ASAP format');
     assert.equal(await desktopPage.getByLabel(/^Author/).inputValue(), manualAuthor);
     assert.equal(await desktopPage.getByLabel('Email patron confirmation (optional)', { exact: true }).isChecked(), false);
     assert.equal(await desktopPage.getByLabel('Automatically place hold', { exact: true }).isChecked(), true);
@@ -3013,6 +3010,7 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     const created = await createResponse.json();
     assert.equal(createResponse.status(), 201, JSON.stringify(created));
     assert.equal(typeof created.id, 'string');
+    report.staffSuggestion = { id: created.id, format: await format.inputValue() };
     assert.equal(suggestionPosts, 1, 'Double submit must issue one staff suggestion request');
     await desktopPage.locator('#staff-suggestion-dialog').waitFor({ state: 'hidden' });
     await desktopPage.locator('#request-dialog[open]').waitFor();
@@ -3048,7 +3046,12 @@ async function runStaffSuggestion(browser, args, axeSource, report) {
     await mobilePage.getByRole('button', { name: /Alex Example/ }).waitFor();
     await scan(mobilePage, axeSource, args.artifactRoot, report, 'mobile', 'staff-suggestion-matches');
     await mobilePage.getByRole('button', { name: /Alex Example/ }).click();
-    await mobilePage.getByLabel('Material format', { exact: true }).waitFor();
+    const mobileFormat = mobilePage.getByLabel('Material format', { exact: true });
+    await mobileFormat.waitFor();
+    const mobileFormatOptions = await mobileFormat.locator('option').evaluateAll(options =>
+      options.map(option => ({ value: option.value, label: option.textContent.trim() })));
+    assert.equal(mobileFormatOptions.some(option => option.value === 'ebook'), false);
+    assert.equal(mobileFormatOptions.find(option => option.value === 'eaudiobook')?.label, 'Library eAudiobook');
     await scan(mobilePage, axeSource, args.artifactRoot, report, 'mobile', 'staff-suggestion-editor');
     await mobilePage.keyboard.press('Escape');
     await mobilePage.locator('#staff-suggestion-dialog').waitFor({ state: 'hidden' });

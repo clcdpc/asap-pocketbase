@@ -19,7 +19,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
         request: async (path, init = {}) => {
           if (path.endsWith('/patron-lookup')) return { status: 'verified', libraryOrgId: 2, patron: {
             patron: { barcode: '20000000000001', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101 } };
-          if (path.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+          if (path.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'], formatRules: { book: { messageBehavior: 'none' } } } };
           posted.push(init); return new Promise((resolve, fail) => { complete = resolve; reject = fail; });
         } };
       const first = createSuggestionController(options); await first.open();
@@ -92,7 +92,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
             pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101
           } };
           if (path.includes('/suggestion-configuration')) {
-            return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+            return { libraryOrgId: 2, configuration: { availableFormats: ['book'], formatRules: { book: { messageBehavior: 'none' } } } };
           }
           posted.push(init);
           return new Promise(resolve => { complete = resolve; });
@@ -145,7 +145,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       beforeOpen: () => true, beforeClose: () => true, openCreatedTitle() {}, openExistingTitle() {}, onReceipt() {}, clearReceipt() {},
       request: async path => path.endsWith('/patron-lookup')
         ? { status: 'verified', libraryOrgId: 2, patron: { patron: { barcode: '20000000000001', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101 } }
-        : { libraryOrgId: 2, configuration: { availableFormats: ['book'] } } });
+        : { libraryOrgId: 2, configuration: { availableFormats: ['book'], formatRules: { book: { messageBehavior: 'none' } } } } });
     await controller.open();
     root.querySelector('select').value = '2'; root.querySelector('select').dispatchEvent(new dom.window.Event('change'));
     root.querySelector('input[type="search"]').value = 'Patron';
@@ -199,7 +199,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
           if (target.endsWith('/patron-lookup')) return { status: 'verified', libraryOrgId: 2, patron: {
             patron: { barcode: '20000000000001', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }],
             currentPreferredPickupBranchId: 101 } };
-          if (target.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+          if (target.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'], formatRules: { book: { messageBehavior: 'none' } } } };
           posted.push(init.body);
           return { id: '9223372036854775807', libraryOrgId: 2, notificationStatus };
         } });
@@ -248,7 +248,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
         polarisLookup: { close() {}, invalidate() {} }, announce() {}, beforeOpen: () => true, beforeClose: () => true,
         onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
           calls.push({ path, body: init.body });
-          if (path.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+          if (path.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'], formatRules: { book: { messageBehavior: 'none' } } } };
           if (path.endsWith('/suggestions')) throw denied();
           if (outcome.startsWith('submit')) return { status: 'verified', libraryOrgId: 2, patron: {
             patron: { barcode: 'verified-card', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101 } };
