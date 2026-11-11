@@ -185,6 +185,7 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
       assert.equal(await opener('Ready for hold', target).isDisabled(), true);
       assert.equal(await opener('Claim', target).count(), 1); assert.equal(await opener('Assign', target).count(), 1);
       const bib = dialog(target).locator(`input#request-${missingBibId}-bib-id`);
+      assert.equal(await dialog(target).getByLabel('BIB ID', { exact: true }).count(), 1);
       const descriptions = (await bib.getAttribute('aria-describedby')).split(' ');
       assert.equal(descriptions.length, 1);
       assert.equal(await dialog(target).locator(`[id="${descriptions[0]}"]`).textContent(), 'Required for Ready for hold');

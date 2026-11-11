@@ -99,12 +99,16 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
         help.push(hint);
       }
       if (helpText) {
+        if (!input.disabled) {
+          field.firstElementChild.id = `request-${request.id}-bib-label`;
+          input.setAttribute('aria-labelledby', field.firstElementChild.id);
+        }
         const hint = element('small', { id: `request-${request.id}-bib-required`,
           className: 'field-help request-bib-prerequisite-help', text: helpText });
         descriptions.push(hint.id);
         help.push(hint);
       }
-      if (help.length) field.append(element('div', { className: 'form-field-help' }, help));
+      if (help.length) field.append(...help);
       if (descriptions.length) input.setAttribute('aria-describedby', descriptions.join(' '));
       return field;
     }

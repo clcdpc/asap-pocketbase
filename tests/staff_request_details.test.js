@@ -214,6 +214,8 @@ async function setup(ui, initial = source, options = {}) {
       assert.deepEqual(buttons(t.root).map(item => item.textContent.trim()), ['Claim', 'Assign', 'Ready for hold']);
       assert.equal(t.root.querySelector('.request-bib-prerequisite-link').textContent, 'Go to BIB ID');
       const bib = t.root.querySelector('#request-91-bib-id');
+      assert.equal(bib.getAttribute('aria-labelledby'), 'request-91-bib-label');
+      assert.equal(document.getElementById('request-91-bib-label').textContent, 'BIB ID');
       const describedBy = bib.getAttribute('aria-describedby').split(' ');
       assert.equal(document.getElementById(describedBy[0]).textContent, 'Required for Ready for hold');
       assert.equal(describedBy.length, 1, 'The field help is associated without duplicating the full notice description.');
