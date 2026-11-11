@@ -300,6 +300,7 @@ function Set-NonProductionDatabaseRecovery { param($ExternalConfiguration, $SqlC
 function Invoke-TestDeployment { param($Config, $Archive, $NeedsDacpac, $NeedsHangfire, [switch] $AllowSqlDataLoss, $SqlPlan, $Source, $TimeoutSeconds, $PollSeconds) Event "activation:$([bool] $AllowSqlDataLoss)" }
 $data.Config | Add-Member -NotePropertyName StagingRoot -NotePropertyValue ([IO.Path]::GetDirectoryName($EventsPath))
 $ValidateOnly = $Mode -eq 'validate'
+$CheckDeploymentEligibility = $false
 $SqlPlanOnly = $Mode -in @('candidate', 'candidate-enabled')
 $data.Config.AllowSqlDataLoss = $Mode -in @('enabled', 'enabled-again', 'candidate-enabled', 'invalid-plan', 'production-tag')
 if ($Mode -eq 'invalid-plan') { $data.Plan.Hash = '0' * 64 }
