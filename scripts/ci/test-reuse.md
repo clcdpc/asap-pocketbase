@@ -74,33 +74,6 @@ Windows runner. Environment epoch `github-hosted-ubuntu-24.04-2026-11-08-v1`
 requires a fresh hosted baseline: local-runner results cannot qualify hosted tests.
 Schema 6 and the existing original-evidence machinery remain unchanged.
 
-Native cancellation groups isolate each run and attempt, including same-SHA
-draft/ready events and retries. GitHub applies native concurrency before
-preflight and can admit an older retry after a newer run. It cannot enforce
-newer-run-wins ordering safely with a shared PR group.
-
-The separate `pr-ci-supersession.yml` controller restores automatic cancellation
-of older PR runs. Its default-branch `workflow_run` handler observes both
-`requested` and `in_progress` events; the latter also covers reruns. It executes
-no PR code and consumes no artifacts. Only that controller has `actions: write`;
-qualification, packaging and deployment permissions are unchanged. It verifies
-repository, workflow, PR association, current trusted/open PR head and original
-workflow run numbers before requesting cancellation of older active attempts.
-The highest run number at the current head wins, including same-SHA transitions.
-Later retries keep their original run number and cannot displace newer work.
-PR state and target identity are rechecked before each request. Ambiguous or
-unavailable metadata fails safely without broadening cancellation. More than
-1,000 matching branch runs also stops cleanup rather than using a partial list. No force
-cancellation is used, so unconditional cleanup can finish.
-
-The controller becomes effective only after its workflow is merged to the
-default branch. Until then, runs are isolated but older work is not automatically
-cancelled. Historical runs retain their original workflow: their old groups are
-distinct from new attempt groups, but historical runs can still cancel each
-other before the controller responds. Fresh preflight still rejects stale heads;
-failed-job retries can reuse a prior policy result but never bypass exact-source,
-fingerprint and final evidence verification. Non-PR runs remain independent.
-
 Each manifest names its owning job and must match that job's successful test,
 verification and evidence-upload steps and independently verified checkout.
 Every originating qualification must also contain all three successful workers,

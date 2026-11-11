@@ -1635,7 +1635,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn(": write\n", workflow)
         self.assertIn("force_full_ci:", workflow)
         self.assertLess(workflow.index("name: Restore and build"), workflow.index("name: Find reusable test executions"))
-        self.assertLess(workflow.index("name: Find reusable test executions"), workflow.index("run: bash scripts/ci/install-browser-dependencies.sh"))
+        self.assertLess(workflow.index("name: Find reusable test executions"), workflow.index("run: npx playwright install --with-deps chromium"))
         self.assertNotIn("install-deps chromium", workflow)
         self.assertIn('sql_image="$(python3 -B scripts/ci/reuse.py sql-image)"', workflow)
         self.assertIn("SQL_IMAGE: ${{ steps.sql.outputs.image }}", workflow)

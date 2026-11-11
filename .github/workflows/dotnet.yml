@@ -31,11 +31,8 @@ permissions:
   actions: read
 
 concurrency:
-  # Native concurrency is applied before preflight and cannot compare run age.
-  # The trusted default-branch PR CI controller cancels superseded runs instead.
-  # Unique attempt groups protect newer runs from stale or same-SHA retries.
-  group: ${{ github.workflow }}-run-${{ github.run_id }}-${{ github.run_attempt }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validation-policy:
@@ -694,8 +691,7 @@ jobs:
 
       - name: Install browser acceptance dependencies
         if: ${{ steps.reuse.outputs.browser != 'true' }}
-        timeout-minutes: 25
-        run: bash scripts/ci/install-browser-dependencies.sh
+        run: npx playwright install --with-deps chromium
 
       - name: Run browser accessibility tests
         id: browser
