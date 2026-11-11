@@ -9,7 +9,6 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
-    [DataRow("purchase", "suggestion", true, false)]
     [DataRow("alreadyOwn", "suggestion", false, false)]
     [DataRow("catalogFound", "suggestion", false, false)]
     [DataRow("edit", "outstanding_purchase", true, true)]
@@ -55,6 +54,87 @@ public sealed partial class PatronJourneyTests
                 item.TitleRequestId == seeded.Id && item.EventType == "autohold_opt_out"));
             Assert.IsFalse(await context.HoldPlacementOperations.AsNoTracking().AnyAsync(item =>
                 item.TitleRequestId == seeded.Id));
+        }
+        finally
+        {
+            await DeleteBibOwnershipRequestsAsync([seeded.Id]);
+        }
+    }
+
+    [TestMethod]
+    public async Task PurchaseRejectsAutomaticHoldOverrideInsteadOfChangingTheSavedPreference()
+    {
+        var actor = await GetOwnershipTestActorAsync();
+        var seeded = await SeedBibOwnershipRequestAsync(
+            $"purchase-auto-hold-override-{Guid.NewGuid():N}", 9001, staffVerified: true,
+            status: "suggestion", autoHold: true);
+        try
+        {
+            var result = await factory!.Services.GetRequiredService<TitleRequestMutationService>()
+                .ActionAsync(actor, seeded.Id, new TitleRequestActionInput
+                {
+                    Version = StaffVersion.Encode(seeded.RowVersion),
+                    Action = "purchase",
+                    Autohold = JsonSerializer.SerializeToElement(false)
+                }.ToCommand(), CancellationToken.None);
+            Assert.AreEqual("invalid_action", result.Code,
+                "Purchase must use the saved automatic-hold setting; changing it belongs to explicit Save.");
+
+            var contexts = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+            await using var verify = await contexts.CreateDbContextAsync();
+            var current = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == seeded.Id);
+            Assert.AreEqual("suggestion", current.Status);
+            Assert.IsTrue(current.AutoHold);
+            Assert.AreEqual(0, await verify.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == seeded.Id));
+            Assert.AreEqual(0, await verify.TitleRequestEvents.CountAsync(item => item.TitleRequestId == seeded.Id));
+        }
+        finally
+        {
+            await DeleteBibOwnershipRequestsAsync([seeded.Id]);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task CatalogReviewRejectsAutomaticHoldPreferenceChangedAfterReview(bool reviewedAutoHold)
+    {
+        var actor = await GetOwnershipTestActorAsync();
+        var seeded = await SeedBibOwnershipRequestAsync(
+            $"review-auto-hold-{Guid.NewGuid():N}", 9001, staffVerified: true,
+            status: "outstanding_purchase", autoHold: reviewedAutoHold);
+        try
+        {
+            var staleVersion = StaffVersion.Encode(seeded.RowVersion);
+            var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+            int eventsBefore;
+            await using (var context = await contexts.CreateDbContextAsync())
+            {
+                eventsBefore = await context.TitleRequestEvents.AsNoTracking()
+                    .CountAsync(item => item.TitleRequestId == seeded.Id);
+                var request = await context.TitleRequests.SingleAsync(item => item.Id == seeded.Id);
+                request.AutoHold = !reviewedAutoHold;
+                await context.SaveChangesAsync();
+            }
+
+            var result = await factory.Services.GetRequiredService<TitleRequestMutationService>()
+                .ActionAsync(actor, seeded.Id, new TitleRequestActionInput
+                {
+                    Version = staleVersion,
+                    Action = "catalogFound"
+                }.ToCommand(), CancellationToken.None);
+            Assert.AreEqual("stale_version", result.Code,
+                "A confirmation based on the previous automatic-hold preference must not take a different branch.");
+
+            await using var verification = await contexts.CreateDbContextAsync();
+            var current = await verification.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == seeded.Id);
+            Assert.AreEqual("outstanding_purchase", current.Status);
+            Assert.AreEqual(!reviewedAutoHold, current.AutoHold);
+            Assert.AreEqual(eventsBefore, await verification.TitleRequestEvents.AsNoTracking()
+                .CountAsync(item => item.TitleRequestId == seeded.Id),
+                "The stale review creates no accepted history or workflow side effect.");
+            Assert.IsFalse(await verification.HoldPlacementOperations.AsNoTracking()
+                .AnyAsync(item => item.TitleRequestId == seeded.Id));
         }
         finally
         {

@@ -10,17 +10,27 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
-    [DataRow("inactive")]
-    [DataRow("email")]
-    [DataRow("library")]
-    [DataRow("request")]
-    [DataRow("other_actor")]
-    public async Task PolarisQueueReplayReauthorizesAfterLockWaitAndChecksOriginalActor(string mutation)
+    [DataRow("additionalCopy", "inactive")]
+    [DataRow("additionalCopy", "email")]
+    [DataRow("additionalCopy", "library")]
+    [DataRow("additionalCopy", "request")]
+    [DataRow("additionalCopy", "other_actor")]
+    [DataRow("purchase", "inactive")]
+    [DataRow("purchase", "email")]
+    [DataRow("purchase", "library")]
+    [DataRow("purchase", "request")]
+    [DataRow("purchase", "other_actor")]
+    public async Task PolarisQueueReplayReauthorizesAfterLockWaitAndChecksOriginalActor(string action, string mutation)
     {
         await using var fixture = await SeedPolarisQueueAsync();
-        var input = QueueCommand(fixture.Source, "additionalCopy");
+        if (action == "purchase")
+        {
+            await SetSavedPurchaseBibAsync(fixture, autoHold: false);
+        }
+        var input = action == "purchase" ? PurchaseTaskCommand(fixture.Source, false) : QueueCommand(fixture.Source, action);
         var accepted = await QueueService().ActionAsync(fixture.Actor, fixture.Source.Id, input, CancellationToken.None);
         Assert.AreEqual("updated", accepted.Code);
+        var providerCalls = fixture.Provider.Calls.Count;
         var replayActor = fixture.Actor;
         if (mutation == "other_actor")
         {
@@ -41,7 +51,7 @@ public sealed partial class PatronJourneyTests
             var sql = mutation switch
             {
                 "inactive" => "UPDATE [asap].[StaffUser] SET [IsActive] = 0 WHERE [Id] = @id;",
-                "email" => "UPDATE [asap].[StaffUser] SET [UserPrincipalName] = N'changed-replay@example.org', [NormalizedUserPrincipalName] = N'CHANGED-REPLAY@EXAMPLE.ORG' WHERE [Id] = @id;",
+                "email" => "UPDATE [asap].[StaffUser] SET [UserPrincipalName] = CONCAT(N'changed-replay-', CONVERT(nvarchar(20), @id), N'@example.org'), [NormalizedUserPrincipalName] = UPPER(CONCAT(N'changed-replay-', CONVERT(nvarchar(20), @id), N'@example.org')) WHERE [Id] = @id;",
                 "library" => "UPDATE [asap].[StaffUser] SET [OrganizationId] = 101 WHERE [Id] = @id;",
                 "request" => "UPDATE [asap].[TitleRequest] SET [LibraryOrganizationId] = 101 WHERE [Id] = @id;",
                 _ => null
@@ -55,10 +65,13 @@ public sealed partial class PatronJourneyTests
             await transaction.CommitAsync();
             var replay = await pending.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.AreEqual(mutation == "other_actor" ? "operation_conflict" : mutation == "request" ? "not_found" : "staff_scope_forbidden", replay.Code);
+            Assert.AreEqual(providerCalls, fixture.Provider.Calls.Count, "Receipt replay must reauthorize without returning to Polaris.");
             await using var verify = await fixture.Contexts.CreateDbContextAsync();
             Assert.AreEqual(1, await verify.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == fixture.Source.Id));
             Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(item => item.TitleRequestId == fixture.Source.Id && item.EventType == "status_changed"));
             Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(item => item.TitleRequestId == fixture.Source.Id && item.EventType == "polaris_queue_completed"));
+            Assert.AreEqual(action == "purchase" ? "closed" : "pending_hold",
+                await verify.TitleRequests.Where(item => item.Id == fixture.Source.Id).Select(item => item.Status).SingleAsync());
         }
         finally
         {

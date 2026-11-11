@@ -40,6 +40,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     global.DOMParser = dom.window.DOMParser;
     global.FormData = dom.window.FormData;
     global.URLSearchParams = dom.window.URLSearchParams;
+    let purchaseTaskUuid = 0;
+    Object.defineProperty(dom.window.crypto, 'randomUUID', { configurable: true,
+      value: () => `00000000-0000-4000-8000-${String(++purchaseTaskUuid).padStart(12, '0')}` });
     dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
     const confirmMessages = [];
@@ -48,6 +51,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       return !(scenarioOptions.formatWarning || scenarioOptions.autoClaimOther ||
         scenarioOptions.autoHoldOffBib || scenarioOptions.autoHoldOffOutstandingPurchase ||
         scenarioOptions.autoHoldOnlyOutstandingPurchase ||
+        scenarioOptions.automaticHoldReviewRefresh && scenarioOptions.purchaseAutohold &&
+          scenarioOptions.automaticHoldNext === false ||
         scenarioOptions.legacyNoHoldOutstandingEdit || scenarioOptions.legacyNoHoldPendingEdit) ||
         confirmMessages.length > 1;
     });
@@ -56,7 +61,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       id: '20', role: scenarioOptions.supersededFollowup || scenarioOptions.pickupOperator ? 'super_admin' : 'staff',
       organizationId: 2, organizationName: 'Library',
       displayName: 'Staff', userPrincipalName: 'staff@example.org',
-      purchaseReminderDefault: profileDefault, defaultMineUnclaimedFilter: false
+      purchaseReminderDefault: profileDefault, additionalCopyReminderDefault: profileDefault,
+      defaultMineUnclaimedFilter: false
     };
     const configuration = {
       availableFormats: scenarioOptions.formatWarning || scenarioOptions.manualFormat
@@ -68,7 +74,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     const request = {
       id, version: 'v1', type: 'title_request', title: 'Original title', author: null,
       libraryOrgId: 2, libraryOrgName: 'Library', barcode: '20000000000001',
-      status: scenarioOptions.autoHoldOffOutstandingPurchase || scenarioOptions.autoHoldOnlyOutstandingPurchase ||
+      status: scenarioOptions.verifiedCatalogFound || scenarioOptions.autoHoldOffOutstandingPurchase || scenarioOptions.autoHoldOnlyOutstandingPurchase ||
         scenarioOptions.legacyNoHoldOutstandingEdit
         ? 'outstanding_purchase'
         : scenarioOptions.pickupWrappedResponse || scenarioOptions.stalePickup ||
@@ -76,6 +82,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           scenarioOptions.legacyNoHoldPendingEdit ? 'pending_hold' : 'suggestion',
       format: 'book', formatLabel: 'Book', identifier: null,
       bibid: scenarioOptions.verifyBib || scenarioOptions.verifiedUnchangedBib || scenarioOptions.purchaseVerifiedBib ||
+        scenarioOptions.verifiedCatalogFound ||
         scenarioOptions.autoHoldOffBib || scenarioOptions.autoHoldOffOutstandingPurchase ||
         scenarioOptions.autoHoldOnlyOutstandingPurchase ||
         scenarioOptions.legacyNoHoldOutstandingEdit || scenarioOptions.legacyNoHoldPendingEdit ||
@@ -84,7 +91,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         scenarioOptions.verificationInvalidation ||
         scenarioOptions.pickupWrappedResponse || scenarioOptions.stalePickup ? 9001 : null,
       bibidStaffVerified: Boolean(scenarioOptions.verificationInvalidation || scenarioOptions.verifiedUnchangedBib ||
-        scenarioOptions.purchaseVerifiedBib || scenarioOptions.verifiedPendingHold),
+        scenarioOptions.purchaseVerifiedBib || scenarioOptions.verifiedCatalogFound || scenarioOptions.verifiedPendingHold),
       claimedByStaffUserId: scenarioOptions.unclaimedPreview ? null : scenarioOptions.autoClaimOther ? '21' : staff.id,
       claimType: scenarioOptions.formatWarning || scenarioOptions.autoClaimOther ? 'automatic_format_rule'
         : scenarioOptions.manualFormat ? 'manual' : null,
@@ -124,7 +131,12 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     let releaseDuplicateDetail = null;
     let duplicateDetailDeferred = false;
     let releaseFollowupQueue = null;
+    let automaticHoldRefreshCalls = 0;
     const mutationPayloads = [];
+    let purchaseTaskReceipt = null;
+    let purchaseTaskCount = 0;
+    let purchaseTaskRecoveryAttempts = 0;
+    let purchaseTaskRecoveryUncommitted = false;
     let duplicateRejected = false;
     global.fetch = async (url, options = {}) => {
       if (url.endsWith('/session')) {
@@ -166,6 +178,10 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
             ? [currentRequest, otherRequest] : [currentRequest] });
       }
       if (new URL(url, 'http://localhost').pathname.endsWith(`/title-requests/${id}`)) {
+        if (scenarioOptions.automaticHoldReviewRetry && committed && currentRequest.version === 'v2') {
+          automaticHoldRefreshCalls += 1;
+          if (automaticHoldRefreshCalls === 1) return response(503, { message: 'Current detail unavailable' });
+        }
         if (scenarioOptions.duplicateNavigateDuringRefresh && duplicateRejected && !duplicateDetailDeferred) {
           duplicateDetailDeferred = true;
           return new Promise(resolve => { releaseDuplicateDetail = () => resolve(response(200, currentRequest)); });
@@ -267,6 +283,30 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (url.endsWith(`/title-requests/${id}/action`) && options.method === 'POST') {
         payload = JSON.parse(options.body);
         mutationPayloads.push(payload);
+        if (scenarioOptions.purchaseTaskRecoveryStale && payload.action === 'purchase' && !purchaseTaskRecoveryUncommitted) {
+          purchaseTaskRecoveryUncommitted = true;
+          throw new TypeError('Connection lost before Purchase task commit');
+        }
+        if (purchaseTaskReceipt) {
+          assert.deepEqual(payload, purchaseTaskReceipt.body,
+            'Purchase recovery resends the exact original OperationId and command payload.');
+          purchaseTaskRecoveryAttempts += 1;
+          if (scenarioOptions.purchaseTaskRecoveryForbidden && purchaseTaskRecoveryAttempts === 1) {
+            return response(403, { code: 'staff_scope_forbidden', message: 'Current staff authorization must be refreshed.' });
+          }
+          return response(200, purchaseTaskReceipt.result);
+        }
+        if (scenarioOptions.purchaseTaskRecoveryStale && purchaseTaskRecoveryUncommitted) {
+          currentRequest = { ...currentRequest, version: 'v2' };
+          return response(409, { code: 'stale_version', message: 'The request changed before this operation was accepted.' });
+        }
+        if (scenarioOptions.automaticHoldReviewRefresh && payload.action === 'edit') {
+          currentRequest = { ...currentRequest, autohold: payload.autohold, version: 'v2' };
+          committed = true;
+          return response(200, { committed: true,
+            request: scenarioOptions.automaticHoldReviewRetry ? null : currentRequest,
+            finalStatus: currentRequest.status });
+        }
         if (scenarioOptions.duplicateRecovery && !duplicateRejected) {
           duplicateRejected = true;
           currentRequest = { ...currentRequest, version: 'v2' };
@@ -307,25 +347,36 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           return response(503, { code: 'notification_dependency_unavailable',
             message: 'Notification configuration is temporarily unavailable. The request was not changed.' });
         }
-        const finalStatus = payload.action === 'closeDuplicate' || action === 'reject' ? 'closed'
+        const createsPurchaseTask = payload.action === 'purchase' && currentRequest.status === 'suggestion' &&
+          currentRequest.bibidStaffVerified === true && currentRequest.autohold === false;
+        const finalStatus = createsPurchaseTask || payload.action === 'closeDuplicate' || action === 'reject' ? 'closed'
           : action === 'alreadyOwn' || scenarioOptions.purchaseVerifiedBib ? 'pending_hold' : 'outstanding_purchase';
         currentRequest = { ...currentRequest, version: scenarioOptions.duplicateRecovery ? 'v3' : 'v2',
           status: scenarioOptions.serverAdvancedStatus ? 'closed' : finalStatus,
+          ...(createsPurchaseTask ? { closeReason: 'purchased_no_hold', additionalCopyRequestId: '9007199254740999' } : {}),
           activity: [...currentRequest.activity, {
           id: '9007199254740999', eventType: 'status_changed', actorType: 'staff',
           actorName: 'Staff', message: 'Committed', created: '2026-01-02T00:00:00Z'
         }] };
         committed = true;
-        const result = response(200, { committed: true,
+        const responseBody = { committed: true,
           request: scenarioOptions.detailRefreshFails || scenarioOptions.refreshConcurrentStatus ? null : currentRequest,
           finalStatus,
-          notificationStatus: scenarioOptions.rejectEmailQueued ? 'queued'
+          notificationStatus: createsPurchaseTask ? explicitChoice ? 'queued' : 'not_requested' : scenarioOptions.rejectEmailQueued ? 'queued'
             : action === 'purchase' && explicitChoice && !scenarioOptions.purchaseVerifiedBib ? 'suppressed' : 'not_requested',
-          notificationReason: action === 'purchase' && explicitChoice && !scenarioOptions.purchaseVerifiedBib ? 'mail_not_configured' : null,
-          patronNotificationStatus: action === 'purchase' && !scenarioOptions.purchaseVerifiedBib ? 'suppressed' : null,
-          patronNotificationReason: action === 'purchase' && !scenarioOptions.purchaseVerifiedBib
+          notificationReason: !createsPurchaseTask && action === 'purchase' && explicitChoice && !scenarioOptions.purchaseVerifiedBib ? 'mail_not_configured' : null,
+          patronNotificationStatus: createsPurchaseTask ? null : action === 'purchase' && !scenarioOptions.purchaseVerifiedBib ? 'suppressed' : null,
+          patronNotificationReason: !createsPurchaseTask && action === 'purchase' && !scenarioOptions.purchaseVerifiedBib
             ? 'patron_refresh_unavailable' : null,
-          refreshUnavailable: Boolean(scenarioOptions.detailRefreshFails || scenarioOptions.refreshConcurrentStatus) });
+          ...(createsPurchaseTask ? { operationId: payload.operationId, additionalCopyRequestId: '9007199254740999',
+            queueCommittedStatus: 'closed' } : {}),
+          refreshUnavailable: Boolean(scenarioOptions.detailRefreshFails || scenarioOptions.refreshConcurrentStatus) };
+        const result = response(200, responseBody);
+        if (createsPurchaseTask) {
+          purchaseTaskCount += 1;
+          purchaseTaskReceipt = { body: payload, result: responseBody };
+          if (scenarioOptions.purchaseTaskResponseLost) throw new TypeError('Connection lost after Purchase task commit');
+        }
         return scenarioOptions.staleMutation
           ? new Promise(resolve => { releaseMutation = () => resolve(result); })
           : result;
@@ -358,6 +409,86 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.equal(document.querySelector('.pending-audit-preview').hidden, true);
       assert.equal(document.querySelector('.request-save-state').textContent, 'All changes saved');
       assert.equal(document.querySelector('.request-save-footer button[type="submit"]').disabled, true);
+      return;
+    }
+    if (scenarioOptions.automaticHoldReviewRefresh) {
+      const reviewAction = scenarioOptions.automaticHoldAction || 'purchase';
+      const triggerLabel = reviewAction === 'purchase' ? 'Purchase'
+        : reviewAction === 'alreadyOwn' ? 'Already own'
+          : scenarioOptions.purchaseAutohold ? 'Ready for hold' : 'Close without hold';
+      const trigger = [...document.querySelectorAll('.action-bar button')]
+        .find(item => item.textContent.trim() === triggerLabel);
+      trigger.click();
+      await until(() => document.querySelector('.action-choice'), `${triggerLabel} review opens`);
+      let review = document.querySelector('.action-choice');
+      const confirm = review.querySelector('button[type="submit"]');
+      const autoHold = document.querySelector('.edit-form input[type="checkbox"]');
+      const initialAutoHold = Boolean(scenarioOptions.purchaseAutohold);
+      const nextAutoHold = Boolean(scenarioOptions.automaticHoldNext);
+      autoHold.checked = !initialAutoHold;
+      autoHold.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      assert.equal(confirm.disabled, true, 'An unsaved automatic-hold edit disables the dependent review.');
+      assert.equal(review.querySelector('.automatic-hold-review-invalidated')?.textContent,
+        'Save the automatic-hold change before continuing.');
+      review.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      assert.equal(payload, null, 'An invalidated review cannot dispatch its action.');
+      autoHold.checked = initialAutoHold;
+      autoHold.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      assert.equal(confirm.disabled, false, 'Returning to the saved preference restores the review.');
+      assert.equal(review.querySelector('.automatic-hold-review-invalidated'), null);
+      autoHold.checked = nextAutoHold;
+      autoHold.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      const form = document.querySelector('.edit-form');
+      form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      if (initialAutoHold && !nextAutoHold) {
+        assert.equal(payload, null, 'Changing the preference only opens the existing Save confirmation.');
+        await until(() => confirmMessages.length === 1 && !document.querySelector('#confirmation-dialog')?.open,
+          'the edit save requires its explicit confirmation');
+        form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      }
+      await until(() => mutationPayloads.length === 1, 'explicit Save changes persists the preference');
+      if (scenarioOptions.automaticHoldReviewRetry) {
+        await until(() => document.querySelector('.automatic-hold-review-refresh'),
+          'failed authoritative refresh leaves a retry in the modal');
+        assert.equal(document.querySelector('#request-dialog').open, true);
+        assert.equal(review.querySelector('button[type="submit"]').disabled, true);
+        assert.equal(document.querySelector('.automatic-hold-review-refresh button').textContent.trim(), 'Retry current request');
+        assert.equal(mutationPayloads.length, 1, 'Refresh failure does not dispatch the reviewed action.');
+        document.querySelector('.automatic-hold-review-refresh button').click();
+      }
+      await until(() => document.querySelector('.action-choice') !== review,
+        'the same modal rebuilds its review from the saved request');
+      review = document.querySelector('.action-choice');
+      if (reviewAction === 'purchase') {
+        if (!nextAutoHold && scenarioOptions.purchaseVerifiedBib) {
+          assert.equal(review.querySelector('h3').textContent, 'Purchase an additional copy');
+          assert.match(review.textContent, /A matching BIB exists and the patron does not want a hold\./);
+          assert.equal(review.querySelector('button[type="submit"]').textContent, 'Create purchasing task');
+        } else {
+          assert.match(review.textContent, nextAutoHold ? /Pending hold for automatic hold placement/ : /Automatic hold is off/);
+        }
+      } else if (reviewAction === 'alreadyOwn') {
+        assert.match(review.textContent, nextAutoHold ? /move the verified BIB to Pending hold/ : /close it without a hold/);
+      } else {
+        assert.match(review.textContent, nextAutoHold ? /Move this verified catalog title to Pending hold/ : /Close this verified catalog title without a hold/);
+      }
+      assert.equal(review.querySelector('button[type="submit"]').disabled, false);
+      assert.equal(document.querySelector('#request-dialog').open, true, 'Refreshing the review keeps the modal open.');
+      assert.match(document.querySelector('#app-status').textContent,
+        new RegExp(`Automatic holds are now ${nextAutoHold ? 'on' : 'off'}`));
+      review.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      await until(() => mutationPayloads.length === 2, 'the refreshed review submits once');
+      assert.equal(mutationPayloads[0].action, 'edit');
+      assert.equal(mutationPayloads[0].autohold, nextAutoHold);
+      assert.equal(mutationPayloads[1].action, reviewAction);
+      assert.equal(mutationPayloads[1].version, 'v2', 'The review uses the current saved request version.');
+      if (reviewAction === 'purchase' && !nextAutoHold && scenarioOptions.purchaseVerifiedBib) {
+        assert.match(mutationPayloads[1].operationId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+        assert.equal(mutationPayloads[1].requestType, 'title_request');
+        assert.equal(mutationPayloads[1].emailPurchaseReminder, profileDefault);
+      }
+      assert.equal(confirmMessages.length, initialAutoHold && !nextAutoHold ? 2 : 0,
+        'The rebuilt review requires no redundant action confirmation beyond any explicit Save warning.');
       return;
     }
     if (scenarioOptions.autoClaimOther) {
@@ -393,6 +524,10 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.equal(Boolean(placeHold), Boolean(scenarioOptions.verifiedPendingHold));
       if (scenarioOptions.duplicateHoldRecovery) {
         placeHold.click();
+        await until(() => document.querySelector('.action-choice'), 'place-hold review opens');
+        const review = document.querySelector('.action-choice');
+        assert.equal(payload, null, 'Opening the place-hold review does not mutate');
+        review.querySelector('button[type="submit"]').click();
         await until(() => payload !== null, 'place-hold mutation starts');
         await checkDuplicateRecovery('place-hold', 'Pending hold');
         return;
@@ -400,6 +535,10 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (scenarioOptions.holdTimeout || scenarioOptions.holdProviderError ||
           scenarioOptions.holdRecordedForbidden || scenarioOptions.holdReviewRequired) {
         placeHold.click();
+        await until(() => document.querySelector('.action-choice'), 'place-hold review opens');
+        const review = document.querySelector('.action-choice');
+        assert.equal(payload, null, 'Opening the place-hold review does not mutate');
+        review.querySelector('button[type="submit"]').click();
         if (scenarioOptions.holdRecordedForbidden || scenarioOptions.holdReviewRequired) {
           await until(() => !document.querySelector('#signed-out').hidden,
             'recorded provider result remains visible after session loss');
@@ -483,10 +622,14 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
         assert.equal(document.querySelector('.request-save-footer button[type="submit"]').disabled, true);
         [...document.querySelectorAll('.action-bar button')]
           .find(item => item.textContent.includes('Already own')).click();
+        await until(() => document.querySelector('.action-choice'), 'verified Already own review opens');
+        const review = document.querySelector('.action-choice');
+        assert.match(review.textContent, /close it without a hold/);
+        assert.equal(payload, null, 'Opening Already own review does not mutate');
+        review.querySelector('button[type="submit"]').click();
         await until(() => payload !== null, 'unchanged verified BIB action submits');
         assert.equal(payload.action, 'alreadyOwn');
-        await until(() => confirmMessages.length > 0 && !document.querySelector('#confirmation-dialog')?.open, 'confirmation choice settled');
-        assert.match(confirmMessages[0], /close it without a hold/);
+        assert.deepEqual(confirmMessages, [], 'The inline review is the single confirmation.');
         return;
       }
       if (!scenarioOptions.purchaseVerifiedBib) {
@@ -655,6 +798,13 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.equal(select.options[1].value, templateId);
       assert.equal(choice.querySelector('img'), null);
       select.value = templateId;
+    } else if (scenarioOptions.purchaseVerifiedBib && !scenarioOptions.purchaseAutohold) {
+      assert.equal(choice.querySelector('h3').textContent, 'Purchase an additional copy');
+      assert.match(choice.textContent, /A matching BIB exists and the patron does not want a hold\./);
+      const checkbox = choice.querySelector('input[type="checkbox"]');
+      assert.ok(checkbox, 'The Purchase task uses the additional-copy reminder choice.');
+      assert.equal(checkbox.checked, profileDefault);
+      checkbox.checked = explicitChoice;
     } else if (scenarioOptions.purchaseVerifiedBib) {
       assert.equal(choice.querySelector('input[type="checkbox"]'), null);
       assert.match(choice.textContent, /A purchase reminder does not apply/);
@@ -674,12 +824,93 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       return;
     }
     if (action === 'reject') assert.equal(choice.querySelector('button[type="submit"]').textContent, 'Reject and close');
-    else assert.equal(choice.querySelector('button[type="submit"]').textContent, 'Confirm purchase');
+    else assert.equal(choice.querySelector('button[type="submit"]').textContent,
+      scenarioOptions.purchaseVerifiedBib && !scenarioOptions.purchaseAutohold ? 'Create purchasing task' : 'Confirm purchase');
     choice.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     choice.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     await until(() => payload !== null, 'action submitted');
     if (action === 'reject') assert.equal(payload.rejectionTemplateId, templateId);
-    else assert.equal(payload.emailPurchaseReminder, scenarioOptions.purchaseVerifiedBib ? false : explicitChoice);
+    else assert.equal(payload.emailPurchaseReminder,
+      scenarioOptions.purchaseVerifiedBib && scenarioOptions.purchaseAutohold ? false : explicitChoice);
+    if (scenarioOptions.purchaseTaskResponseLost || scenarioOptions.purchaseTaskRecoveryStale) {
+      assert.equal(payload.action, 'purchase');
+      assert.equal(payload.requestType, 'title_request');
+      assert.match(payload.operationId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+      await until(() => document.querySelector('.purchase-task-recovery'), 'uncertain Purchase renders its same-operation recovery panel');
+      assert.match(document.querySelector('.purchase-task-recovery').textContent, /Purchase result unconfirmed/);
+      assert.equal(document.querySelector('.action-bar button').disabled, true, 'Another action stays blocked while the receipt is unresolved.');
+      const original = mutationPayloads[0];
+      assert.equal(document.querySelectorAll('.purchase-task-recovery button').length, 1);
+      const recoveryButton = document.querySelector('.purchase-task-recovery button');
+      const storageKey = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index))
+        .find(key => key?.includes('.purchaseTask.'));
+      assert.ok(storageKey, 'The original Purchase body remains in session storage before recovery.');
+      const storedPurchase = window.sessionStorage.getItem(storageKey);
+      if (scenarioOptions.purchaseTaskRecoveryStale) {
+        recoveryButton.click();
+        await until(() => mutationPayloads.length === 2 && !document.querySelector('.purchase-task-recovery'),
+          'an authoritative stale-version response resolves an uncommitted operation');
+        assert.equal(currentRequest.version, 'v2', 'The stale response refreshes the authoritative request version.');
+        assert.equal(currentRequest.status, 'suggestion', 'A stale operation did not create a task or change request state.');
+        assert.equal(purchaseTaskCount, 0, 'No task receipt was created for the rejected operation.');
+        assert.equal(window.sessionStorage.getItem(storageKey), null,
+          'The terminal stale response clears only the operation proven not to have committed.');
+        assert.equal(document.querySelector('.action-bar button').disabled, false,
+          'Refreshing after terminal stale rejection restores current actions.');
+        return;
+      }
+      if (scenarioOptions.purchaseTaskRecoveryDraftBlocked) {
+        const notes = document.querySelector('.edit-form textarea');
+        notes.value = `${notes.value} local recovery draft`;
+        notes.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+        assert.equal(document.querySelector('.request-save-footer button[type="submit"]').disabled, false,
+          'The edited request draft is dirty before receipt recovery.');
+        recoveryButton.click();
+        await until(() => /saved Purchase recovery no longer belongs to this request view/.test(
+          document.querySelector('#app-status').textContent), 'dirty draft blocks local receipt recovery');
+        assert.equal(mutationPayloads.length, 1, 'A locally blocked recovery sends zero additional action POSTs.');
+        assert.equal(window.sessionStorage.getItem(storageKey), storedPurchase,
+          'A local admission rejection retains the exact Purchase body and OperationId.');
+        assert.equal(recoveryButton.isConnected, true, 'The recovery panel remains available after local rejection.');
+        assert.equal(recoveryButton.disabled, false, 'Local rejection re-enables recovery.');
+        const revert = [...document.querySelectorAll('.request-save-footer button')]
+          .find(button => button.textContent.trim() === 'Revert changes');
+        assert.ok(revert && !revert.disabled, 'The dirty request can be reverted without dispatching another mutation.');
+        const confirmationsBeforeRevert = confirmMessages.length;
+        revert.click();
+        await until(() => confirmMessages.length === confirmationsBeforeRevert + 1,
+          'reverting the local draft asks for explicit confirmation');
+        await until(() => document.querySelector('.edit-form textarea')?.value === (request.notes || ''),
+          'reverting the local draft restores the editor');
+        assert.equal(document.querySelector('.request-save-footer button[type="submit"]').disabled, true,
+          'The recovery guard released only after the draft was reverted.');
+        assert.equal(window.sessionStorage.getItem(storageKey), storedPurchase,
+          'Reverting the draft retains the exact Purchase retry receipt.');
+      }
+      if (scenarioOptions.purchaseTaskRecoveryForbidden) {
+        recoveryButton.click();
+        await until(() => mutationPayloads.length === 2 && !recoveryButton.disabled,
+          'a 403 response keeps the unresolved recovery available');
+        assert.equal(recoveryButton.isConnected, true, 'Authorization rejection does not remove recovery.');
+        assert.equal(window.sessionStorage.getItem(storageKey), storedPurchase,
+          'A 403 before receipt lookup retains the exact Purchase body and OperationId.');
+        assert.deepEqual(mutationPayloads[1], original, 'The denied replay uses the exact stored command.');
+      }
+      recoveryButton.click();
+      const expectedRecoveryPosts = scenarioOptions.purchaseTaskRecoveryForbidden ? 3 : 2;
+      await until(() => mutationPayloads.length === expectedRecoveryPosts && !document.querySelector('.purchase-task-recovery'),
+        'the identical OperationId receipt confirms the linked task and clears recovery');
+      assert.ok(document.querySelector('.related-additional-copy a'), 'The authoritative request links the recovered task.');
+      assert.deepEqual(mutationPayloads.at(-1), original);
+      assert.equal(purchaseTaskCount, 1, 'The replay recovers the original task without creating another.');
+      const storageKeys = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index));
+      assert.equal(storageKeys.some(key => key?.includes('.purchaseTask.')), false,
+        `The browser clears its Purchase receipt only after the committed task is confirmed: ${JSON.stringify(storageKeys)}`);
+      assert.equal(document.querySelector('.purchase-task-recovery'), null);
+      assert.equal(document.querySelector('.related-additional-copy a').textContent, 'Task 9007199254740999');
+      assert.match(document.querySelector('#app-status').textContent, /Final state: Closed/);
+      return;
+    }
     assert.deepEqual(confirmMessages, [], 'the retained review is the final confirmation');
     assert.equal(mutationPayloads.length, 1, 'duplicate review submits send one command');
     if (scenarioOptions.staleMutation) {
@@ -909,7 +1140,23 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('purchase', false, true, { serverAdvancedStatus: true });
   await scenario('purchase', false, true, { serverAdvancedStatus: true, refreshConcurrentStatus: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, purchaseTaskResponseLost: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, purchaseTaskResponseLost: true,
+    purchaseTaskRecoveryDraftBlocked: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, purchaseTaskResponseLost: true,
+    purchaseTaskRecoveryForbidden: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, purchaseTaskRecoveryStale: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true, purchaseAutohold: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, purchaseAutohold: true,
+    automaticHoldNext: false, automaticHoldReviewRefresh: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, purchaseAutohold: false,
+    automaticHoldNext: true, automaticHoldReviewRefresh: true });
+  await scenario('alreadyOwn', true, false, { verifiedUnchangedBib: true, purchaseAutohold: true,
+    automaticHoldAction: 'alreadyOwn', automaticHoldNext: false, automaticHoldReviewRefresh: true });
+  await scenario('catalogFound', true, false, { verifiedCatalogFound: true, purchaseAutohold: false,
+    automaticHoldAction: 'catalogFound', automaticHoldNext: true, automaticHoldReviewRefresh: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, purchaseAutohold: true,
+    automaticHoldNext: false, automaticHoldReviewRefresh: true, automaticHoldReviewRetry: true });
   await scenario('purchase', true, true, { cancelReview: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true, cancelReview: true });
   await scenario('reject', false, false, { cancelReview: true });

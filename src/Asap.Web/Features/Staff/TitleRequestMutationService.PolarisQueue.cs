@@ -12,15 +12,30 @@ public sealed partial class TitleRequestMutationService
     private const string QueueReceiptEvent = "polaris_queue_completed";
     private sealed record QueueReceipt(Guid OperationId, string Fingerprint, TitleRequestMutationResult Result);
 
-    private static bool IsValidQueueCommand(TitleRequestActionCommand input) =>
-        input.OperationId is { } operationId && operationId != Guid.Empty &&
-        input.RequestType == "title_request" &&
-        input.Action is "catalogFound" or "additionalCopy" &&
-        input.BibidSupplied && input.Bibid is > 0 && input.StaffSelectedBibIdSupplied &&
-        input.StaffSelectedBibId == input.Bibid && input.Status is null or RequestStatus.PendingHold &&
-        input.Title is null && input.Author is null && !input.Identifier.IsSupplied &&
-        input.Publication is null && !input.ExactPublicationDate.IsSupplied && !input.CustomFields.IsSupplied &&
-        !input.Autohold.IsSupplied && input.Notes is null && input.Format is null && input.RejectionTemplateId is null;
+    private static bool IsValidQueueCommand(TitleRequestActionCommand input)
+    {
+        if (input.OperationId is not { } operationId || operationId == Guid.Empty ||
+            input.RequestType != "title_request")
+        {
+            return false;
+        }
+
+        if (input.Action == "purchase")
+        {
+            return input.EmailPurchaseReminder.HasValue && input.Status is null &&
+                !input.BibidSupplied && !input.StaffSelectedBibIdSupplied &&
+                input.Title is null && input.Author is null && !input.Identifier.IsSupplied &&
+                input.Publication is null && !input.ExactPublicationDate.IsSupplied && !input.CustomFields.IsSupplied &&
+                !input.Autohold.IsSupplied && input.Notes is null && input.Format is null && input.RejectionTemplateId is null;
+        }
+
+        return (input.Action is "catalogFound" or "additionalCopy") &&
+            input.BibidSupplied && input.Bibid is > 0 && input.StaffSelectedBibIdSupplied &&
+            input.StaffSelectedBibId == input.Bibid && input.Status is null or RequestStatus.PendingHold &&
+            input.Title is null && input.Author is null && !input.Identifier.IsSupplied &&
+            input.Publication is null && !input.ExactPublicationDate.IsSupplied && !input.CustomFields.IsSupplied &&
+            !input.Autohold.IsSupplied && input.Notes is null && input.Format is null && input.RejectionTemplateId is null;
+    }
 
     private static string QueueFingerprint(TitleRequestActionCommand input) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(input))));
@@ -93,12 +108,17 @@ public sealed partial class TitleRequestMutationService
     }
 
     private async Task<AdditionalCopyRequest> AddQueuedCopyAsync(
-        AsapDbContext context, TitleRequest source, StaffUser actor, CancellationToken cancellationToken)
+        AsapDbContext context, TitleRequest source, StaffUser actor, CancellationToken cancellationToken,
+        BibValidationResult? purchaseTaskBib = null)
     {
         await AdditionalCopyService.LockAndCountOpenAsync(context, source.LibraryOrganizationId, source.BibId!.Value, cancellationToken);
         var format = await context.MaterialFormats.AsNoTracking().Where(item => item.Id == source.MaterialFormatId)
             .Select(item => item.Code).SingleAsync(cancellationToken);
         var task = AdditionalCopyService.NewTask(source, format, actor, timeProvider.GetUtcNow().UtcDateTime);
+        if (purchaseTaskBib is { } verifiedBib)
+        {
+            task.Title = Clean(verifiedBib.Title) ?? task.Title;
+        }
         task.ClaimedByStaffUserId = source.ClaimedByStaffUserId;
         task.ClaimedByDisplayName = source.ClaimedByDisplayName;
         task.ClaimedAtUtc = source.ClaimedAtUtc;

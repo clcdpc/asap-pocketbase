@@ -93,10 +93,18 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       const more = page.getByRole('button', { name: `More actions for request ${sourceId}`, exact: true });
       const row = title.locator('xpath=ancestor::tr');
       const geometry = await actionGeometry(row);
-      assert.equal(geometry.inline[0], 'purchase', 'Suggestions lead with their eligible workflow step');
+      assert.equal(geometry.inline[0], 'claim', 'Suggestions keep Claim as their direct row action.');
+      assert.equal(geometry.inline.includes('purchase'), false, 'Purchase remains menu-only at actual 200% browser zoom.');
+      assert.equal(geometry.overflow[0], 'purchase', 'The first More item is Purchase at actual 200% browser zoom.');
       assert.ok(geometry.inline.length >= 1 && geometry.overflow.length >= 1, 'Zoom retains direct commands plus only the remainder');
+      const menuPurchase = row.locator('.request-table-menu [data-request-action="purchase"]');
+      assert.equal(await menuPurchase.count(), 1, 'The zoomed row has one More-menu Purchase command.');
+      assert.equal((await menuPurchase.textContent()).trim(), 'Purchase');
+      assert.equal(await menuPurchase.locator('.fa-shopping-cart').count(), 1, 'The menu command keeps its cart icon.');
       await more.focus(); await page.keyboard.press('Enter');
       assert.equal(await more.getAttribute('aria-expanded'), 'true');
+      assert.equal(await page.evaluate(() => document.activeElement?.dataset.requestAction), 'purchase',
+        'Keyboard opening More focuses Purchase at actual 200% browser zoom.');
       await page.evaluate(axe);
       assert.deepEqual(await page.evaluate(async id => (await axe.run(document.getElementById(`request-row-${id}-actions`)))
         .violations.filter(item => ['serious', 'critical'].includes(item.impact)), sourceId), []);
@@ -137,8 +145,19 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       assert.deepEqual((await actionGeometry(closedRow)).inline, ['reopen']);
       assert.equal(await closedRow.locator('.request-row-more, [popover]').count(), 0);
       await scan('closed-actions', closedRow.locator('[data-request-action="reopen"]'));
+      let reopenPosts = 0;
+      const observeReopen = request => {
+        if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith(`/title-requests/${sourceId}/action`)) reopenPosts++;
+      };
+      page.on('request', observeReopen);
       await activateRowAction(closedRow, 'reopen', 'Space');
-      await page.locator('#confirmation-dialog[open]').getByRole('button', { name: 'Cancel', exact: true }).click();
+      const reopenReview = page.locator('#request-dialog .request-workflow-panel .action-choice');
+      await reopenReview.waitFor();
+      assert.match(await reopenReview.textContent(), /Reopen this closed request/);
+      assert.equal(reopenPosts, 0, 'Opening Reopen review does not dispatch a mutation.');
+      await reopenReview.getByRole('button', { name: 'Cancel', exact: true }).click();
+      assert.equal(reopenPosts, 0, 'Canceling Reopen review remains mutation-free.');
+      page.off('request', observeReopen);
       await page.keyboard.press('Escape'); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
       await page.locator('#status-tabs [data-status="suggestion"]').click();
       await page.locator('#request-search').fill(''); await title.waitFor();

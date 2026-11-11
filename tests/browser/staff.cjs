@@ -431,7 +431,22 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.getByRole('button', { name: 'Claim', exact: true }).waitFor();
     assert.match(await page.locator('#app-status').textContent(), /changed|blocked|reload/i);
 
+    let titleClaimPosts = 0;
+    const observeTitleClaim = request => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname ===
+          `/api/asap/staff/title-requests/${args.primaryRequestId}/claim`) titleClaimPosts++;
+    };
+    page.on('request', observeTitleClaim);
     await page.getByRole('button', { name: 'Claim', exact: true }).click();
+    const claimReview = page.locator('.request-workflow-panel .action-choice');
+    await claimReview.waitFor();
+    assert.equal(titleClaimPosts, 0, 'Opening the title Claim review does not mutate the request.');
+    const titleClaimResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === `/api/asap/staff/title-requests/${args.primaryRequestId}/claim`);
+    await claimReview.getByRole('button', { name: 'Claim', exact: true }).click();
+    assert.equal((await titleClaimResponse).status(), 200);
+    page.off('request', observeTitleClaim);
+    assert.equal(titleClaimPosts, 1, 'Explicit title Claim approval dispatches exactly once.');
     await page.getByRole('button', { name: 'Unclaim' }).waitFor();
     await page.getByRole('button', { name: 'Purchase', exact: true }).click();
     assert.match(await page.locator('.action-choice').textContent(), /Outstanding purchase/);
@@ -1529,10 +1544,23 @@ async function runStaleMutationCompletions(browser, args, report) {
     await revealRequestActions(page);
     const titleClear = page.getByRole('button', { name: 'Clear claim' });
     await titleClear.waitFor();
-    await decideConfirmation(page, () => titleClear.click(), dialog => {
-      assert.match(dialog.message(), /become unclaimed/);
-      return dialog.accept();
-    });
+    let titleClearPosts = 0;
+    const observeTitleClear = request => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname ===
+          `/api/asap/staff/title-requests/${args.staleTitleAId}/clear-claim`) titleClearPosts++;
+    };
+    page.on('request', observeTitleClear);
+    await titleClear.click();
+    const titleClearReview = page.locator('#request-dialog .request-workflow-panel .action-choice');
+    await titleClearReview.waitFor();
+    assert.match(await titleClearReview.textContent(), /become unclaimed/);
+    assert.equal(titleClearPosts, 0, 'Opening Clear claim review does not dispatch a mutation.');
+    const titleClearResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === `/api/asap/staff/title-requests/${args.staleTitleAId}/clear-claim`);
+    await titleClearReview.getByRole('button', { name: 'Clear claim', exact: true }).click();
+    assert.equal((await titleClearResponse).status(), 200);
+    assert.equal(titleClearPosts, 1, 'Explicit Clear claim approval dispatches exactly once.');
+    page.off('request', observeTitleClear);
     await page.locator('#request-dialog .detail-meta').filter({ hasText: 'Unclaimed' }).waitFor();
     await page.getByRole('tab', { name: 'Activity', exact: true }).click();
     await page.locator('#request-dialog .request-activity').filter({
@@ -2565,13 +2593,27 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
       /Close reason:\s*Rejected/);
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'single-closed-title-delete');
     await revealRequestActions(page);
-    await decideConfirmation(page, () => page.getByRole('button', { name: 'Permanently delete request' }).click(), dialog => {
-      assert.match(dialog.message(), /cannot be undone/);
-      return dialog.dismiss();
-    });
+    const singleDelete = page.getByRole('button', { name: 'Permanently delete request' });
+    await singleDelete.click();
+    const singleDeleteReview = page.locator('#request-dialog .request-workflow-panel .action-choice');
+    await singleDeleteReview.waitFor();
+    assert.match(await singleDeleteReview.textContent(), /cannot be undone/);
+    assert.equal(singleDeletes, 0, 'Opening single-delete review does not dispatch a mutation.');
+    await singleDeleteReview.getByRole('button', { name: 'Cancel', exact: true }).click();
     assert.equal(singleDeletes, 0);
+    assert.equal(await singleDelete.evaluate(node => node === document.activeElement), true,
+      'Canceling single-delete review returns focus to its opener.');
     await revealRequestActions(page);
-    await decideConfirmation(page, () => page.getByRole('button', { name: 'Permanently delete request' }).click(), dialog => dialog.accept());
+    await singleDelete.click();
+    const approvedDeleteReview = page.locator('#request-dialog .request-workflow-panel .action-choice');
+    await approvedDeleteReview.waitFor();
+    assert.equal(singleDeletes, 0, 'Opening the second delete review remains mutation-free.');
+    const singleDeleteResponse = page.waitForResponse(response => response.request().method() === 'DELETE' &&
+      new URL(response.url()).pathname === `/api/asap/staff/requests/${args.staleTitleAId}`);
+    await approvedDeleteReview.getByRole('button', { name: 'Delete permanently', exact: true }).click();
+    const singleDeleteResult = await singleDeleteResponse;
+    assert.equal(singleDeleteResult.status(), 200, await singleDeleteResult.text());
+    assert.equal((await singleDeleteResult.json()).deleted, true);
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     assert.equal(singleDeletes, 1);
     await page.unroute(detailRoutePattern, detailRoute);
@@ -4199,7 +4241,9 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
       let latest = (await session(context, args.baseOrigin)).staff;
       const deleteRoute = async route => {
         if (route.request().method() !== 'DELETE') { await route.fallback(); return; }
-        versions.push(route.request().postDataJSON().actorVersion);
+        const payload = route.request().postDataJSON();
+        assert.equal(payload.version, snapshot.version, `${kind} deletion retains the current request version`);
+        versions.push(payload.actorVersion);
         if (versions.length === 2) {
           const result = await route.fetch();
           assert.equal(result.status(), 409, await result.text());
@@ -4224,8 +4268,27 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
       }, { id, copy });
       await page.locator('#request-dialog[open]').waitFor();
       const remove = async () => {
-        await revealRequestActions(page);
-        await decideConfirmation(page, () => page.getByRole('button', { name: copy ? 'Permanently delete task' : 'Permanently delete request', exact: true }).click(), dialog => dialog.accept());
+        const button = page.getByRole('button', { name: copy ? 'Permanently delete task' : 'Permanently delete request', exact: true });
+        if (copy) {
+          await revealRequestActions(page);
+          await decideConfirmation(page, () => button.click(), dialog => dialog.accept());
+          return;
+        }
+        const priorDeletes = versions.length;
+        const review = page.locator('#request-dialog .request-workflow-panel .action-choice');
+        if (!await review.isVisible()) {
+          await revealRequestActions(page);
+          await button.click();
+          await review.waitFor();
+        }
+        assert.equal(versions.length, priorDeletes, 'Opening title-delete review does not dispatch a DELETE.');
+        const approve = review.getByRole('button', { name: 'Delete permanently', exact: true });
+        assert.equal(await approve.isEnabled(), true, 'The current closed request remains authorized for deletion.');
+        const response = page.waitForResponse(result => result.request().method() === 'DELETE' &&
+          new URL(result.url()).pathname === deletePath);
+        await approve.click();
+        const result = await response;
+        assert.equal(result.status(), priorDeletes === 1 ? 409 : 200, await result.text());
       };
       await remove(); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
       assert.equal(versions.length, 1, `${kind} uses the Staff Access revision on its first deliberate delete`);
@@ -4239,6 +4302,12 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
       await page.locator('#app-status').filter({ hasText: /changed.*Reload|no longer actionable/i }).waitFor();
       assert.equal(versions.length, 2, 'authoritative conflict cannot automatically replay deletion');
       assert.equal(await page.locator('#staff-identity').textContent(), latest.displayName);
+      assert.equal((await session(context, args.baseOrigin)).staff.version, latest.version,
+        'An explicit retry uses the refreshed Staff Access rowversion.');
+      const currentTitle = await context.request.get(args.baseOrigin + detailPath);
+      assert.equal(currentTitle.status(), 200);
+      assert.equal((await currentTitle.json()).version, snapshot.version,
+        'The retained Delete review still refers to the current, unchanged title request version.');
       await remove(); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
       assert.equal(versions.length, 3); assert.equal(versions[2], latest.version);
       await page.unroute(args.baseOrigin + detailPath + '*', detailRoute);
@@ -4547,10 +4616,31 @@ async function runRejectionNotificationAndReopen(browser, args, axeSource, repor
     async function action(button, status) {
       const responsePromise = page.waitForResponse(response => response.request().method() === 'POST' &&
         new URL(response.url()).pathname === pathname);
-      if (await button.textContent() !== 'Reject and close') answerNextConfirmation(page, dialog => dialog.accept());
-      await button.click();
+      let dispatches = 0;
+      const observeAction = request => {
+        if (request.method() === 'POST' && new URL(request.url()).pathname === pathname) dispatches++;
+      };
+      page.on('request', observeAction);
+      const buttonLabel = (await button.textContent()).trim();
+      const isReviewSubmit = await button.evaluate(node => node.closest('.action-choice') !== null);
+      if (isReviewSubmit) {
+        assert.equal(dispatches, 0, 'The selected rejection review has not dispatched before its explicit submit.');
+        await button.click();
+      } else {
+        await button.click();
+        const review = page.locator('#request-dialog .request-workflow-panel .action-choice');
+        await review.waitFor();
+        assert.equal(dispatches, 0, `${buttonLabel} opens an inline review without dispatching a mutation.`);
+        const submit = review.locator('button[type="submit"]:not([disabled])');
+        await submit.waitFor();
+        const expectedLabel = buttonLabel === 'Reopen' ? 'Reopen request' : buttonLabel;
+        assert.equal((await submit.textContent()).trim(), expectedLabel);
+        await submit.click();
+      }
       const response = await responsePromise;
+      page.off('request', observeAction);
       const body = await response.json();
+      assert.equal(dispatches, 1, 'Explicit action approval dispatches exactly once.');
       assert.equal(response.status(), status, JSON.stringify(body));
       return body;
     }
