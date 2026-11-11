@@ -14,7 +14,7 @@ async function setup(run) {
     const identity = createSessionIdentity(); identity.accept(staff);
     const calls = [], opened = []; let all = 0, openCompletion = null;
     const search = createSubmissionSearch({ dialog: get('#search-dialog'), view: get('#search-view'), launcher: get('#search-asap'),
-      detailLauncher: get('#detail-search-asap'), sessionIdentity: identity, getScope: () => '2', announce() {}, debounceMs: 10,
+      sessionIdentity: identity, getScope: () => '2', announce() {}, debounceMs: 10,
       openResult: async intent => { opened.push(intent); return openCompletion ? openCompletion.promise : true; }, openAll: async () => { all++; search.activate(); },
       request: (path, init) => { const next = pending(); calls.push({ path, init, ...next }); return next.promise; } });
     const input = get('#search-quick-input');

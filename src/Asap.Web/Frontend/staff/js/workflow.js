@@ -219,7 +219,7 @@ export function createWorkflowApp() {
     }
   });
   const search = createSubmissionSearch({ dialog: get('#search-dialog'), view: get('#search-view'), launcher: get('#search-asap'),
-    detailLauncher: get('#detail-search-asap'), detailHost, sessionIdentity, announce,
+    sessionIdentity, announce,
     getScope: () => navigation.context().activeView === 'settings' ? settings.currentScope()
       : navigation.context().activeView === 'operations' ? operations.currentScope()
         : navigation.context().activeView === 'analytics' ? analytics.currentScope() : navigation.context().scope,

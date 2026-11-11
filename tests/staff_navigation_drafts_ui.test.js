@@ -757,6 +757,10 @@ test('committed title status synchronizes detail queue and accepted URL', () => 
     request: { ...ui.readRequest(), version: 'v2', status: 'pending_hold' }, finalStatus: 'pending_hold' }));
   ui.allowDiscard();
   [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own').click();
+  const review = ui.get('.action-choice');
+  assert.ok(review, 'Already own opens its inline review without committing');
+  assert.equal(ui.get('#request-dialog-status').textContent, 'Suggestion');
+  review.querySelector('button[type="submit"]').click();
   await until(() => ui.get('#request-dialog-status').textContent === 'Pending hold', 'committed detail status');
   assert.equal(ui.params().get('stage'), 'pending_hold');
   assert.equal(ui.get('[data-status="pending_hold"]').getAttribute('aria-selected'), 'true');
@@ -776,6 +780,10 @@ test('committed status during target validation retains the accepted detail entr
       request: { ...ui.readRequest(), version: 'v2', status: 'pending_hold' }, finalStatus: 'pending_hold' }));
     ui.allowDiscard();
     [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === 'Already own').click();
+    const review = ui.get('.action-choice');
+    assert.ok(review, 'Already own opens its inline review without committing');
+    assert.equal(ui.get('#request-dialog-status').textContent, 'Suggestion');
+    review.querySelector('button[type="submit"]').click();
     await until(() => ui.get('#request-dialog-status').textContent === 'Pending hold', 'committed source detail');
     validateScope(response(200, { code: 'ok', data: defaultOrganizations }));
     await until(() => ui.params().get('request') === id && ui.params().get('stage') === 'pending_hold', 'updated accepted source restored');
@@ -918,7 +926,10 @@ for (const action of ['Already own', 'Ready for hold', 'Purchase']) {
   test(`persisted verified BIB permits ${action} after reopen`, () => fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
     ui.allowDiscard();
     [...document.querySelectorAll('.action-bar button')].find(button => button.textContent.trim() === action).click();
-    if (action === 'Purchase') ui.get('.action-choice button[type="submit"]').click();
+    const review = ui.get('.action-choice');
+    assert.ok(review, `${action} opens its inline review`);
+    assert.equal(ui.calls.some(call => call.init.method === 'POST'), false, `${action} does not mutate before approval`);
+    review.querySelector('button[type="submit"]').click();
     await until(() => ui.calls.some(call => call.url.endsWith('/action') && call.init.method === 'POST'), 'persisted verification preflight');
     assert.equal(ui.calls.some(call => call.url.includes('/polaris/bibs')), false);
   }, { status: action === 'Ready for hold' ? 'outstanding_purchase' : 'suggestion' }));
@@ -1796,6 +1807,13 @@ const actionButton = (label, root = document.querySelector('.action-bar')) => {
 };
 const requestMutations = ui => ui.calls.filter(call => ['POST', 'DELETE'].includes(call.init.method) &&
   !call.url.endsWith('/pickup-options'));
+function approveTitleClaim(ui) {
+  const panel = ui.get('.action-choice');
+  assert.ok(panel, 'Title Claim opens its inline review.');
+  assert.equal(ui.get('#request-action-confirmation-title').textContent, 'Claim request');
+  panel.querySelector('button[type="submit"]').click();
+  return panel;
+}
 const submitForm = (ui, form) => form.dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
 async function openInlineDraft(ui, action, label) {
   actionButton(action).click();
@@ -1816,8 +1834,9 @@ for (const action of ['Claim', 'Unclaim', 'Clear claim']) {
       assert.equal(requestMutations(ui).length, 0);
       assert.equal(form.isConnected, true);
       assert.equal(form.querySelector('select').value, '21');
+      assert.equal(ui.get('.action-choice'), null, 'the active assignment keeps a second Claim review closed');
+      assert.equal(ui.get('.action-bar').hidden, true);
       assert.equal(ui.confirms.length, 0);
-      assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
     }, { request: { claimedByStaffUserId: action === 'Claim' ? null : action === 'Unclaim' ? '20' : '22' } }));
 }
 
@@ -1866,9 +1885,13 @@ for (const finish of ['baseline', 'cancel', 'clean']) {
         actionButton('Cancel', form).click();
         assert.equal(form.isConnected, false);
         assert.equal(document.activeElement, opener);
+      } else {
+        actionButton('Cancel', form).click();
+        assert.equal(form.isConnected, false, 'clean or baseline assignment is explicitly closed before another action');
       }
       assert.equal(protectedUnload(ui), false);
       actionButton('Claim').click();
+      approveTitleClaim(ui);
       await until(() => requestMutations(ui).length === 1, 'clean assignment permits Claim');
       assert.ok(requestMutations(ui)[0].url.endsWith('/claim'));
       assert.equal(ui.confirms.length, 0);
@@ -1912,7 +1935,7 @@ test('dirty pickup blocks Claim, Place hold and Additional Copy preview', () =>
     ui.allowDiscard();
     for (const action of ['Claim', 'Place hold', 'Additional copy']) {
       actionButton(action).click(); await settle();
-      assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+      assert.equal(ui.get('.action-choice'), null, 'the active pickup panel keeps competing reviews closed');
     }
     assert.equal(requestMutations(ui).length, 0);
     assert.equal(ui.confirms.length, 0);
@@ -2098,6 +2121,7 @@ test('hold-resolution Revert restores its baseline without discarding a competin
     actionButton('Cancel', assignment).click();
     assert.equal(protectedUnload(ui), false);
     actionButton('Claim').click();
+    approveTitleClaim(ui);
     await until(() => requestMutations(ui).length === 1, 'clean recovery permits Claim');
   }, { status: 'pending_hold', holdOperation: resolutionOperation }));
 
@@ -2257,7 +2281,12 @@ for (const kind of ['assignment', 'pickup', 'rejection', 'copy-assignment']) {
       actionButton(kind === 'pickup' ? 'Pickup' : kind === 'rejection' ? 'Reject' : 'Assign').click();
       await until(() => resolveLoad, 'inline load pending');
       const titleReads = ui.calls.filter(call => call.url.includes(`/title-requests/${id}?`)).length;
+      if (kind === 'rejection') {
+        ui.get('.action-choice button:last-child').click();
+        await settle();
+      }
       actionButton('Claim').click();
+      if (kind !== 'copy-assignment') approveTitleClaim(ui);
       await until(() => /claimed/i.test(ui.get('#app-status').textContent), 'authoritative Claim rendered');
       resolveLoad(response(200, kind === 'pickup' ? { version: 'v1', selectedPickupBranchId: 101,
         pickupBranches: [{ id: 101, label: 'Main' }, { id: 102, label: 'Branch' }] }
@@ -2643,6 +2672,12 @@ for (const kind of ['Title', 'Additional Copy']) {
       }
       ui.allowDiscard();
       [...ui.get('.action-bar').querySelectorAll('button')].find(button => button.textContent.includes('Permanently delete')).click();
+      if (kind === 'Title') {
+        const review = ui.get('.action-choice');
+        assert.ok(review, 'Title delete opens its inline review');
+        assert.equal(deletes, 0, 'opening the review does not delete');
+        review.querySelector('button[type="submit"]').click();
+      }
       await until(() => deletes === 1 && !ui.get('#request-dialog').open, 'explicit delete with accepted actorVersion');
     }, { delayedHistoryBack: true, role: 'admin', staff: { tenantId: 'same-actor', authenticationEmail: 'admin@example.org', organizationId: 2 }, status: 'closed',
       copyRequest: { status: 'closed', capabilities: { canDelete: true } } }));
@@ -2662,10 +2697,25 @@ for (const kind of ['Title', 'Additional Copy']) {
       ui.allowDiscard();
       const remove = () => [...ui.get('.action-bar').querySelectorAll('button')].find(button => button.textContent.includes('Permanently delete')).click();
       remove();
+      if (kind === 'Title') {
+        const firstReview = ui.get('.action-choice');
+        assert.ok(firstReview, 'first delete attempt opens an inline review');
+        assert.deepEqual(versions, [], 'opening the review does not dispatch DELETE');
+        firstReview.querySelector('button[type="submit"]').click();
+      }
       await until(() => /Actor changed since preview/.test(ui.get('#app-status').textContent), 'authoritative conflict reviewed');
       assert.deepEqual(versions, ['actor-v1'], 'no destructive replay after accepting a new preference revision');
       assert.equal(ui.get('#staff-identity').textContent, 'External metadata'); assert.equal(ui.get('#notification-email').textContent, 'external@example.org');
-      remove(); await until(() => versions.length === 2 && !ui.get('#request-dialog').open, 'deliberate retry');
+      if (kind === 'Title') {
+        if (ui.get('.action-choice')) ui.get('.action-choice button:last-child').click();
+        remove();
+        const retryReview = ui.get('.action-choice');
+        assert.ok(retryReview, 'deliberate retry opens a fresh inline review');
+        retryReview.querySelector('button[type="submit"]').click();
+      } else {
+        remove();
+      }
+      await until(() => versions.length === 2 && !ui.get('#request-dialog').open, 'deliberate retry');
       assert.deepEqual(versions, ['actor-v1', 'external-v2']);
     }, { staff: { tenantId: 'external-revision', authenticationEmail: 'admin@example.org' }, status: 'closed',
       copyRequest: { status: 'closed', capabilities: { canDelete: true } } }));
@@ -2848,7 +2898,12 @@ test('authoritative parent replacement disposes clean Copy child and its stale s
   fixture(`?stage=pending_hold&request=${id}`, async ui => {
     await openCopyPreview(ui);
     actionButton('Claim').click();
-    await until(() => !ui.get('#additional-copy-create-dialog').open, 'parent replacement disposes child');
+    assert.equal(ui.get('.action-choice'), null, 'A parent review cannot replace the active Copy preview.');
+    ui.get('#cancel-additional-copy').click();
+    actionButton('Claim').click();
+    approveTitleClaim(ui);
+    await until(() => requestMutations(ui).length === 1 && !ui.get('.action-choice') &&
+      !ui.get('#additional-copy-create-dialog').open, 'parent Claim commits and disposes child/review');
     assert.equal(protectedUnload(ui), false);
     submitCopy(ui); await settle();
     assert.equal(ui.calls.filter(call => call.init.method === 'POST' && call.url.endsWith('/additional-copy')).length, 0);
@@ -2866,7 +2921,7 @@ test('characterization: definitive inline failure preserves values and competing
     assert.equal(protectedUnload(ui), true);
     actionButton('Claim').click(); await settle();
     assert.equal(requestMutations(ui).length, 1);
-    assert.match(ui.get('#app-status').textContent, blockedDraftMessage);
+    assert.equal(ui.get('.action-choice'), null, 'the failed assignment remains the only active workflow panel');
   }));
 
 test('characterization: clean open assignment is disposed on departure and cannot submit', () =>
@@ -3614,11 +3669,11 @@ for (const copy of [false, true]) {
         let form;
         if (copy && change === 'draft') form = await openInlineDraft(ui, 'Assign', copyAssignmentLabel);
         actionButton(label).click();
-        await until(() => ui.get('#confirmation-dialog')?.open, 'decision displayed');
-        const decision = ui.get('#confirmation-dialog');
+        await until(() => copy ? ui.get('#confirmation-dialog')?.open : ui.get('.action-choice'), 'decision displayed');
+        const decision = copy ? ui.get('#confirmation-dialog') : ui.get('.action-choice');
         if (change === 'draft') {
           if (copy) form.querySelector('select').value = '21';
-          else ui.get('.edit-form input').value = 'Programmatic newer draft';
+          else ui.edit('.edit-form input', 'Programmatic newer draft');
         }
         if (change === 'scope') {
           const scope = ui.get(copy ? '#additional-copy-library-scope' : '#library-scope');
@@ -3631,13 +3686,28 @@ for (const copy of [false, true]) {
           ui.get(copy ? '#refresh-additional-copies' : '#refresh-queue').click();
           await until(() => ui.get('#workspace').hidden, 'session invalidated');
         }
-        if (change === 'command') { actionButton('Claim').click(); await settle(); }
+        if (change === 'command') {
+          if (!copy) {
+            decision.querySelector('.form-actions button:last-child').click(); await settle();
+            actionButton('Claim').click();
+            await until(() => ui.get('.action-choice #request-action-confirmation-title')?.textContent === 'Claim request',
+              'claim review replaces a canceled action');
+            ui.get('.action-choice button:last-child').click(); await settle();
+          } else { actionButton('Claim').click(); await settle(); }
+        }
         if (change === 'duplicate') { actionButton(label).click(); await settle(); }
-        if (decision.open) decision.querySelector('.primary-button, .danger-button').click();
+        if (copy ? decision.open : decision.isConnected) {
+          decision.querySelector(copy ? '.primary-button, .danger-button' : 'button[type="submit"]')?.click();
+        }
         await settle();
         const closes = requestMutations(ui).filter(call => copy ? call.url.endsWith('/close') : JSON.parse(call.init.body || '{}').action === 'silentClose');
         assert.equal(closes.length, change === 'duplicate' ? 1 : 0);
-        assert.equal(decision.open, false);
+        if (!copy && change === 'draft' && decision.isConnected) {
+          assert.equal(ui.get('.edit-form input').value, 'Programmatic newer draft', 'the pending Title editor draft is preserved');
+          decision.querySelector('.form-actions button:last-child').click();
+          await settle();
+        }
+        assert.equal(copy ? decision.open : decision.isConnected, false);
       }, { copyRequest: {} }));
   }
 }

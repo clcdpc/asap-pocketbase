@@ -72,15 +72,15 @@ async function setup(ui, initial = source, options = {}) {
     try {
       const mutations = () => t.calls.filter(call => call.init.method);
       await t.start(action);
-      const confirmation = ui.get('#confirmation-dialog');
-      assert.equal(confirmation.open, true, action + ' requires its established confirmation');
-      assert.equal(ui.get('#confirmation-title').textContent, label);
+      const confirmation = t.root.querySelector('.action-choice');
+      assert.ok(confirmation, action + ' opens its inline review');
+      assert.equal(ui.get('#request-action-confirmation-title').textContent, label);
       assert.equal(mutations().length, 0, 'Opening a row workflow never mutates before approval');
-      confirmation.querySelector('.form-actions button:first-child').click(); await settle();
+      confirmation.querySelector('.form-actions button:last-child').click(); await settle();
       assert.equal(mutations().length, 0, 'Cancel leaves the request unchanged');
       assert.equal(document.activeElement, button(t.root, action === 'reopen' ? 'Reopen' : label));
       await t.start(action);
-      confirmation.querySelector('.form-actions button:last-child').click(); await settle();
+      t.root.querySelector('.action-choice button[type="submit"]').click(); await settle();
       assert.equal(mutations().length, 1, 'Approval dispatches exactly once');
       assert.equal(mutations()[0].init.body.version, 'v1');
       assert.equal(mutations()[0].path.endsWith(action === 'place-hold' ? '/place-hold' : '/action'), true);
@@ -111,6 +111,10 @@ async function setup(ui, initial = source, options = {}) {
     try {
       await t.start(action);
       if (action === 'claim') {
+        const panel = t.root.querySelector('.action-choice');
+        assert.ok(panel, 'claim opens its inline confirmation');
+        assert.equal(t.calls.filter(c => c.init.method).length, 0);
+        panel.querySelector('button[type="submit"]').click(); await settle();
         assert.equal(t.calls.filter(c => c.init.method).length, 1);
         assert.match(t.calls.find(c => c.init.method).path, /\/claim$/);
       } else {
@@ -147,13 +151,14 @@ async function setup(ui, initial = source, options = {}) {
 
   for (const [status, action] of [['outstanding_purchase', 'catalogFound'], ['pending_hold', 'place-hold'],
     ['hold_placed', 'close'], ['closed', 'reopen']]) await fixture(async ui => {
-    require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, () => null);
     const t = await setup(ui, { ...source, status, autohold: true, bibidStaffVerified: true,
       capabilities: { ...capabilities, canPlaceHold: true, allowedActions: [action] } });
     try {
       await t.start(action);
-      const consent = ui.get('#confirmation-dialog .form-actions button:last-child'); assert.ok(consent);
-      t.identity.accept({ ...actor, role: 'staff', organizationId: 3 }); consent.click(); await settle();
+      const review = t.root.querySelector('.action-choice');
+      assert.ok(review, action + ' opens its inline review');
+      t.identity.accept({ ...actor, role: 'staff', organizationId: 3 });
+      review.querySelector('button[type="submit"]').click(); await settle();
       assert.equal(t.calls.some(c => c.init.method), false, action + ' rechecks ownership after consent');
     } finally { t.dispose(); }
   });
@@ -543,7 +548,9 @@ async function setup(ui, initial = source, options = {}) {
       assert.deepEqual(messages(), ['Later tick', 'Earlier tick', 'Larger', 'Smaller', 'Ten', 'Two', 'Invalid ID', 'Created', 'Invalid date', 'Missing date']);
       assert.equal(activity[0].message, 'Created'); assert.equal(activity.length, 10);
       assert.equal(t.root.querySelector('.request-activity ol').hasAttribute('reversed'), false);
-      button(t.root, 'Claim').click(); await settle();
+      button(t.root, 'Claim').click();
+      assert.equal(t.root.querySelector('.action-choice button[type="submit"]')?.textContent, 'Claim');
+      t.root.querySelector('.action-choice button[type="submit"]').click(); await settle();
       t.root.querySelector('.grid-new-suggestion').click(); assert.equal(t.quick.length, 0, 'pending command blocks quick create');
       t.complete({ ...source, version: 'v2', activity: [...activity, { id: '99', created: '2026-10-24T12:00:00Z', message: 'Newest' }] });
       await settle(); assert.equal(messages()[0], 'Newest');
@@ -574,7 +581,10 @@ async function setup(ui, initial = source, options = {}) {
   await fixture(async ui => {
     const t = await setup(ui);
     try {
-      button(t.root, 'Claim').click(); await settle();
+      button(t.root, 'Claim').click();
+      const review = t.root.querySelector('.action-choice');
+      assert.ok(review, 'Claim opens its inline confirmation before a pending request mutation.');
+      review.querySelector('button[type="submit"]').click(); await settle();
       const close = t.root.querySelector('.request-detail-close');
       assert.equal(close.disabled, false, 'Pending operations keep Close available to invoke its guard.');
       close.click(); await settle();

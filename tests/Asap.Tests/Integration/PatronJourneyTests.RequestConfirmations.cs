@@ -44,6 +44,7 @@ public sealed partial class PatronJourneyTests
         {
             var staff = await setup.StaffUsers.SingleAsync(value => value.Id == purchase.Actor.Id);
             staff.PurchaseReminderDefault = true;
+            staff.AdditionalCopyReminderDefault = true;
             staff.NotificationEmail = "synthetic.staff@example.org";
             setup.EmailTemplates.Add(template);
             await setup.SaveChangesAsync();
@@ -78,7 +79,12 @@ public sealed partial class PatronJourneyTests
             var rejectionKey = $"rejection:{rejection.Source.Id}:";
             Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(value => value.BusinessKey!.StartsWith(reminderKey)));
             Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(value => value.BusinessKey!.StartsWith(rejectionKey)));
-            foreach (var item in new[] { savedBib, optout, untouched })
+            var optoutTaskId = await verify.AdditionalCopyRequests.AsNoTracking()
+                .Where(task => task.SourceTitleRequestId == optout.Source.Id)
+                .Select(task => task.Id).SingleAsync();
+            Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(value => value.BusinessKey ==
+                $"additional-copy-reminder:{optoutTaskId.ToString(CultureInfo.InvariantCulture)}"));
+            foreach (var item in new[] { savedBib, untouched })
             {
                 var key = $"purchase-reminder:{item.Source.Id}:";
                 Assert.AreEqual(0, await verify.EmailOutbox.CountAsync(value => value.BusinessKey!.StartsWith(key)));

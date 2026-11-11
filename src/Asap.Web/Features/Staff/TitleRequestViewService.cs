@@ -346,6 +346,17 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
             .ToListAsync(cancellationToken) : [];
         var eventGroups = events.GroupBy(item => item.TitleRequestId)
             .ToDictionary(item => item.Key, item => item.ToList());
+        var sourceLibraries = requests.ToDictionary(item => item.Id, item => item.LibraryOrganizationId);
+        var linkedCopies = await context.AdditionalCopyRequests.AsNoTracking()
+            .Where(item => item.SourceTitleRequestId.HasValue && ids.Contains(item.SourceTitleRequestId.Value))
+            .OrderByDescending(item => item.Id)
+            .Select(item => new { SourceId = item.SourceTitleRequestId!.Value, item.LibraryOrganizationId, item.Id })
+            .ToListAsync(cancellationToken);
+        var additionalCopyIds = linkedCopies
+            .Where(item => sourceLibraries.TryGetValue(item.SourceId, out var organizationId) &&
+                organizationId == item.LibraryOrganizationId)
+            .GroupBy(item => item.SourceId)
+            .ToDictionary(item => item.Key, item => item.First().Id);
         var emailActivity = includeActivity
             ? await LoadEmailActivityAsync(context, requests.Single(), staff, cancellationToken)
             : [];
@@ -500,6 +511,8 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
             {
                 CustomFieldsValid = customFieldsValid,
                 Research = research with { PatronId = request.PatronIdSnapshot is > 0 ? request.PatronIdSnapshot : null },
+                AdditionalCopyRequestId = additionalCopyIds.TryGetValue(request.Id, out var additionalCopyId)
+                    ? additionalCopyId.ToString(CultureInfo.InvariantCulture) : null,
                 PickupOperation = pendingPickup is null ? null : new PickupOperationSummary(pendingPickup.Id,
                     pendingPickup.State, pendingPickup.TargetBranchId, pendingPickup.TargetBranchName),
                 RelatedRequests = new RelatedRequestSummary(related.Count, relatedCounts),

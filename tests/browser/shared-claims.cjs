@@ -117,9 +117,21 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await page.locator('#refresh-queue').click(); await rows(page, { choice: 'mine' });
     await page.locator('#claim-filter').selectOption('unclaimed'); await rows(page, { choice: 'unclaimed' });
     const mutationRow = page.locator(`#request-grid [data-request-id="${fixture.mutationId}"]`).locator('xpath=ancestor::tr');
+    let claimPosts = 0;
+    const observeClaim = request => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname ===
+          `/api/asap/staff/title-requests/${fixture.mutationId}/claim`) claimPosts++;
+    };
+    page.on('request', observeClaim);
     const mutation = page.waitForResponse(response => response.request().method() === 'POST' && response.url().includes(`/title-requests/${fixture.mutationId}/`));
     await activateRowAction(mutationRow, 'claim');
+    const claimReview = page.locator('.request-workflow-panel .action-choice');
+    await claimReview.waitFor();
+    assert.equal(claimPosts, 0, 'Opening the title Claim review does not dispatch a mutation.');
+    await claimReview.getByRole('button', { name: 'Claim', exact: true }).click();
     const committed = await mutation; assert.equal(committed.status(), 200, await committed.text());
+    assert.equal(claimPosts, 1, 'Explicit title Claim approval dispatches exactly once.');
+    page.off('request', observeClaim);
     fixture.titles.find(item => item.id === fixture.mutationId).claimedBy = fixture.first.id;
     await page.locator('#request-dialog[open]').getByRole('button', { name: 'Unclaim', exact: true }).waitFor();
     await rows(page, { choice: 'unclaimed' }); report.mutation = true;

@@ -190,7 +190,11 @@ async function setup(ui, initial = source) {
     try {
       t.setMutation(() => { throw failure(400, 'bib_not_found', 'The saved BIB is no longer valid.'); });
       t.button('Already own').click(); await settle();
-      assert.equal(t.posts().length, 1, 'A saved verified BIB retains the established direct action');
+      const confirmation = t.root.querySelector('.action-choice');
+      assert.ok(confirmation, 'A saved verified BIB retains the Already own confirmation.');
+      assert.equal(t.posts().length, 0, 'Opening confirmation does not mutate.');
+      confirmation.querySelector('button[type="submit"]').click(); await settle();
+      assert.equal(t.posts().length, 1, 'Explicit approval dispatches the established action.');
       assert.equal(t.root.querySelector('.bib-link-panel').hidden, false, 'A rejected saved BIB offers the same inline recovery');
       assert.match(t.root.querySelector('[id$="-bib-link-status"]').textContent, /saved BIB is no longer valid/);
       assert.equal(document.activeElement, t.button('Search Polaris catalog'));

@@ -1,5 +1,4 @@
 'use strict';
-const { decideConfirmation } = require('./confirmation.cjs');
 const assert = require('node:assert/strict');
 const { activateRowAction, actionGeometry, actionColumn } = require('../acceptance/helpers/request-actions.cjs');
 
@@ -96,15 +95,23 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   const more = row.getByRole('button', { name: `More actions for request ${id}`, exact: true });
   const original = await actionGeometry(row);
   assert.ok(original.inline.length >= 1 && original.overflow.length >= 1);
+  assert.equal(original.keys.filter(key => key === 'purchase').length, 1, 'Purchase appears once in the row action set.');
+  assert.equal(original.inline.includes('purchase'), false, 'Purchase stays menu-only at the regular Actions width.');
+  assert.equal(await row.locator('.request-table-menu [data-request-action="purchase"] .fa-shopping-cart').count(), 1,
+    'The More-menu Purchase entry keeps its cart icon.');
   await actionColumn(page, 70);
   const expanded = await actionGeometry(row);
-  assert.equal(expanded.more, 0); assert.deepEqual(expanded.inline, original.keys);
+  assert.equal(expanded.more, 1, 'The More trigger remains for the menu-only Purchase entry at wide widths.');
+  assert.deepEqual(expanded.inline, original.keys.filter(key => key !== 'purchase'));
+  assert.deepEqual(expanded.overflow, ['purchase']);
   await actionColumn(page, 12);
   assert.ok((await actionGeometry(row)).overflow.length > 0);
   await more.focus(); await page.keyboard.press('Enter');
   await page.waitForFunction(id => document.querySelector(`#request-row-${id}-actions`).matches(':popover-open') &&
     document.querySelector(`[aria-controls="request-row-${id}-actions"]`).getAttribute('aria-expanded') === 'true', id);
   assert.equal(await more.getAttribute('aria-expanded'), 'true');
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.requestAction), 'purchase',
+    'Keyboard activation opens More with Purchase focused.');
   const bounds = await page.locator(`#request-row-${id}-actions`).boundingBox(), viewport = page.viewportSize();
   assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= viewport.width && bounds.y + bounds.height <= viewport.height);
   await scan('table-more-keyboard');
@@ -115,7 +122,18 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await page.locator('#request-dialog[open]').waitFor();
   assert.equal(await page.locator('#request-dialog').getByLabel('Title', { exact: true }).inputValue(), before.title);
   assert.equal(await page.locator('#request-dialog .request-more').count(), 0);
-  await decideConfirmation(page, () => page.locator('#request-dialog').getByRole('button', { name: 'Close silently', exact: true }).press('Enter'), dialog => dialog.dismiss());
+  let silentClosePosts = 0;
+  const observeSilentClose = request => {
+    if (request.method() === 'POST' && request.url().endsWith(`/title-requests/${id}/action`)) silentClosePosts++;
+  };
+  page.on('request', observeSilentClose);
+  await page.locator('#request-dialog').getByRole('button', { name: 'Close silently', exact: true }).press('Enter');
+  const silentCloseReview = page.locator('#request-dialog .request-workflow-panel .action-choice');
+  await silentCloseReview.waitFor();
+  assert.equal(silentClosePosts, 0, 'Opening Close silently review does not dispatch a mutation.');
+  await silentCloseReview.getByRole('button', { name: 'Cancel', exact: true }).click();
+  assert.equal(silentClosePosts, 0, 'Canceling Close silently review remains mutation-free.');
+  page.off('request', observeSilentClose);
   assert.equal(await page.locator('#request-dialog').getByRole('button', { name: 'Close silently', exact: true }).evaluate(node => node === document.activeElement), true);
   await closeDetail();
   await row.locator('.request-title-link').focus(); await page.keyboard.press('Enter');
@@ -157,7 +175,21 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await search.fill('TABLE-BROWSER-02');
   await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Table browser record 02');
   const claimId = await row.locator('.request-title-link').getAttribute('data-request-id');
+  let claimPosts = 0;
+  const observeClaim = request => {
+    if (request.method() === 'POST' && request.url().endsWith(`/title-requests/${claimId}/claim`)) claimPosts++;
+  };
+  page.on('request', observeClaim);
   await activateRowAction(row, 'claim');
+  const claimReview = page.locator('#request-dialog .request-workflow-panel .action-choice');
+  await claimReview.waitFor();
+  assert.equal(claimPosts, 0, 'Opening the title Claim review does not dispatch a mutation.');
+  const claimResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
+    response.url().endsWith(`/title-requests/${claimId}/claim`));
+  await claimReview.getByRole('button', { name: 'Claim', exact: true }).click();
+  assert.equal((await claimResponse).status(), 200);
+  assert.equal(claimPosts, 1, 'Explicit title Claim approval dispatches exactly once.');
+  page.off('request', observeClaim);
   await page.locator('#request-dialog').getByRole('button', { name: 'Unclaim', exact: true }).waitFor();
   await page.locator('#request-dialog').getByRole('button', { name: 'Unclaim', exact: true }).click();
   await page.locator('#request-dialog').getByRole('button', { name: 'Claim', exact: true }).waitFor();
@@ -167,7 +199,19 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Table browser record 01');
   assert.deepEqual((await actionGeometry(row)).inline, ['reopen']);
   assert.equal(await row.locator('.request-row-more, [popover]').count(), 0, 'The sole Reopen command is direct');
-  await decideConfirmation(page, () => activateRowAction(row, 'reopen', 'Space'), dialog => dialog.dismiss());
+  const closedId = await row.locator('.request-title-link').getAttribute('data-request-id');
+  let reopenPosts = 0;
+  const observeReopen = request => {
+    if (request.method() === 'POST' && request.url().endsWith(`/title-requests/${closedId}/action`)) reopenPosts++;
+  };
+  page.on('request', observeReopen);
+  await activateRowAction(row, 'reopen', 'Space');
+  const reopenReview = page.locator('#request-dialog .request-workflow-panel .action-choice');
+  await reopenReview.waitFor();
+  assert.equal(reopenPosts, 0, 'Opening Reopen review does not dispatch a mutation.');
+  await reopenReview.getByRole('button', { name: 'Cancel', exact: true }).click();
+  assert.equal(reopenPosts, 0, 'Canceling Reopen review remains mutation-free.');
+  page.off('request', observeReopen);
   await page.locator('#request-dialog[open] .edit-form').waitFor(); await closeDetail();
   await page.locator('#status-tabs [data-status="suggestion"]').click();
   await page.locator('#refresh-queue:not([disabled])').waitFor();

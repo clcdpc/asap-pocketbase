@@ -308,10 +308,18 @@ const [baseURL, artifacts, staffId, tenantId, email, missing, invalid, stale, un
     assert.equal((await getDetail(optout)).autohold, false);
 
     await open(existing);
-    await decideConfirmation(page, () => requestModal(page).getByRole('button', { name: 'Already own', exact: true }).click(), async decision => {
-      assert.match(decision.message(), /move the verified BIB to Pending hold/); await decision.accept();
-    });
+    const actionCountBeforeConfirm = report.actions.length;
+    await requestModal(page).getByRole('button', { name: 'Already own', exact: true }).click();
+    const alreadyOwnReview = requestModal(page).locator('.request-workflow-panel .action-choice');
+    await alreadyOwnReview.waitFor();
+    assert.match(await alreadyOwnReview.textContent(), /move the verified BIB to Pending hold/);
+    assert.equal(report.actions.length, actionCountBeforeConfirm, 'Opening Already own review does not dispatch an action.');
+    const alreadyOwnResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
+      response.url().endsWith(`/title-requests/${existing}/action`));
+    await alreadyOwnReview.getByRole('button', { name: 'Already own', exact: true }).click();
+    assert.equal((await alreadyOwnResponse).status(), 200);
     await status(page).filter({ hasText: 'Pending hold' }).waitFor();
+    assert.equal(report.actions.length, actionCountBeforeConfirm + 1, 'Explicit Already own approval dispatches exactly once.');
     assert.equal(report.actions.every(a => !Object.hasOwn(a, 'notes') && !Object.hasOwn(a, 'title') && !Object.hasOwn(a, 'autohold')), true);
     assert.deepEqual(report.external, []); assert.deepEqual(report.errors, []);
     await fs.writeFile(path.join(artifacts, 'browser-results.json'), JSON.stringify(report, null, 2));

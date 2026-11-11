@@ -367,7 +367,8 @@ async function verifyActionColumnSizingAndCleanFlows(page, fixture, artifacts) {
   const table = page.locator('#request-grid table.gridjs-table');
   const wrapper = page.locator('#request-grid .gridjs-wrapper');
   const tableElement = await table.elementHandle();
-  const keys = ['purchase', 'reject', 'alreadyOwn', 'claim', 'assign', 'silentClose'];
+  const keys = ['alreadyOwn', 'assign', 'claim', 'purchase', 'reject', 'silentClose'];
+  const flow = ['claim', 'reject', 'alreadyOwn', 'assign', 'silentClose'];
   const widthMetrics = async () => ({
     action: await row.locator('td').nth(7).evaluate(node => node.getBoundingClientRect().width),
     table: await table.evaluate(node => node.getBoundingClientRect().width),
@@ -389,15 +390,15 @@ async function verifyActionColumnSizingAndCleanFlows(page, fixture, artifacts) {
   };
 
   const original = await actionGeometry(row);
-  assert.deepEqual(original.keys, keys, 'The suggestion row retains all six eligible commands without duplicates.');
+  assert.deepEqual([...original.keys].sort(), keys, 'The suggestion row retains all six eligible commands without duplicates.');
   const originalWidths = await assertFit('Original Title proportions');
   await actionColumn(page, 70);
   const wide = await actionGeometry(row);
   const wideWidths = await assertFit('70% Actions column');
   assert.ok(wideWidths.action > originalWidths.action + 1, 'An inline 70% Actions width expands the actual table column.');
   assert.ok(Math.abs(wideWidths.action - wideWidths.table * 0.70) <= 1, 'The actual Actions cell follows the inline 70% width.');
-  assert.deepEqual(wide.inline, keys, 'At 70%, all six commands are direct.');
-  assert.deepEqual(wide.overflow, []);
+  assert.deepEqual(wide.inline, flow, 'At 70%, all eligible commands except Purchase remain direct.');
+  assert.deepEqual(wide.overflow, ['purchase'], 'Purchase has exactly one menu-only entry at wide widths.');
   await row.scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(artifacts, 'suggestion-actions-wide-70.png'), fullPage: false });
 
@@ -406,8 +407,9 @@ async function verifyActionColumnSizingAndCleanFlows(page, fixture, artifacts) {
   const narrowWidths = await assertFit('12% Actions column');
   assert.ok(narrowWidths.action < wideWidths.action - 1, 'An inline 12% Actions width reduces the actual table column.');
   assert.ok(Math.abs(narrowWidths.action - narrowWidths.table * 0.12) <= 1, 'The actual Actions cell follows the inline 12% width.');
-  assert.deepEqual(narrow.inline, ['purchase'], 'The first meaningful command stays direct at 12%.');
-  assert.deepEqual(narrow.overflow, keys.slice(1), 'The other five commands move into More without duplication.');
+  assert.deepEqual(narrow.inline, ['claim'], 'A meaningful Claim action stays direct at 12%.');
+  assert.deepEqual(narrow.overflow, ['purchase', 'reject', 'alreadyOwn', 'assign', 'silentClose'],
+    'Purchase stays first in More, followed by the other overflow commands without duplication.');
   assert.equal(narrow.more, 1);
   await row.scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(artifacts, 'suggestion-actions-narrow-12.png'), fullPage: false });

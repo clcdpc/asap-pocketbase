@@ -17,10 +17,10 @@ async function readSearch(path, options) {
 }
 
 // Private terms and results live only in this session owner, never in URL/history/storage.
-export function createSubmissionSearch({ dialog, view, launcher, detailLauncher, detailHost, sessionIdentity,
+export function createSubmissionSearch({ dialog, view, launcher, sessionIdentity,
   getScope, canOpen = () => true, openResult, openAll, announce, request = readSearch, debounceMs = 180 }) {
   const events = new window.AbortController(), reads = createLatestLoad();
-  let disposed = false, active = false, timer = null, opener = null, resumeDetail = null, revision = 0;
+  let disposed = false, active = false, timer = null, opener = null, revision = 0;
   let query = '', scope = null, group = '', page = 1, result = null, state = 'idle', errorText = '', libraries = [];
   let selected = -1, options = [], accepted = null, selection = null;
   const get = (root, name) => root.querySelector(`[data-search="${name}"]`);
@@ -170,7 +170,6 @@ export function createSubmissionSearch({ dialog, view, launcher, detailLauncher,
     const wasOpen = dialog.open;
     retire();
     if (dialog.open) dialog.close();
-    const resume = resumeDetail; resumeDetail = null; resume?.();
     const target = opener?.isConnected && !opener.closest('[hidden]') ? opener : launcher;
     if (restoreFocus && sessionIdentity.actor() && target?.isConnected && (!target.closest('dialog') || target.closest('dialog').open)) target.focus();
     opener = null;
@@ -180,8 +179,7 @@ export function createSubmissionSearch({ dialog, view, launcher, detailLauncher,
     if (disposed || !sessionIdentity.actor() || dialog.open) return false;
     if (!canOpen()) { announce('Wait for the current action to finish before opening Search ASAP.', 'warning'); return false; }
     const competing = [...document.querySelectorAll('dialog[open]')];
-    if (competing.length && !(competing.length === 1 && detailHost?.contains(source))) return false;
-    resumeDetail = competing.length ? detailHost.suspendForSearch() : null;
+    if (competing.length) return false;
     opener = source;
     const operationalScope = active ? scope : getScope();
     if (operationalScope && operationalScope !== 'system' && operationalScope !== '1' && operationalScope !== scope) {
@@ -190,7 +188,6 @@ export function createSubmissionSearch({ dialog, view, launcher, detailLauncher,
     dialog.showModal(); controls[0].input.focus(); replaceLoad(); return true;
   }
   launcher.addEventListener('click', () => open(launcher), { signal: events.signal });
-  detailLauncher?.addEventListener('click', () => open(detailLauncher), { signal: events.signal });
   get(dialog, 'close').addEventListener('click', () => close(), { signal: events.signal });
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); }, { signal: events.signal });
   dialog.addEventListener('keydown', event => {

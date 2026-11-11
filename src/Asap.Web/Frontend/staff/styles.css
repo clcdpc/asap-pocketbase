@@ -950,6 +950,11 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .request-heading-context .detail-meta { margin: 6px 0; gap: 4px 12px; font-size: .83rem; }
 .request-heading-context .action-bar { display: grid; grid-template-columns: minmax(0, 1fr); padding: 2px 0 8px; border: 0; }
 .request-heading-context .action-bar > button { min-width: 0; min-height: 44px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.request-workflow-panel { min-width: 0; padding-inline: 20px; }
+.request-workflow-panel:empty { display: none; }
+.request-workflow-panel .action-choice, .request-workflow-panel .inline-form { min-width: 0; overflow-wrap: anywhere; }
+.request-workflow-panel .action-choice .form-actions { flex-wrap: wrap; }
+.request-workflow-panel .automatic-hold-review-focus:focus { outline: 3px solid var(--focus); outline-offset: 3px; }
 @container request-actions (min-width: 16rem) {
   .request-heading-context .action-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -1010,7 +1015,7 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 
 @media (max-width: 760px) {
   .patron-context .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .request-heading-context, .patron-context, .request-middle > [role="tabpanel"], .request-detail-tabs, .request-save-footer { padding-inline: 14px; }
+  .request-heading-context, .request-workflow-panel, .patron-context, .request-middle > [role="tabpanel"], .request-detail-tabs, .request-save-footer { padding-inline: 14px; }
   .request-email-fields { grid-template-columns: minmax(0, 1fr); }
   .request-email-reference-link { margin-left: 0; }
   .request-save-footer { flex-wrap: wrap; }
