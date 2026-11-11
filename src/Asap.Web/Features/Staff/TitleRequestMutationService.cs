@@ -474,6 +474,12 @@ public sealed partial class TitleRequestMutationService(
             return (null, null);
         }
 
+        if (input.Action == "purchase" &&
+            await PickupPreferenceMutationService.HasIncompleteAsync(context, request.Id, cancellationToken))
+        {
+            return ("pickup_reconciliation_required", null);
+        }
+
         var incompleteOperation = await context.HoldPlacementOperations.AsNoTracking()
             .AnyAsync(item => item.TitleRequestId == request.Id && item.CompletedUtc == null, cancellationToken);
         if (incompleteOperation)

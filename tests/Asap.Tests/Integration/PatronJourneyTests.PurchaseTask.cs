@@ -221,6 +221,106 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task PurchaseTaskRejectsReviewedVersionAfterRequestStatusChangesWithoutSideEffects()
+    {
+        await using var fixture = await SeedPolarisQueueAsync();
+        await SetSavedPurchaseBibAsync(fixture, autoHold: false);
+        var command = PurchaseTaskCommand(fixture.Source, reminder: true);
+        byte[] currentVersion;
+        var currentStatus = RequestStatus.OutstandingPurchase;
+        await using (var change = await fixture.Contexts.CreateDbContextAsync())
+        {
+            var source = await change.TitleRequests.SingleAsync(item => item.Id == fixture.Source.Id);
+            source.Status = currentStatus;
+            await change.SaveChangesAsync();
+            currentVersion = source.RowVersion;
+        }
+
+        var sideEffects = await ReadPurchaseSideEffectCountsAsync(fixture);
+        var providerCalls = fixture.Provider.Calls.Count;
+        await AssertPurchaseRejectedWithoutSideEffectsAsync(
+            fixture, command, "stale_version", currentStatus, 9001, currentVersion, sideEffects, providerCalls);
+    }
+
+    [TestMethod]
+    [DataRow(HoldOperationState.InProgress)]
+    [DataRow(HoldOperationState.Ambiguous)]
+    [DataRow(HoldOperationState.OperatorRequired)]
+    public async Task PurchaseTaskRejectsIncompleteOrAmbiguousHoldJournalWithoutSideEffects(string state)
+    {
+        await using var fixture = await SeedPolarisQueueAsync();
+        await SetSavedPurchaseBibAsync(fixture, autoHold: false);
+        var command = PurchaseTaskCommand(fixture.Source, reminder: true);
+        var journalVersion = await SeedIncompleteHoldJournalAsync(fixture, state);
+        var sideEffects = await ReadPurchaseSideEffectCountsAsync(fixture);
+        var providerCalls = fixture.Provider.Calls.Count;
+
+        await AssertPurchaseRejectedWithoutSideEffectsAsync(
+            fixture, command, "hold_operation_incomplete", RequestStatus.Suggestion, 9001,
+            fixture.Source.RowVersion, sideEffects, providerCalls);
+
+        await using var verify = await fixture.Contexts.CreateDbContextAsync();
+        var journal = await verify.HoldPlacementOperations.AsNoTracking()
+            .SingleAsync(item => item.TitleRequestId == fixture.Source.Id);
+        Assert.AreEqual(state, journal.State);
+        Assert.AreEqual(state == HoldOperationState.OperatorRequired
+            ? HoldOperationPhase.ResultRecorded : HoldOperationPhase.CreateStarted, journal.Phase);
+        Assert.IsNull(journal.CompletedUtc);
+        CollectionAssert.AreEqual(journalVersion, journal.RowVersion);
+    }
+
+    [TestMethod]
+    [DataRow(1)]
+    [DataRow(2)]
+    public async Task PurchaseTaskRejectsIncompletePickupJournalBeforeProviderCall(int state)
+    {
+        await using var fixture = await SeedPolarisQueueAsync();
+        await SetSavedPurchaseBibAsync(fixture, autoHold: false);
+        var command = PurchaseTaskCommand(fixture.Source, reminder: true);
+        var operationId = await SeedIncompletePickupJournalAsync(fixture, state);
+        var sideEffects = await ReadPurchaseSideEffectCountsAsync(fixture);
+        var providerCalls = fixture.Provider.Calls.Count;
+
+        await AssertPurchaseRejectedWithoutSideEffectsAsync(
+            fixture, command, "pickup_reconciliation_required", RequestStatus.Suggestion, 9001,
+            fixture.Source.RowVersion, sideEffects, providerCalls);
+
+        await using var verify = await fixture.Contexts.CreateDbContextAsync();
+        var retained = await verify.Database.SqlQuery<int>($"""
+            SELECT COUNT(*) AS [Value]
+            FROM [asap].[PickupPreferenceOperation]
+            WHERE [Id] = {operationId} AND [State] = {state} AND [CompletedUtc] IS NULL
+              AND [ConfirmedByRead] = {(state == 2)}
+            """).SingleAsync();
+        Assert.AreEqual(1, retained, "The unresolved pickup journal must remain unchanged for reconciliation.");
+    }
+
+    [TestMethod]
+    public async Task PurchaseTaskRejectsReviewedVersionAfterBibChangesWithoutSideEffects()
+    {
+        await using var fixture = await SeedPolarisQueueAsync();
+        await SetSavedPurchaseBibAsync(fixture, autoHold: false);
+        var command = PurchaseTaskCommand(fixture.Source, reminder: true);
+        byte[] currentVersion;
+        await using (var change = await fixture.Contexts.CreateDbContextAsync())
+        {
+            var source = await change.TitleRequests.SingleAsync(item => item.Id == fixture.Source.Id);
+            source.BibId = 9002;
+            source.BibIdStaffVerified = true;
+            source.IsbnCheckStatus = IdentifierCheckState.Found;
+            source.Identifier = "UPDATED-BIB";
+            await change.SaveChangesAsync();
+            currentVersion = source.RowVersion;
+        }
+
+        var sideEffects = await ReadPurchaseSideEffectCountsAsync(fixture);
+        var providerCalls = fixture.Provider.Calls.Count;
+        await AssertPurchaseRejectedWithoutSideEffectsAsync(
+            fixture, command, "stale_version", RequestStatus.Suggestion, 9002, currentVersion,
+            sideEffects, providerCalls);
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task PurchaseTaskHttpCommitUncertaintyRecoversBySameOperation(bool afterCommit)
@@ -299,6 +399,96 @@ public sealed partial class PatronJourneyTests
             new(MyLibraryCount: 0, OtherLibraryCount: 0, ConsortiumCount: 0,
                 IsHoldable: false, HasHoldableAtMyLibrary: false));
     }
+
+    private async Task<byte[]> SeedIncompleteHoldJournalAsync(PolarisQueueFixture fixture, string state)
+    {
+        await using var context = await fixture.Contexts.CreateDbContextAsync();
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
+        var operatorRequired = state == HoldOperationState.OperatorRequired;
+        var operation = new HoldPlacementOperation
+        {
+            TitleRequestId = fixture.Source.Id,
+            PatronBarcodeSnapshot = fixture.Source.Barcode,
+            PatronIdSnapshot = 7001,
+            BibIdSnapshot = 9001,
+            PickupBranchIdSnapshot = 101,
+            RequestingOrganizationIdSnapshot = 1,
+            WorkstationIdSnapshot = 1,
+            PolarisUserIdSnapshot = 1,
+            AttemptNumber = 1,
+            State = state,
+            Phase = operatorRequired ? HoldOperationPhase.ResultRecorded : HoldOperationPhase.CreateStarted,
+            ExecutionEpoch = 1,
+            RequestStartedUtc = now.AddMinutes(-2),
+            CreateStartedUtc = now.AddMinutes(-1),
+            CreateResponseObservedUtc = operatorRequired ? now : null,
+            ResultCode = operatorRequired ? "ambiguous" : null,
+            OutcomeEvidenceKind = operatorRequired ? "provider_outcome_uncertain" : null,
+            LastErrorCode = operatorRequired ? "operator_required" : null
+        };
+        context.HoldPlacementOperations.Add(operation);
+        await context.SaveChangesAsync();
+        return operation.RowVersion.ToArray();
+    }
+
+    private async Task<Guid> SeedIncompletePickupJournalAsync(PolarisQueueFixture fixture, int state)
+    {
+        var operationId = Guid.NewGuid();
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
+        object? dispatchFinishedUtc = state == 2 ? now : DBNull.Value;
+        object? providerConfirmedUtc = state == 2 ? now : DBNull.Value;
+        await ExecuteNonQueryAsync("""
+            INSERT INTO [asap].[PickupPreferenceOperation]
+                ([Id], [Barcode], [PatronId], [LibraryOrganizationId], [TitleRequestId], [Origin],
+                 [ToPickupBranchId], [ToPickupBranchName], [State], [DispatchStartedUtc],
+                 [DispatchFinishedUtc], [ProviderConfirmedUtc], [ConfirmedByRead], [ObservedPickupBranchId])
+            VALUES (@id, @barcode, 7001, 2, @requestId, N'request', 101, N'Main Library', @state,
+                    @dispatchStartedUtc, @dispatchFinishedUtc, @providerConfirmedUtc, @confirmedByRead,
+                    @observedPickupBranchId);
+            """,
+            ("@id", operationId),
+            ("@barcode", fixture.Source.Barcode),
+            ("@requestId", fixture.Source.Id),
+            ("@state", state),
+            ("@dispatchStartedUtc", now.AddMinutes(-2)),
+            ("@dispatchFinishedUtc", dispatchFinishedUtc!),
+            ("@providerConfirmedUtc", providerConfirmedUtc!),
+            ("@confirmedByRead", state == 2),
+            ("@observedPickupBranchId", state == 2 ? 101 : DBNull.Value));
+        return operationId;
+    }
+
+    private static async Task<PurchaseSideEffectCounts> ReadPurchaseSideEffectCountsAsync(PolarisQueueFixture fixture)
+    {
+        await using var context = await fixture.Contexts.CreateDbContextAsync();
+        return new PurchaseSideEffectCounts(
+            await context.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == fixture.Source.Id),
+            await context.TitleRequestEvents.CountAsync(item => item.TitleRequestId == fixture.Source.Id),
+            await context.EmailOutbox.CountAsync());
+    }
+
+    private async Task AssertPurchaseRejectedWithoutSideEffectsAsync(
+        PolarisQueueFixture fixture, TitleRequestActionCommand command, string expectedCode,
+        string expectedStatus, int expectedBib, byte[] expectedVersion,
+        PurchaseSideEffectCounts sideEffects, int providerCalls)
+    {
+        var result = await QueueService().ActionAsync(fixture.Actor, fixture.Source.Id, command, CancellationToken.None);
+        Assert.AreEqual(expectedCode, result.Code);
+        await using var verify = await fixture.Contexts.CreateDbContextAsync();
+        var source = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == fixture.Source.Id);
+        Assert.AreEqual(expectedStatus, source.Status);
+        Assert.AreEqual(expectedBib, source.BibId);
+        Assert.IsFalse(source.AutoHold);
+        CollectionAssert.AreEqual(expectedVersion, source.RowVersion);
+        Assert.AreEqual(sideEffects.TaskCount,
+            await verify.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == fixture.Source.Id));
+        Assert.AreEqual(sideEffects.HistoryCount,
+            await verify.TitleRequestEvents.CountAsync(item => item.TitleRequestId == fixture.Source.Id));
+        Assert.AreEqual(sideEffects.OutboxCount, await verify.EmailOutbox.CountAsync());
+        Assert.AreEqual(providerCalls, fixture.Provider.Calls.Count);
+    }
+
+    private sealed record PurchaseSideEffectCounts(int TaskCount, int HistoryCount, int OutboxCount);
 
     private static TitleRequestActionCommand PurchaseTaskCommand(TitleRequest source, bool reminder) =>
         new TitleRequestActionInput

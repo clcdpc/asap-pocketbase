@@ -591,6 +591,8 @@ public sealed partial class PatronJourneyTests
         {
             await using var context = await Contexts.CreateDbContextAsync();
             await DeleteOwnedEmailFixtureAsync(context, context.EmailOutbox.Where(item => item.RecipientStaffUserId == Actor.Id));
+            await context.Database.ExecuteSqlInterpolatedAsync(
+                $"DELETE FROM [asap].[PickupPreferenceOperation] WHERE [TitleRequestId] = {Source.Id};");
             await context.AdditionalCopyRequests.Where(item => item.SourceTitleRequestId == Source.Id).ExecuteDeleteAsync();
             await context.HoldPlacementOperations.Where(item => item.TitleRequestId == Source.Id).ExecuteDeleteAsync();
             await context.TitleRequests.Where(item => item.Id == Source.Id).ExecuteDeleteAsync();
