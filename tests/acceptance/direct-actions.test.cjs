@@ -177,7 +177,8 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
     ['closed', { allowedActions: [], blockingReason: 'hold_history_retained' }, null]
   ]) {
     await fixture.evaluate(node => { node.style.width = 'min(900px, 100%)'; });
-    await page.evaluate(({ status, capabilities, autohold }) => mountActions(workflow({ status, capabilities, autohold, claimedByStaffUserId: '20' })),
+    await page.evaluate(({ status, capabilities, autohold }) => mountActions(workflow({ status, capabilities, autohold,
+      bibid: status === 'outstanding_purchase' && autohold ? 9001 : null, claimedByStaffUserId: '20' })),
       { status, capabilities, autohold }); await settleActions(page);
     const wide = await actionGeometry(fixture);
     assert.equal(wide.inline[0] || null, primary); assert.equal(wide.more, 0);

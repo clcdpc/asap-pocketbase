@@ -513,11 +513,13 @@ async function runSuperAdmin(browser, args, axeSource, report) {
       /q=Browser%20staff%20title%20edited/);
 
     await page.getByLabel('BIB ID', { exact: true }).fill('9001');
-    assert.equal(await page.locator('#request-grid').getByRole('button', {
+    const rowReadyForHold = page.locator('#request-grid').getByRole('button', {
       name: `Ready for hold request ${args.primaryRequestId}`, exact: true
-    }).count(), 1, 'The row workflow command remains distinct from the open detail toolbar');
-    await page.locator('#request-dialog[open] .action-bar').getByRole('button', { name: 'Ready for hold', exact: true }).click();
-    await page.getByText(/Search Polaris, select the matching BIB/).waitFor();
+    });
+    assert.equal(await rowReadyForHold.count(), 1, 'The row workflow command remains distinct from the open detail toolbar');
+    assert.equal(await rowReadyForHold.isDisabled(), true, 'The row command also respects the saved-BIB prerequisite.');
+    const readyForHold = page.locator('#request-dialog[open] .action-bar').getByRole('button', { name: 'Ready for hold', exact: true });
+    assert.equal(await readyForHold.isDisabled(), true, 'An unsaved BIB does not enable Ready for hold.');
     const searchCatalog = page.getByRole('button', { name: 'Search Polaris catalog' });
     await searchCatalog.focus();
     await page.keyboard.press('Enter');
@@ -619,12 +621,18 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.getByRole('link', { name: 'Open BIB in LEAP' }).waitFor();
     assert.equal(await page.getByRole('link', { name: 'Open BIB in LEAP' }).getAttribute('href'),
       'https://leap.example.test/bib/9001');
-    await page.locator('#request-dialog[open] .action-bar').getByRole('button', { name: 'Ready for hold', exact: true }).click();
-    await page.getByText('Save the current request edits before moving to Pending hold.').waitFor();
-    await page.getByLabel('BIB ID', { exact: true }).fill('9002');
-    await page.getByLabel('BIB ID', { exact: true }).fill('9001');
-    await page.locator('#request-dialog[open] .action-bar').getByRole('button', { name: 'Ready for hold', exact: true }).click();
-    await page.getByText(/Search Polaris, select the matching BIB/).waitFor();
+    assert.equal(await readyForHold.isDisabled(), true, 'Selecting a BIB without saving does not enable Ready for hold.');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    await page.getByText('Request changes saved.').waitFor();
+    const bibSavedResponse = await context.request.get(
+      `${args.baseOrigin}/api/asap/staff/title-requests/${args.primaryRequestId}`
+    );
+    assert.equal(bibSavedResponse.status(), 200);
+    const bibSavedRequest = await bibSavedResponse.json();
+    assert.equal(bibSavedRequest.bibid, 9001);
+    assert.equal(bibSavedRequest.status, 'pending_hold', 'The refreshed server status owns the result of saving this BIB.');
+    await page.locator('#request-dialog .status-badge').filter({ hasText: 'Pending hold' }).waitFor();
+    assert.equal(await page.locator('#request-dialog[open] .action-bar').getByRole('button', { name: 'Ready for hold', exact: true }).count(), 0);
 
     await searchCatalog.click();
     await page.locator('#polaris-mode').selectOption('bib');

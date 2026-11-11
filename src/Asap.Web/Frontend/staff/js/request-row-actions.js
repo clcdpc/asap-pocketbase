@@ -1,4 +1,5 @@
 import { element, icon } from './ui.js';
+import { positivePolarisId } from './research.js';
 
 // Tab workflow first, then secondary commands. Capabilities are supplied by
 // the server; layout only partitions this list and never grants permission.
@@ -7,12 +8,17 @@ export function eligibleRowActions(request, actor) {
       actor.role !== 'super_admin' && String(actor.organizationId) !== String(request.libraryOrgId)) return [];
   const allowed = new Set(request.capabilities?.allowedActions || []);
   const actions = [];
-  const add = (key, label, glyph, tone = 'secondary-button') => actions.push({ key, label, glyph, tone });
+  const add = (key, label, glyph, tone = 'secondary-button', disabled = false) => {
+    const action = { key, label, glyph, tone };
+    if (disabled) action.disabled = true;
+    actions.push(action);
+  };
   if (request.status === 'suggestion') {
     if (allowed.has('reject')) add('reject', 'Reject', 'ban', 'danger-button');
     if (allowed.has('alreadyOwn')) add('alreadyOwn', 'Already own', 'book');
   } else if (request.status === 'outstanding_purchase' && allowed.has('catalogFound')) {
-    add('catalogFound', request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', 'primary-button');
+    const missingSavedBibForHold = request.autohold === true && positivePolarisId(request.bibid) === null;
+    add('catalogFound', request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', 'primary-button', missingSavedBibForHold);
   } else if (request.status === 'pending_hold' && request.capabilities?.canPlaceHold === true &&
       request.capabilities?.canChangeWorkflowState === true) {
     add('place-hold', 'Place hold', 'bookmark', 'primary-button');
@@ -56,9 +62,9 @@ export function requestRowActions({ id, actions, live, onOpen, fallback }) {
     const more = element('button', { type: 'button', className: 'request-row-more secondary-button',
       'aria-label': `More actions for request ${id}`, 'aria-controls': popup.id,
       'aria-expanded': 'false', title: 'More actions' }, icon('ellipsis-h'));
-    const buttons = actions.map(({ key, label, glyph, tone = 'secondary-button' }) => {
+    const buttons = actions.map(({ key, label, glyph, tone = 'secondary-button', disabled = false }) => {
       const button = element('button', { type: 'button', className: `request-row-command ${tone}`,
-        'data-request-action': key, 'aria-label': `${label} request ${id}` }, [icon(glyph), label]);
+        'data-request-action': key, 'aria-label': `${label} request ${id}`, disabled }, [icon(glyph), label]);
       button.addEventListener('click', event => {
         if (!live(event)) return;
         const opener = popup.contains(button) ? more : button;
