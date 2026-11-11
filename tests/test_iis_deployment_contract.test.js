@@ -41,11 +41,13 @@ childProcess.execFileSync(
 assert.ok(workflow.includes("tags:\n      - 'v*.*.*'"), 'all release tags must qualify every category');
 assert.deepEqual(YAML.parse(workflow).on.push.branches, ['main'], 'only the supported main branch has push qualification');
 assert.ok(workflow.includes('  workflow_dispatch:\n'), 'manual dispatch should be declared');
-assert.ok(
-  workflow.includes(
-    "concurrency:\n  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}\n  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n\njobs:"
-  ),
-  'workflow concurrency should cancel superseded PR runs and isolate non-PR executions'
+assert.deepEqual(
+  YAML.parse(workflow, { uniqueKeys: true }).concurrency,
+  {
+    group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.sha) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}",
+    'cancel-in-progress': "${{ github.event_name == 'pull_request' }}"
+  },
+  'workflow concurrency should isolate tested PR commits and non-PR executions while replacing same-commit PR runs'
 );
 assert.equal(YAML.parse(workflow, { uniqueKeys: true }).jobs['build-test-package'].concurrency, undefined,
   'build-test-package must not retain job-level concurrency');
