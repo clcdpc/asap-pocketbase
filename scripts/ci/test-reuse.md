@@ -74,6 +74,18 @@ Windows runner. Environment epoch `github-hosted-ubuntu-24.04-2026-11-08-v1`
 requires a fresh hosted baseline: local-runner results cannot qualify hosted tests.
 Schema 6 and the existing original-evidence machinery remain unchanged.
 
+PR cancellation groups include the PR number and exact tested event SHA (the
+synthetic merge SHA, not just the PR head). Same-commit draft/ready transitions
+and reruns still replace each other. Different commits cannot cross-cancel, so
+retrying an older failed job cannot interrupt current-head validation before
+preflight. A new commit no longer automatically cancels work already running on
+an older commit. Fresh preflight still rejects a stale head; a failed-job rerun
+may reuse its earlier successful policy job. Such a rerun remains isolated and
+cannot qualify the newer commit without the unchanged source/fingerprint and
+final verification checks. Manual, push and tag attempts remain independent.
+Historical runs keep their original workflow when rerun; their former PR-only
+group is distinct from the new commit-scoped groups.
+
 Each manifest names its owning job and must match that job's successful test,
 verification and evidence-upload steps and independently verified checkout.
 Every originating qualification must also contain all three successful workers,

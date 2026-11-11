@@ -31,7 +31,11 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}
+  # GitHub applies concurrency before preflight. Isolate exact tested commits so
+  # retrying an older PR run cannot cancel current validation, even if a failed-
+  # job rerun reuses its successful policy job. Same-commit draft/ready events
+  # still replace each other; manual, push and tag attempts remain independent.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.sha) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

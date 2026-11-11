@@ -176,18 +176,37 @@ async function main() {
       assert.equal(evaluate(gate.name, context), currentDraft ? 'Draft CI result' : 'Build, test and package');
     }
   });
-  await check('repeated draft and ready commits share the PR group; different PRs do not', () => {
+  await check('different tested commits cannot cancel each other, including stale PR reruns', async () => {
     for (const isDraft of [true, false]) {
       const before = pr('synchronize', isDraft);
       const after = structuredClone(before);
       after.github.sha = 'c'.repeat(40);
       after.github.event.pull_request.head.sha = 'd'.repeat(40);
       after.github.run_id++;
-      assert.equal(template(workflow.concurrency.group, before), template(workflow.concurrency.group, after));
+      const staleRetry = structuredClone(before);
+      staleRetry.github.run_attempt = 3;
+      assert.notEqual(template(workflow.concurrency.group, staleRetry), template(workflow.concurrency.group, after),
+        'Concurrency is evaluated before preflight, including when failed-job reruns reuse the original preflight');
+      assert.equal(template(workflow.concurrency.group, staleRetry), template(workflow.concurrency.group, before));
       assert.equal(evaluate(workflow.concurrency['cancel-in-progress'], after), 'true');
+      await routed(staleRetry, after.github.event.pull_request);
+      assert.equal(staleRetry.needs['validation-policy'].result, 'failure');
+      for (const job of [...Object.values(owners), draft]) assert.equal(enabled(job, staleRetry), false);
+      // A changed base can produce a new tested merge SHA with the same PR head.
+      after.github.event.pull_request.head.sha = before.github.event.pull_request.head.sha;
+      assert.notEqual(template(workflow.concurrency.group, before), template(workflow.concurrency.group, after));
     }
     assert.notEqual(template(workflow.concurrency.group, pr('opened', true, 17)),
       template(workflow.concurrency.group, pr('opened', true, 18)));
+  });
+  await check('same tested commit reruns retain cancellation without joining the former PR-only group', () => {
+    const context = pr('ready_for_review', false);
+    const retry = structuredClone(context);
+    retry.github.run_attempt++;
+    assert.equal(template(workflow.concurrency.group, context), template(workflow.concurrency.group, retry));
+    assert.equal(evaluate(workflow.concurrency['cancel-in-progress'], retry), 'true');
+    assert.notEqual(template(workflow.concurrency.group, context), `${workflow.name}-pr-17`,
+      'Historical runs retain the old workflow definition when rerun');
   });
   await check('manual, push, tag and rerun attempts cannot cross-cancel, even at the same SHA', async () => {
     const contexts = [
