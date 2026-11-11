@@ -966,6 +966,13 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .title-detail-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .request-heading-context { padding: 0 20px; container: request-actions / inline-size; }
 .request-heading-context .detail-meta { margin: 6px 0; gap: 4px 12px; font-size: .83rem; }
+.request-bib-prerequisite { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 4px 10px; min-width: 0; margin: 4px 0 8px; padding: 10px 12px; border-left: 4px solid var(--warning); background: var(--warning-surface); }
+.request-bib-prerequisite-icon { padding-top: 2px; color: var(--warning); }
+.request-bib-prerequisite-copy { display: grid; gap: 3px; min-width: 0; }
+.request-bib-prerequisite h3, .request-bib-prerequisite p { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.request-bib-prerequisite h3 { font-size: .9rem; }
+.request-bib-prerequisite p { font-size: .84rem; }
+.request-bib-prerequisite-link { justify-self: start; max-width: 100%; overflow-wrap: anywhere; color: var(--brand-dark); text-decoration: underline; }
 .request-heading-context .action-bar { display: grid; grid-template-columns: minmax(0, 1fr); padding: 2px 0 8px; border: 0; }
 .request-heading-context .action-bar > button { min-width: 0; min-height: 44px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .request-workflow-panel { min-width: 0; padding-inline: 20px; }
@@ -1018,6 +1025,7 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 .request-middle .edit-form { padding-top: 8px; }
 .title-detail-content .edit-form input:disabled { background: var(--soft); border-color: var(--control-line); color: var(--muted); cursor: not-allowed; opacity: 1; }
 .title-detail-content .field-lock { color: var(--muted); font-size: .78rem; font-weight: 600; }
+.title-detail-content .request-bib-prerequisite-help { font-size: .78rem; }
 .identifier-lock-help { margin: 0 0 8px; font-size: .84rem; }
 .request-footer-slot { flex: 0 0 auto; }
 .request-save-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 20px; border-top: 1px solid var(--line); background: var(--surface); }

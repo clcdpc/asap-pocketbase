@@ -18,7 +18,8 @@ public sealed partial class PatronJourneyTests
         await using var savedBib = await SeedPolarisQueueAsync(autoHold: true);
         await using var optout = await SeedPolarisQueueAsync();
         await using var untouched = await SeedPolarisQueueAsync(autoHold: true);
-        var fixtures = new[] { purchase, rejection, savedBib, optout, untouched };
+        await using var missingBib = await SeedPolarisQueueAsync("outstanding_purchase", autoHold: true);
+        var fixtures = new[] { purchase, rejection, savedBib, optout, untouched, missingBib };
         for (var index = 0; index < fixtures.Length; index++)
         {
             var item = fixtures[index];
@@ -65,6 +66,8 @@ public sealed partial class PatronJourneyTests
             Assert.IsTrue(report.RootElement.GetProperty("cancellation").GetBoolean());
             Assert.IsTrue(report.RootElement.GetProperty("retries").GetBoolean());
             Assert.IsTrue(report.RootElement.GetProperty("otherPanels").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("bibPrerequisite").GetBoolean());
+            Assert.IsTrue(report.RootElement.GetProperty("bibPrerequisiteNative200").GetBoolean());
             await using var verify = await purchase.Contexts.CreateDbContextAsync();
             foreach (var (item, status) in new[] { (purchase, "outstanding_purchase"), (rejection, "closed"), (savedBib, "pending_hold"), (optout, "closed") })
             {
@@ -75,6 +78,10 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(item.Source.Notes, row.Notes);
                 Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(value => value.TitleRequestId == row.Id && value.EventType == "status_changed"));
             }
+            var waitingForBib = await verify.TitleRequests.AsNoTracking().SingleAsync(value => value.Id == missingBib.Source.Id);
+            Assert.AreEqual("outstanding_purchase", waitingForBib.Status);
+            Assert.IsNull(waitingForBib.BibId);
+            Assert.AreEqual(0, await verify.TitleRequestEvents.CountAsync(value => value.TitleRequestId == waitingForBib.Id));
             var reminderKey = $"purchase-reminder:{purchase.Source.Id}:";
             var rejectionKey = $"rejection:{rejection.Source.Id}:";
             Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(value => value.BusinessKey!.StartsWith(reminderKey)));

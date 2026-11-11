@@ -57,6 +57,7 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
     if (request.customFieldsValid === false) {
       return element('p', {
         className: 'blocked-callout wide',
+        tabindex: '-1',
         role: 'alert',
         text: 'Saved custom-field history is invalid. Request edits are blocked to protect the stored values; contact an administrator.'
       });
@@ -79,22 +80,32 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       disabled: !request.capabilities.canEditIdentifier
     });
     const bib = element('input', {
+      id: `request-${request.id}-bib-id`,
       value: request.bibid || '',
       inputmode: 'numeric',
       pattern: '[0-9]*',
       maxlength: '100',
       disabled: !request.capabilities.canChangeBib
     });
-    function identifierField(label, input) {
+    function identifierField(label, input, helpText = '') {
       const field = labeledInput(label, input);
+      const descriptions = [], help = [];
       if (input.disabled) {
         const hint = element('small', { id: `request-${request.id}-${label === 'Identifier' ? 'identifier' : 'bib'}-locked`,
-          className: 'field-lock', text: 'Locked' });
+          className: 'field-lock', tabindex: '-1', 'aria-label': `${label} is locked`, text: 'Locked' });
         field.firstElementChild.id = `${hint.id}-label`;
         input.setAttribute('aria-labelledby', field.firstElementChild.id);
-        field.append(hint);
-        input.setAttribute('aria-describedby', hint.id);
+        descriptions.push(hint.id);
+        help.push(hint);
       }
+      if (helpText) {
+        const hint = element('small', { id: `request-${request.id}-bib-required`,
+          className: 'field-help request-bib-prerequisite-help', text: helpText });
+        descriptions.push(hint.id);
+        help.push(hint);
+      }
+      if (help.length) field.append(element('div', { className: 'form-field-help' }, help));
+      if (descriptions.length) input.setAttribute('aria-describedby', descriptions.join(' '));
       return field;
     }
     editControls = { title, author, identifier, bib };
@@ -371,7 +382,9 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       labeledInput('Title', title),
       labeledInput('Author', author),
       identifierField('Identifier', identifier),
-      identifierField('BIB ID', bib),
+      identifierField('BIB ID', bib,
+        request.status === 'outstanding_purchase' && request.autohold === true && positivePolarisId(request.bibid) === null
+          ? 'Required for Ready for hold' : ''),
       element('div', { className: 'wide polaris-edit-tools' }, [linkPanel, searchButton,
         element('div', { className: 'request-research-links', hidden: true }), selectedContext]),
       labeledInput('Publication timing', publication),
@@ -473,6 +486,33 @@ export function createRequestEditor({ context, configuration, polarisLookup, ann
       }
     },
     isVerifiedDraft: () => isVerifiedDraft(request), hasAuthoritativeBib: () => hasAuthoritativeBib(request),
+    focusBib() {
+      if (!isCurrent()) return false;
+      const bib = editControls?.bib;
+      if (bib?.isConnected) {
+        // Center the field in the scrolling pane so the fixed save footer does
+        // not cover it on short mobile viewports or at high browser zoom.
+        bib.scrollIntoView?.({ block: 'center', inline: 'nearest' });
+        if (!bib.disabled) {
+          bib.focus({ preventScroll: true });
+          return true;
+        }
+        const lock = bib.closest('.form-field')?.querySelector('.field-lock');
+        if (lock?.isConnected) {
+          lock.scrollIntoView?.({ block: 'center', inline: 'nearest' });
+          lock.focus({ preventScroll: true });
+          return true;
+        }
+        return false;
+      }
+      const blocker = root.querySelector('.request-details-panel .blocked-callout[tabindex="-1"]');
+      if (blocker?.isConnected) {
+        blocker.scrollIntoView?.({ block: 'center', inline: 'nearest' });
+        blocker.focus({ preventScroll: true });
+        return true;
+      }
+      return false;
+    },
     beginBibLink: (...args) => beginBibLink(...args), cancelBibLink: () => cancelBibLink(),
     captureDraft: () => captureDraft(), showBibLinkError: (...args) => showBibLinkError(...args),
     needsBibLinkReload: () => needsBibLinkReload(),

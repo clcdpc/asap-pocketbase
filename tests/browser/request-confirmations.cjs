@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { decideConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
-const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rejectionId, savedBibId, optoutId, untouchedId] = process.argv.slice(2);
+const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rejectionId, savedBibId, optoutId, untouchedId, missingBibId] = process.argv.slice(2);
 
 (async () => {
   await fs.mkdir(artifacts, { recursive: true });
@@ -12,7 +12,8 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
   const browser = await chromium.launch({ headless: true, ...(process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH
     ? { executablePath: process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH } : {}) });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers });
-  const report = { states: [], errors: [], external: [], actions: [], heldEnter: [], cancellation: false, retries: false, otherPanels: false, close: {}, pickup: {},
+  const report = { states: [], errors: [], external: [], actions: [], heldEnter: [], cancellation: false, retries: false, otherPanels: false,
+    bibPrerequisite: false, bibPrerequisiteNative200: false, close: {}, pickup: {},
     initialFocus: { chromium: browser.version(), directNavigation: null, reload: null, skipLink: false, keyboardViewChange: false, pointerViewChange: null, modalReturn: null } };
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   const guard = async ctx => ctx.route('**/*', route => {
@@ -167,6 +168,43 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     await target.goto(`${baseURL}/staff/?scope=2&request=${id}`, { waitUntil: 'networkidle' });
     await dialog(target).waitFor({ state: 'visible' }); await bar(target).waitFor();
   };
+  async function verifyBibPrerequisite(target = page, nativeZoom = false, name = 'request-bib-prerequisite', alreadyOpen = false) {
+    if (!alreadyOpen) await open(missingBibId, target);
+    const before = await getDetail(missingBibId), actionsBefore = report.actions.length, requests = [];
+    assert.equal(before.status, 'outstanding_purchase'); assert.equal(before.autohold, true); assert.equal(before.bibid, null);
+    const onRequest = request => requests.push({ method: request.method(), url: request.url() });
+    target.on('request', onRequest);
+    try {
+      const notice = dialog(target).locator('.request-bib-prerequisite');
+      await notice.waitFor();
+      assert.equal(await notice.getByRole('heading', { name: 'Waiting for a BIB ID', exact: true }).count(), 1);
+      assert.equal(await notice.getByText('Add and save a Polaris BIB ID before moving this request to Ready for hold.', { exact: true }).count(), 1);
+      assert.equal(await notice.getByRole('link', { name: 'Go to BIB ID', exact: true }).count(), 1);
+      assert.deepEqual(await notice.evaluate(node => [node.previousElementSibling.classList.contains('detail-meta'),
+        node.nextElementSibling.classList.contains('action-bar')]), [true, true]);
+      assert.equal(await opener('Ready for hold', target).isDisabled(), true);
+      assert.equal(await opener('Claim', target).count(), 1); assert.equal(await opener('Assign', target).count(), 1);
+      const bib = dialog(target).locator(`input#request-${missingBibId}-bib-id`);
+      const descriptions = (await bib.getAttribute('aria-describedby')).split(' ');
+      assert.equal(descriptions.length, 1);
+      assert.equal(await dialog(target).locator(`[id="${descriptions[0]}"]`).textContent(), 'Required for Ready for hold');
+      await dialog(target).getByRole('tab', { name: 'Activity', exact: true }).press('Enter');
+      assert.equal(await dialog(target).getByRole('tab', { name: 'Activity', exact: true }).getAttribute('aria-selected'), 'true');
+      const link = notice.getByRole('link', { name: 'Go to BIB ID', exact: true });
+      await link.press('Enter');
+      assert.equal(await dialog(target).getByRole('tab', { name: 'Details', exact: true }).getAttribute('aria-selected'), 'true');
+      await target.waitForFunction(id => document.activeElement?.id === id, `request-${missingBibId}-bib-id`);
+      assert.equal(await bib.evaluate(node => node === document.activeElement), true, 'Keyboard activation focuses this request\'s BIB field.');
+      assert.deepEqual(requests, [], 'The notice link navigates and focuses without an API or Polaris request.');
+      await bib.fill('9001');
+      assert.equal(await notice.isVisible(), true, 'Unsaved text cannot dismiss the notice.');
+      assert.equal(await opener('Ready for hold', target).isDisabled(), true, 'Unsaved text cannot enable Ready for hold.');
+      await scanBibPrerequisite(name, target, nativeZoom);
+      assert.equal(report.actions.length, actionsBefore, 'The notice link and unsaved entry start no workflow action.');
+      assert.deepEqual(await getDetail(missingBibId), before, 'The saved synthetic request remains unchanged.');
+      return true;
+    } finally { target.off('request', onRequest); }
+  }
   async function panelState(panel, target = page) {
     assert.equal(await bar(target).isVisible(), false, 'Toolbar is hidden during inline confirmation');
     assert.equal(await bar(target).getByRole('button').count(), 0, 'Toolbar commands leave the accessibility tree');
@@ -248,6 +286,47 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
         await fs.writeFile(path.join(artifacts, `${name}.png`), Buffer.from(screenshot.data, 'base64'));
       } finally { await cdp.detach(); }
     } else await target.screenshot({ path: path.join(artifacts, `${name}.png`), fullPage: true });
+    report.states.push({ name, ...state });
+  }
+  async function scanBibPrerequisite(name, target = page, nativeZoom = false) {
+    await target.evaluate(axe);
+    const state = await target.evaluate(async () => {
+      const modal = document.querySelector('#request-dialog');
+      const notice = modal.querySelector('.request-bib-prerequisite');
+      const bib = modal.querySelector('.edit-form input[id$="-bib-id"]');
+      const footer = modal.querySelector('.request-save-footer'), pane = modal.querySelector('.request-middle');
+      const field = bib.getBoundingClientRect(), paneRect = pane.getBoundingClientRect(), footerRect = footer.getBoundingClientRect();
+      const paneTop = paneRect.top + pane.clientTop, paneBottom = paneTop + pane.clientHeight;
+      const heading = modal.querySelector('.request-heading-context');
+      return { violations: (await axe.run()).violations.filter(v => ['serious', 'critical'].includes(v.impact)),
+        width: innerWidth, documentWidth: document.documentElement.scrollWidth,
+        modalOverflow: modal.scrollWidth > modal.clientWidth + 1 || pane.scrollWidth > pane.clientWidth + 1 ||
+          heading.scrollWidth > heading.clientWidth + 1,
+        noticeVisible: notice.getClientRects().length > 0,
+        fieldFocused: document.activeElement === bib,
+        fieldVisible: field.top >= paneTop - 1 && field.bottom <= paneBottom + 1,
+        fieldBounds: { top: field.top, bottom: field.bottom }, paneBounds: { top: paneTop, bottom: paneBottom },
+        paneScroll: { top: pane.scrollTop, height: pane.scrollHeight, clientHeight: pane.clientHeight },
+        footerVisible: footerRect.top >= 0 && footerRect.bottom <= innerHeight + 1,
+        focusVisible: bib.matches(':focus-visible'), cssZoom: getComputedStyle(document.documentElement).zoom };
+    });
+    if (!nativeZoom) await target.screenshot({ path: path.join(artifacts, `${name}.png`), fullPage: true });
+    assert.deepEqual(state.violations, [], `${name}: serious/critical axe findings`);
+    assert.ok(state.documentWidth <= state.width && !state.modalOverflow, `${name}: horizontal overflow`);
+    assert.equal(state.noticeVisible, true, `${name}: notice remains visible`);
+    assert.equal(state.fieldFocused, true, `${name}: the current BIB field retains keyboard focus`);
+    assert.equal(state.fieldVisible, true, `${name}: the BIB field is visible within the scrolling pane: ${JSON.stringify(state)}`);
+    assert.equal(state.footerVisible, true, `${name}: the save footer remains visible: ${JSON.stringify(state)}`);
+    assert.equal(state.focusVisible, true, `${name}: the focused BIB field has keyboard focus styling`);
+    if (nativeZoom) {
+      const cdp = await target.context().newCDPSession(target);
+      try {
+        const metrics = await cdp.send('Page.getLayoutMetrics');
+        assert.equal(metrics.visualViewport.zoom, 2); assert.equal(state.cssZoom, '1'); state.browserZoom = metrics.visualViewport.zoom;
+        const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        await fs.writeFile(path.join(artifacts, `${name}.png`), Buffer.from(screenshot.data, 'base64'));
+      } finally { await cdp.detach(); }
+    }
     report.states.push({ name, ...state });
   }
   async function scanCloseFooter(name, target = page, nativeZoom = false) {
@@ -504,6 +583,11 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
   }
   try {
     await verifyInitialHeadingFocus();
+    await verifyBibPrerequisite(page, false, 'request-bib-prerequisite-desktop');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await verifyBibPrerequisite(page, false, 'request-bib-prerequisite-mobile');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    report.bibPrerequisite = true;
     await open(untouchedId); const untouched = await getDetail(untouchedId);
     assert.equal(await emailCell().locator('dd').textContent(), 'Not recorded', 'Missing email keeps its current presentation.');
     assert.equal(await emailCell().locator('a[href^="mailto:"]').count(), 0, 'Missing email does not create an empty mailto link.');
@@ -745,12 +829,24 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     try {
       await guard(zoomContext);
       const worker = zoomContext.serviceWorkers()[0] || await zoomContext.waitForEvent('serviceworker');
-      const zoomPage = zoomContext.pages()[0] || await zoomContext.newPage(); watch(zoomPage); await open(untouchedId, zoomPage);
+      const zoomPage = zoomContext.pages()[0] || await zoomContext.newPage(); watch(zoomPage); await open(missingBibId, zoomPage);
+      const bibZoomRatio = await zoomPage.evaluate(() => devicePixelRatio);
       assert.equal(await worker.evaluate(async origin => {
         const tab = (await chrome.tabs.query({})).find(tab => tab.url.startsWith(origin));
         await chrome.tabs.setZoomSettings(tab.id, { mode: 'automatic', scope: 'per-tab' });
         await chrome.tabs.setZoom(tab.id, 2); return chrome.tabs.getZoom(tab.id);
       }, new URL(baseURL).origin), 2);
+      await zoomPage.waitForFunction(ratio => Math.abs(devicePixelRatio / ratio - 2) < 0.01, bibZoomRatio);
+      await verifyBibPrerequisite(zoomPage, true, 'request-bib-prerequisite-native-200', true);
+      report.bibPrerequisiteNative200 = true;
+      await open(untouchedId, zoomPage);
+      const zoomRatio = await zoomPage.evaluate(() => devicePixelRatio);
+      assert.equal(await worker.evaluate(async origin => {
+        const tab = (await chrome.tabs.query({})).find(tab => tab.url.startsWith(origin));
+        await chrome.tabs.setZoomSettings(tab.id, { mode: 'automatic', scope: 'per-tab' });
+        await chrome.tabs.setZoom(tab.id, 2); return chrome.tabs.getZoom(tab.id);
+      }, new URL(baseURL).origin), 2);
+      await zoomPage.waitForFunction(ratio => Math.abs(devicePixelRatio / ratio - 2) < 0.01, zoomRatio);
       await scanCloseFooter('request-close-native-200', zoomPage, true);
       await footerClose(zoomPage).press('Enter'); await dialog(zoomPage).waitFor({ state: 'hidden' });
       await zoomPage.waitForFunction(id => [...document.querySelectorAll('#request-grid .grid-open')]

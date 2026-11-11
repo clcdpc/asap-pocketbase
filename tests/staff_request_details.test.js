@@ -197,6 +197,255 @@ async function setup(ui, initial = source, options = {}) {
     } finally { t.dispose(); }
   });
 
+  const missingBib = { ...source, status: 'outstanding_purchase', autohold: true, bibid: null, bibidStaffVerified: false,
+    capabilities: { ...capabilities, allowedActions: ['catalogFound'] } };
+  await fixture(async ui => {
+    const t = await setup(ui, missingBib);
+    try {
+      const notice = t.root.querySelector('.request-bib-prerequisite');
+      assert.ok(notice);
+      assert.equal(notice.querySelector('h3').textContent, 'Waiting for a BIB ID');
+      assert.equal(notice.querySelector('p').textContent,
+        'Add and save a Polaris BIB ID before moving this request to Ready for hold.');
+      assert.equal(notice.querySelector('.request-bib-prerequisite-icon i').getAttribute('aria-hidden'), 'true');
+      assert.equal(notice.previousElementSibling.className, 'detail-meta');
+      assert.equal(notice.nextElementSibling.className, 'action-bar');
+      assert.equal(button(t.root, 'Ready for hold').disabled, true);
+      assert.deepEqual(buttons(t.root).map(item => item.textContent.trim()), ['Claim', 'Assign', 'Ready for hold']);
+      assert.equal(t.root.querySelector('.request-bib-prerequisite-link').textContent, 'Go to BIB ID');
+      const bib = t.root.querySelector('#request-91-bib-id');
+      const describedBy = bib.getAttribute('aria-describedby').split(' ');
+      assert.equal(document.getElementById(describedBy[0]).textContent, 'Required for Ready for hold');
+      assert.equal(describedBy.length, 1, 'The field help is associated without duplicating the full notice description.');
+
+      const title = [...t.root.querySelectorAll('.edit-form label')]
+        .find(label => label.firstElementChild.textContent === 'Title').querySelector('input');
+      title.value = 'Retained request title draft';
+      title.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+      t.root.querySelector('[role="tab"][aria-controls$="activity"]').click();
+      const link = notice.querySelector('.request-bib-prerequisite-link');
+      assert.equal(t.root.querySelector('[role="tabpanel"][id$="activity"]').hidden, false);
+      link.focus(); link.click(); await settle();
+      assert.equal(t.root.querySelector('[role="tab"][aria-controls$="details"]').getAttribute('aria-selected'), 'true');
+      assert.equal(document.activeElement, bib, 'The link returns to and focuses the current BIB input.');
+      assert.equal(title.value, 'Retained request title draft', 'Switching tabs and focusing the BIB preserves drafts.');
+      assert.equal(t.calls.some(call => call.init.method), false, 'The link does not mutate the request.');
+      assert.equal(t.lookups.length, 0, 'The link does not open or call Polaris.');
+
+      bib.value = '9001';
+      bib.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+      assert.equal(t.root.querySelector('.request-bib-prerequisite'), notice);
+      assert.equal(button(t.root, 'Ready for hold').disabled, true, 'Typing alone cannot satisfy the saved-BIB prerequisite.');
+      [...t.root.querySelectorAll('button')].find(item => item.textContent.trim() === 'Search Polaris catalog').click();
+      assert.equal(t.lookups.length, 1);
+      t.lookups[0].apply({ bibId: 9001, title: 'Verified title' }, { bibId: 9001, holdingsSummary: null });
+      assert.equal(t.root.querySelector('.request-bib-prerequisite'), notice);
+      assert.equal(button(t.root, 'Ready for hold').disabled, true, 'Selecting a BIB without saving cannot enable Ready for hold.');
+      assert.equal(t.calls.some(call => call.init.method), false);
+
+      const revert = [...t.root.querySelectorAll('.request-save-footer button')]
+        .find(item => item.textContent.includes('Revert changes'));
+      revert.click(); await settle();
+      const replacementBib = t.root.querySelector('#request-91-bib-id');
+      assert.notEqual(replacementBib, bib, 'Revert replaces the BIB control.');
+      link.click(); await settle();
+      assert.equal(document.activeElement, replacementBib, 'The link resolves the current control after Revert.');
+      assert.equal(replacementBib.disabled, false, 'Navigation does not change or bypass the field lock.');
+      assert.equal(t.calls.some(call => call.init.method), false);
+    } finally { t.dispose(); }
+  });
+
+  for (const [nextStatus, allowedActions] of [['pending_hold', []], ['outstanding_purchase', []]]) await fixture(async ui => {
+    const saved = { ...missingBib, version: 'v2', status: nextStatus, bibid: 9001, bibidStaffVerified: true,
+      capabilities: { ...capabilities, canChangeBib: nextStatus === 'outstanding_purchase', allowedActions } };
+    const t = await setup(ui, missingBib, { send: (path, init) => init.method
+      ? { committed: true, request: saved, finalStatus: saved.status }
+      : undefined });
+    try {
+      [...t.root.querySelectorAll('button')].find(item => item.textContent.trim() === 'Search Polaris catalog').click();
+      t.lookups[0].apply({ bibId: 9001, title: 'Verified title' }, { bibId: 9001 });
+      t.root.querySelector('.edit-form').dispatchEvent(new ui.dom.window.Event('submit', { bubbles: true, cancelable: true })); await settle();
+      assert.equal(t.calls.filter(call => call.init.method).length, 1);
+      assert.equal(t.calls.find(call => call.init.method).init.body.staffSelectedBibId, 9001);
+      assert.equal(t.root.querySelector('.request-bib-prerequisite'), null, 'A refreshed saved BIB removes the notice.');
+      assert.equal(t.root.querySelector('#request-91-bib-required'), null, 'A saved BIB removes the missing-BIB field help.');
+      assert.equal(ui.get('#request-dialog-status').textContent, nextStatus === 'pending_hold' ? 'Pending hold' : 'Outstanding purchase',
+        'The refreshed server status is rendered without inferring a transition from AutoHold.');
+      const ready = button(t.root, 'Ready for hold');
+      if (nextStatus === 'outstanding_purchase') {
+        assert.ok(ready);
+        assert.equal(ready.disabled, true, 'The refreshed server capabilities still govern action availability.');
+      } else assert.equal(ready, undefined, 'A server status transition is not replaced with a client-inferred action.');
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    const t = await setup(ui, missingBib);
+    try {
+      const bib = t.root.querySelector('#request-91-bib-id');
+      const title = [...t.root.querySelectorAll('.edit-form label')]
+        .find(label => label.firstElementChild.textContent === 'Title').querySelector('input');
+      bib.value = 'not-a-bib';
+      bib.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+      title.value = 'Changed title';
+      title.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+      t.root.querySelector('.edit-form').dispatchEvent(new ui.dom.window.Event('submit', { bubbles: true, cancelable: true })); await settle();
+      assert.equal(t.calls.some(call => call.init.method), false, 'Invalid BIB validation does not dispatch a save.');
+      assert.equal(bib.value, 'not-a-bib');
+      assert.equal(document.activeElement, bib);
+      assert.ok(t.announcements.some(([message]) => /positive Polaris BIB ID/.test(message)));
+      assert.ok(t.root.querySelector('.request-bib-prerequisite'));
+      assert.equal(button(t.root, 'Ready for hold').disabled, true);
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    const t = await setup(ui, missingBib, { send: (path, init) => init.method
+      ? Promise.reject(Object.assign(new Error('BIB validation failed.'), { status: 400, response: { code: 'bib_not_found' } }))
+      : undefined });
+    try {
+      const title = [...t.root.querySelectorAll('.edit-form label')]
+        .find(label => label.firstElementChild.textContent === 'Title').querySelector('input');
+      [...t.root.querySelectorAll('button')].find(item => item.textContent.trim() === 'Search Polaris catalog').click();
+      t.lookups[0].apply({ bibId: 9001, title: 'Verified title' }, { bibId: 9001 });
+      title.value = 'Keep this draft after save failure';
+      title.dispatchEvent(new ui.dom.window.Event('input', { bubbles: true }));
+      t.root.querySelector('.request-save-footer button[type="submit"]').click(); await settle();
+      assert.equal(t.calls.filter(call => call.init.method).length, 1);
+      assert.equal(title.value, 'Keep this draft after save failure');
+      assert.equal(t.root.querySelector('#request-91-bib-id').value, '9001');
+      assert.ok(t.root.querySelector('.request-bib-prerequisite'));
+      assert.equal(button(t.root, 'Ready for hold').disabled, true);
+      assert.equal(t.root.querySelector('.request-save-state').dataset.state, 'error');
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    let committed = false;
+    const t = await setup(ui, missingBib, { send: (path, init) => {
+      if (init.method) {
+        committed = true;
+        return { committed: true, request: null, refreshUnavailable: true, finalStatus: 'pending_hold' };
+      }
+      if (committed && path.includes('/title-requests/91')) {
+        return Promise.reject(Object.assign(new Error('Current details unavailable.'), { status: 503 }));
+      }
+      return undefined;
+    } });
+    try {
+      [...t.root.querySelectorAll('button')].find(item => item.textContent.trim() === 'Search Polaris catalog').click();
+      t.lookups[0].apply({ bibId: 9001, title: 'Verified title' }, { bibId: 9001 });
+      t.root.querySelector('.request-save-footer button[type="submit"]').click(); await settle();
+      assert.equal(t.calls.filter(call => call.init.method).length, 1);
+      assert.match(t.root.textContent, /The action committed\. Reload this request to review current details\./,
+        'A failed refresh reports the confirmed commit and directs staff to reload.');
+      assert.equal(t.root.querySelector('.request-bib-prerequisite'), null,
+        'Without refreshed authority, the UI does not present a stale missing-BIB notice.');
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, () => false);
+    const t = await setup(ui, missingBib);
+    try {
+      [...t.root.querySelectorAll('button')].find(item => item.textContent.trim() === 'Search Polaris catalog').click();
+      t.lookups[0].apply({ bibId: 9001, title: 'Verified title' }, { bibId: 9001 });
+      const autoHold = [...t.root.querySelectorAll('.edit-form input[type="checkbox"]')][0];
+      autoHold.checked = false;
+      autoHold.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+      t.root.querySelector('.request-save-footer button[type="submit"]').click(); await settle();
+      assert.equal(t.calls.some(call => call.init.method), false, 'Canceling the no-hold consequence does not save.');
+      assert.equal(autoHold.checked, false, 'The canceled save retains the editor draft.');
+      assert.equal(t.root.querySelector('.request-bib-prerequisite') !== null, true,
+        'The notice continues to reflect the saved AutoHold state after a canceled edit.');
+      assert.equal(button(t.root, 'Ready for hold').disabled, true);
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    const noHold = { ...missingBib, autohold: false };
+    const t = await setup(ui, noHold);
+    try {
+      assert.equal(t.root.querySelector('.request-bib-prerequisite'), null);
+      assert.equal(t.root.querySelector('#request-91-bib-required'), null);
+      assert.equal(button(t.root, 'Close without hold').disabled, false);
+      const autoHold = [...t.root.querySelectorAll('.edit-form input[type="checkbox"]')][0];
+      autoHold.checked = true;
+      autoHold.dispatchEvent(new ui.dom.window.Event('change', { bubbles: true }));
+      assert.equal(t.root.querySelector('.request-bib-prerequisite'), null,
+        'Unsaved AutoHold changes do not introduce guidance for a different saved workflow path.');
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    const blocked = { ...missingBib, claimedByStaffUserId: '99', claimedByDisplayName: 'Other staff',
+      capabilities: { ...capabilities, canChangeBib: false, canEditIdentifier: false,
+        blockingReason: 'hold_operation_incomplete', allowedActions: ['catalogFound'] } };
+    const t = await setup(ui, blocked, { actor: { ...actor, role: 'staff' } });
+    try {
+      const bib = t.root.querySelector('#request-91-bib-id');
+      assert.equal(bib.disabled, true);
+      assert.match(t.root.querySelector('.blocked-callout').textContent, /recovery/i);
+      const helpIds = bib.getAttribute('aria-describedby').split(' ');
+      assert.equal(helpIds.length, 2);
+      assert.equal(document.getElementById(helpIds[0]).textContent, 'Locked');
+      assert.equal(document.getElementById(helpIds[1]).textContent, 'Required for Ready for hold');
+      const notice = t.root.querySelector('.request-bib-prerequisite');
+      notice.querySelector('a').click(); await settle();
+      assert.equal(bib.disabled, true, 'Navigation never enables an identifier-locked field.');
+      assert.equal(document.activeElement, document.getElementById(helpIds[0]));
+      assert.deepEqual(buttons(t.root).map(item => item.textContent.trim()), ['Assign', 'Ready for hold']);
+      assert.equal(button(t.root, 'Ready for hold').disabled, true);
+      assert.match(t.root.querySelector('.blocked-callout').textContent, /Workflow-changing edits are blocked/);
+      assert.equal(t.calls.some(call => call.init.method), false);
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    const t = await setup(ui, missingBib);
+    try {
+      button(t.root, 'Claim').click();
+      const review = t.root.querySelector('.action-choice');
+      review.querySelector('button[type="submit"]').click(); await settle();
+      const bib = t.root.querySelector('#request-91-bib-id');
+      assert.equal(bib.disabled, true, 'A pending request mutation continues to disable the BIB control.');
+      t.root.querySelector('.request-bib-prerequisite-link').click(); await settle();
+      assert.equal(bib.disabled, true, 'Following the notice cannot bypass an in-flight mutation.');
+      assert.ok(t.root.querySelector('.request-bib-prerequisite'));
+      assert.equal(t.calls.filter(call => call.init.method).length, 1, 'The link does not add a second pending mutation.');
+      assert.equal(t.lookups.length, 0);
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    const t = await setup(ui, missingBib);
+    try {
+      const oldLink = t.root.querySelector('.request-bib-prerequisite-link');
+      t.root.querySelector('[role="tab"][aria-controls$="activity"]').click();
+      t.identity.accept({ ...actor, role: 'retired' });
+      oldLink.click(); await settle();
+      assert.equal(t.root.querySelector('[role="tabpanel"][id$="activity"]').hidden, false,
+        'A notice from a retired session cannot change tabs.');
+      assert.notEqual(document.activeElement, t.root.querySelector('#request-91-bib-id'));
+      assert.equal(t.calls.some(call => call.init.method), false);
+    } finally { t.dispose(); }
+  });
+
+  await fixture(async ui => {
+    const t = await setup(ui, missingBib);
+    try {
+      const oldLink = t.root.querySelector('.request-bib-prerequisite-link');
+      await t.show({ ...source, id: '92', title: 'Different request' });
+      const newTitle = [...t.root.querySelectorAll('.edit-form label')]
+        .find(label => label.firstElementChild.textContent === 'Title').querySelector('input');
+      newTitle.focus();
+      oldLink.click(); await settle();
+      assert.equal(document.activeElement, newTitle, 'A stale request link cannot focus another request\'s field.');
+      assert.equal(t.root.querySelector('.request-bib-prerequisite'), null);
+      assert.equal(t.calls.some(call => call.init.method), false);
+    } finally { t.dispose(); }
+  });
+
   await fixture(async ui => {
     const t = await setup(ui);
     try {

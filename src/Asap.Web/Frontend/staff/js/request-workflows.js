@@ -217,8 +217,9 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         commandButton('Reject', 'ban', event => showActionChoice(request, 'reject', event.currentTarget), 'danger-button', !allowedActions.has('reject'))
       );
     } else if (request.status === 'outstanding_purchase') {
+      const missingSavedBibForHold = request.autohold === true && positivePolarisId(request.bibid) === null;
       bar.append(commandButton(request.autohold ? 'Ready for hold' : 'Close without hold', 'arrow-right', event => runAction(request, 'catalogFound', undefined, {}, null, event.currentTarget),
-        'primary-button', !allowedActions.has('catalogFound')));
+        'primary-button', !allowedActions.has('catalogFound') || missingSavedBibForHold));
     } else if (request.status === 'pending_hold') {
       bar.append(commandButton('Additional copy', 'clone', event => showAdditionalCopyPreview(request, event.currentTarget), 'secondary-button', !request.bibid));
       bar.append(commandButton('Pickup', 'map-marker', event => showPickup(request, event.currentTarget), 'secondary-button',
