@@ -48,6 +48,62 @@ async function flush() {
       id: '9007199254740993', organizationId: '1', templateKey: 'suggestion_submitted',
       subject: '  Hello {{name}}  ', body: '  Body\r\n{{title}}  ', enabled: true, isCustom: false
     };
+    const staffPlaceholderExamples = {
+      recipientName: ['Staff recipient name', 'Name of the staff member receiving the message.', 'Casey Staff'],
+      actorName: ['Actor name', 'Staff member who performed the action.', 'Morgan Staff'],
+      assigneeName: ['Assignee name', 'Staff member assigned to the record.', 'Casey Staff'],
+      libraryName: ['Library name', 'Library that owns the record or summary data.', 'Library Two'],
+      requestId: ['Title request ID', 'Title request identifier.', '9007199254740993'],
+      taskId: ['Additional-copy task ID', 'Additional-copy task identifier.', '9007199254740994'],
+      bibId: ['BIB ID', 'Polaris BIB ID when present.', '123456'],
+      title: ['Requested title', 'Title or task title.', 'Example title'],
+      author: ['Author or creator', 'Author or creator when available.', 'Example creator'],
+      format: ['Material format', 'Material format when available.', 'Print'],
+      requestUrl: ['Request or task URL', 'Link to this exact request or task.', 'https://staff.example.org/staff/?request=9007199254740993&stage=suggestion&scope=2'],
+      periodStart: ['Period start', 'First business date in the summary.', '2026-11-05'],
+      periodEnd: ['Period end', 'Last business date in the summary.', '2026-11-11'],
+      submissionCount: ['New submission count', 'Number of active suggestions.', '4'],
+      submissionItems: ['New submission samples', 'Recent suggestions with their own links.', '1. Example title — Example creator'],
+      purchaseCount: ['Purchase awaiting BIB count', 'Approved purchases without a BIB.', '2'],
+      purchaseItems: ['Purchase samples', 'Recent purchases with their own links.', '1. Example title — Example creator'],
+      additionalCopyCount: ['Additional-copy task count', 'Number of open additional-copy tasks.', '3'],
+      additionalCopyItems: ['Additional-copy samples', 'Recent tasks with their own links.', '1. Example title — Example creator'],
+      submissionQueueUrl: ['Submission queue URL', 'Queue for new suggestions.', 'https://staff.example.org/staff/?stage=submitted&scope=2'],
+      purchaseQueueUrl: ['Purchase queue URL', 'Queue for purchases awaiting BIBs.', 'https://staff.example.org/staff/?stage=purchased_waiting_for_bib&scope=2'],
+      additionalCopiesQueueUrl: ['Additional-copies queue URL', 'Queue for additional-copy tasks.', 'https://staff.example.org/staff/?stage=additional_copies&scope=2']
+    };
+    const staffDefinitionSeeds = [
+      ['staff_title_assignment', 'Title request assigned', 'Sent when a title request is assigned to a staff member.',
+        ['recipientName', 'actorName', 'assigneeName', 'libraryName', 'requestId', 'bibId', 'title', 'author', 'format', 'requestUrl']],
+      ['staff_purchase_reminder', 'Purchase reminder', 'Sent when staff request a reminder while recording a purchase.',
+        ['recipientName', 'actorName', 'libraryName', 'requestId', 'bibId', 'title', 'author', 'format', 'requestUrl']],
+      ['staff_additional_copy_reminder', 'Additional-copy reminder', 'Sent when staff request a reminder after creating an additional-copy task.',
+        ['recipientName', 'actorName', 'libraryName', 'requestId', 'taskId', 'bibId', 'title', 'author', 'format', 'requestUrl']],
+      ['staff_additional_copy_assignment', 'Additional-copy task assigned', 'Sent when an additional-copy task is assigned to a staff member.',
+        ['recipientName', 'actorName', 'assigneeName', 'libraryName', 'requestId', 'taskId', 'bibId', 'title', 'author', 'format', 'requestUrl']],
+      ['staff_weekly_summary', 'Weekly action summary', 'Sent weekly for the authorized library or all-library data scope.',
+        ['recipientName', 'libraryName', 'periodStart', 'periodEnd', 'submissionCount', 'submissionItems',
+          'purchaseCount', 'purchaseItems', 'additionalCopyCount', 'additionalCopyItems', 'submissionQueueUrl',
+          'purchaseQueueUrl', 'additionalCopiesQueueUrl']]
+    ];
+    const staffTemplateDefinitions = staffDefinitionSeeds.map(([templateKey, displayName, whenSent, keys]) => ({
+      templateKey, displayName, whenSent,
+      placeholders: keys.map(key => {
+        const [name, description, example] = staffPlaceholderExamples[key];
+        return { key, name, description, example };
+      })
+    }));
+    const staffTemplates = staffTemplateDefinitions.map((definition, index) => ({
+      id: String(9007199254741000n + BigInt(index)), organizationId: '1', templateKey: definition.templateKey,
+      subject: `${definition.displayName}: {{recipientName}}`,
+      body: definition.templateKey === 'staff_additional_copy_reminder' ||
+        definition.templateKey === 'staff_additional_copy_assignment'
+        ? 'Task {{taskId}} for {{title}}. {{requestUrl}}'
+        : definition.templateKey === 'staff_weekly_summary'
+          ? '{{periodStart}}–{{periodEnd}}: {{submissionCount}}. {{submissionItems}} {{submissionQueueUrl}}'
+          : 'Hello {{recipientName}}. {{actorName}} — {{title}} {{requestUrl}}',
+      enabled: true, isCustom: false
+    }));
     const additionalTemplates = [];
     const emptySet = { exists: false, values: [] };
     const data = () => ({
@@ -58,12 +114,12 @@ async function flush() {
         configuredSystem: {
           workflow: {}, patron: {}, email: { fromAddress: 'system@example.org', fromName, hasPostmarkToken: hasToken },
           publicationOptions: emptySet, commonCreators: emptySet, allowedPatronCodeIds: emptySet,
-          providers: [], formats: [], templates: [template, ...additionalTemplates], branding: {}
+          providers: [], formats: [], templates: [template, ...staffTemplates, ...additionalTemplates], branding: {}
         },
         libraryOverride: null, workflow: {}, patron: {}, email: {}, origins: [],
         publicationOptions: [], commonCreators: [], allowedPatronCodeIds: [], providers: [], formats: [],
         customFields: [], formatRules: [],
-        templates: [template, ...additionalTemplates], autoClaimRules: [], branding: {}
+        templates: [template, ...staffTemplates, ...additionalTemplates], autoClaimRules: [], branding: {}
       },
       effective: { allowedPatronCodeIds: [], publicationOptions: [], commonCreators: [],
         externalSearchProviders: [], formats: [], customFields: [] },
@@ -71,7 +127,8 @@ async function flush() {
       emails: { fromAddress: 'system@example.org', fromName, templates: [template] },
       patronCodeChoices: [],
       autoClaimStaff: [],
-      templatePlaceholders: ['name', 'title']
+      templatePlaceholders: ['name', 'title'],
+      staffTemplateDefinitions
     });
     global.fetch = async (url, options = {}) => {
       const requestUrl = String(url);
@@ -85,6 +142,8 @@ async function flush() {
         const payload = JSON.parse(options.body);
         saved.push(payload);
         for (const patch of payload.templates || []) {
+          const staff = staffTemplates.find(item => item.templateKey === patch.templateKey);
+          if (staff) Object.assign(staff, patch);
           const additional = additionalTemplates.find(item => item.templateKey === patch.templateKey);
           if (additional) Object.assign(additional, patch);
         }
@@ -492,8 +551,59 @@ async function flush() {
       assert.strictEqual(controller.isDirty(), false);
     }
 
+    controller.activatePanel('templates');
+    const staffCard = document.querySelector('[data-template-key="staff_title_assignment"]');
+    const staffBody = document.getElementById('email-staff-title-assignment-body');
+    const staffToggle = staffCard.querySelector('[data-template-toggle]');
+    staffToggle.click();
+    const staffPreview = staffCard.querySelector('.settings-template-preview-body');
+    assert.match(staffPreview.textContent, /Casey Staff/);
+    assert.match(staffPreview.textContent, /Morgan Staff/);
+    assert.match(staffPreview.textContent, /https:\/\/staff\.example\.org\/staff\//);
+    assert.match(staffCard.querySelector('.settings-template-preview-note').textContent, /Missing optional values are empty/);
+
+    const staffBodyTrigger = staffBody.closest('.settings-template-field').querySelector('.template-placeholder-trigger');
+    staffBodyTrigger.click();
+    const staffPicker = document.getElementById(staffBodyTrigger.getAttribute('aria-controls'));
+    const offeredStaffKeys = [...staffPicker.querySelectorAll('[data-placeholder-key]')]
+      .map(button => button.dataset.placeholderKey);
+    assert.deepStrictEqual(offeredStaffKeys,
+      staffTemplateDefinitions.find(item => item.templateKey === 'staff_title_assignment').placeholders.map(item => item.key));
+    assert.strictEqual(offeredStaffKeys.includes('name'), false);
+    assert.strictEqual(offeredStaffKeys.includes('barcode'), false);
+    assert.strictEqual(offeredStaffKeys.includes('taskId'), false);
+    staffBody.focus();
+    staffBody.setSelectionRange(0, 0);
+    staffBodyTrigger.click();
+    const actorPlaceholder = staffPicker.querySelector('[data-placeholder-key="actorName"]');
+    actorPlaceholder.focus();
+    actorPlaceholder.click();
+    assert.ok(staffBody.value.startsWith('{{actorName}}'), 'Staff editors insert only placeholders applicable to this message.');
+    assert.strictEqual(controller.isDirty(), true);
+    document.getElementById('settings-discard').click();
+    for (let attempt = 0; attempt < 20 && controller.isDirty(); attempt++) await flush();
+    assert.strictEqual(staffBody.value, staffTemplates[0].body, 'Discard restores the accepted staff body.');
+    assert.strictEqual(controller.isDirty(), false);
+
+    staffBody.value = 'Invalid patron token {{name}}';
+    staffBody.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    assert.strictEqual(saved.length, 6, 'Unknown staff placeholders are rejected before the API request.');
+    assert.strictEqual(staffBody.getAttribute('aria-invalid'), 'true');
+    assert.match(staffCard.querySelector('[role="alert"]').textContent, /unsupported placeholder \{\{name\}\}/);
+    staffBody.value = 'Hello {{recipientName}}';
+    staffBody.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    for (let attempt = 0; attempt < 30 && saved.length < 7; attempt++) await flush();
+    assert.deepStrictEqual(saved[6].templates,
+      [{ templateKey: 'staff_title_assignment', body: 'Hello {{recipientName}}' }]);
+    for (let attempt = 0; attempt < 30 && controller.hasPendingMutation(); attempt++) await flush();
+    assert.strictEqual(staffBody.value, 'Hello {{recipientName}}');
+    assert.strictEqual(controller.isDirty(), false);
+
     dom.window.close();
-    console.log('System token intents, Staff URL suggestion draft/save/reload, placeholder caret insertion, and unchanged template text passed');
+    console.log('Patron and staff template placeholder separation, preview, discard, validation and save, plus System token and Staff URL editing passed');
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

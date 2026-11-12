@@ -339,12 +339,13 @@ public sealed class AdditionalCopyService(
             outbox = await AddStaffNotificationAsync(
                 context,
                 locked.Staff[actor.Id],
+                locked.Staff[actor.Id],
+                request,
                 source.LibraryOrganizationId,
                 request.SourceTitleRequestId,
                 "additional_copy_reminder",
                 $"additional-copy-reminder:{request.Id}",
-                "ASAP additional-copy reminder",
-                $"Additional-copy task {request.Id} for {request.Title} (BIB {request.BibId}) was created.",
+                StaffEmailTemplateCatalog.AdditionalCopyReminder,
                 readiness.IsConfigured,
                 cancellationToken);
         }
@@ -533,12 +534,13 @@ public sealed class AdditionalCopyService(
             outbox = await AddStaffNotificationAsync(
                 context,
                 assignee,
+                locked.Staff[actor.Id],
+                request,
                 request.LibraryOrganizationId,
                 request.SourceTitleRequestId,
                 "additional_copy_assignment",
                 $"additional-copy-assignment:{request.Id}:{Convert.ToHexString(expectedVersion)}:{assignee.Id}",
-                "ASAP additional-copy task assigned",
-                $"Additional-copy task {request.Id} for {request.Title} has been assigned to you.",
+                StaffEmailTemplateCatalog.AdditionalCopyAssignment,
                 readiness.IsConfigured,
                 cancellationToken);
         }
@@ -786,12 +788,13 @@ public sealed class AdditionalCopyService(
     private async Task<EmailOutbox?> AddStaffNotificationAsync(
         AsapDbContext context,
         StaffUser recipient,
+        StaffUser actor,
+        AdditionalCopyRequest task,
         int organizationId,
         long? sourceTitleRequestId,
         string messageKind,
         string businessKey,
-        string subject,
-        string body,
+        string templateKey,
         bool transportConfigured,
         CancellationToken cancellationToken)
     {
@@ -801,6 +804,28 @@ public sealed class AdditionalCopyService(
             .SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
         var fromAddress = Clean(library?.FromAddress) ?? Clean(system?.FromAddress);
         var fromName = Clean(library?.FromName) ?? Clean(system?.FromName);
+        var systemSettings = await context.SystemSettings.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var libraryName = await context.Organizations.AsNoTracking()
+            .Where(item => item.Id == organizationId)
+            .Select(item => item.DisplayName)
+            .SingleOrDefaultAsync(cancellationToken);
+        var template = await StaffEmailTemplateCatalog.LoadEffectiveAsync(context, organizationId, templateKey, cancellationToken);
+        var rendered = template is null ? null : StaffEmailTemplateRenderer.RenderRequest(template,
+            new StaffEmailRequestValues(
+                organizationId,
+                systemSettings?.StaffApplicationUrl,
+                recipient.DisplayName,
+                actor.DisplayName,
+                recipient.DisplayName,
+                libraryName,
+                sourceTitleRequestId?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                task.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "additional_copies",
+                task.BibId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                task.Title,
+                task.Author,
+                task.FormatSnapshot));
         string? suppressionReason = null;
         if (!StaffEmail.TryNormalize(recipient.NotificationEmail, out var toAddress) || toAddress is null)
         {
@@ -817,6 +842,23 @@ public sealed class AdditionalCopyService(
         else if (!transportConfigured)
         {
             suppressionReason = "mail_not_configured";
+        }
+        else if (template is null)
+        {
+            suppressionReason = "template_unavailable";
+        }
+        else if (template.IsHidden)
+        {
+            suppressionReason = "template_hidden";
+        }
+        else if (string.IsNullOrWhiteSpace(rendered?.Subject) || string.IsNullOrWhiteSpace(rendered.BodyText))
+        {
+            suppressionReason = "template_blank";
+        }
+        else if (StaffEmailTemplateRenderer.UsesRequestUrl(template) &&
+                 !StaffEmailTemplateRenderer.IsStaffUrlConfigured(systemSettings?.StaffApplicationUrl))
+        {
+            suppressionReason = "staff_url_missing";
         }
         var now = UtcNow();
         var linkedRequestId = sourceTitleRequestId.HasValue && await context.TitleRequests.AnyAsync(item =>
@@ -836,8 +878,9 @@ public sealed class AdditionalCopyService(
             ToAddress = toAddress,
             FromAddress = fromAddress,
             FromName = fromName,
-            Subject = subject,
-            BodyText = body,
+            Subject = rendered?.Subject,
+            BodyText = rendered?.BodyText,
+            BodyHtml = rendered?.BodyHtml,
             Status = suppressionReason is null ? "pending" : "suppressed",
             SuppressionReason = suppressionReason,
             NextAttemptUtc = suppressionReason is null ? now : null,

@@ -76,6 +76,31 @@ const { JSDOM } = require('jsdom');
       'discard-branding-draft', 'clear-branding-logo', 'branding-status'
     ], 'The complete existing Branding editor remains together in one fieldset');
 
+    const templateAudiences = [...document.querySelectorAll('#settings-template-editor > .settings-template-audience')];
+    assert.deepStrictEqual(templateAudiences.map(section => section.querySelector('h3').textContent),
+      ['Patron email templates', 'Staff email templates']);
+    assert.deepStrictEqual(templateAudiences.map(section => section.querySelector('h3').id),
+      ['patron-email-templates-title', 'staff-email-templates-title']);
+    const patronTemplates = templateAudiences[0].querySelectorAll('fieldset.settings-template[data-template-audience="patron"]');
+    const staffTemplates = templateAudiences[1].querySelectorAll('fieldset.settings-template[data-template-audience="staff"]');
+    assert.strictEqual(patronTemplates.length, 5);
+    assert.strictEqual(staffTemplates.length, 5);
+    assert.strictEqual(templateAudiences[0].querySelectorAll('[data-template-audience="staff"]').length, 0);
+    assert.strictEqual(templateAudiences[1].querySelectorAll('[data-template-audience="patron"]').length, 0);
+    assert.match(templateAudiences[1].textContent, /diagnostic test email remains a fixed transport check/);
+    assert.match(templateAudiences[1].textContent,
+      /Patron name \(\{\{name\}\}\), first name \(\{\{firstName\}\}\), last name \(\{\{lastName\}\}\), and barcode \(\{\{barcode\}\}\) do not apply/);
+    assert.match(templateAudiences[1].textContent, /Use \{\{recipientName\}\} for the staff recipient/);
+    for (const editor of staffTemplates) {
+      const subject = editor.querySelector('[data-template-field="subject"]');
+      const body = editor.querySelector('[data-template-field="body"]');
+      assert.strictEqual(subject.tagName, 'INPUT');
+      assert.strictEqual(body.tagName, 'TEXTAREA');
+      assert.ok(subject.id && body.id, `${editor.dataset.templateKey} exposes stable subject/body controls`);
+      assert.strictEqual(subject.closest('label').querySelector('span').textContent, 'Subject');
+      assert.strictEqual(body.closest('label').querySelector('span').textContent, 'Body');
+    }
+
     const controls = scope => [...scope.querySelectorAll('input, select, textarea')].map(control => control.id);
     const fieldset = id => document.getElementById(id).closest('fieldset');
     const legend = id => fieldset(id).querySelector('legend').textContent;

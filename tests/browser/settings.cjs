@@ -877,8 +877,8 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     const patronKeys = ['name', 'title', 'author', 'format', 'barcode', 'firstName', 'lastName'];
     assert.deepEqual([...initial.templatePlaceholders].sort(), [...patronKeys].sort(),
       'The UI catalog must remain aligned with the actual patron renderer capability contract.');
-    assert.equal(await page.locator('[data-template-toggle][aria-expanded="false"]').count(), 7,
-      'The five built-in and two existing Additional cards start collapsed.');
+    assert.equal(await page.locator('#settings-template-editor section[aria-labelledby="patron-email-templates-title"] [data-template-toggle][aria-expanded="false"]').count(), 7,
+      'The five Patron built-in and two existing Additional cards start collapsed.');
     await openPicker(page.locator('#email-submit-subject'));
     assert.deepEqual(await tokenKeys(), patronKeys);
     for (const key of ['rejection:template_1', 'rejection:template_3']) {
@@ -1121,7 +1121,8 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
   await reload(library); await page.locator('#settings-nav-templates').click();
   const beforeCustomSave = await read(library);
   const builtinBeforeCustomSave = await page.locator('#settings-template-editor').evaluate(container =>
-    [...container.querySelectorAll('[data-template-field]')].map(input => ({ id: input.id, value: input.value, disabled: input.disabled })));
+    [...container.querySelectorAll('.settings-template[data-template-audience] [data-template-field]')]
+      .map(input => ({ id: input.id, value: input.value, disabled: input.disabled })));
   const customBodies = new Map();
   for (const key of ['purchase_approved', 'suggestion_submitted', 'rejected']) {
     const custom = await row(key);
@@ -1175,7 +1176,8 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
       'Custom template saves preserve every preexisting raw row, sparse field and rowversion.');
   }
   assert.deepEqual(await page.locator('#settings-template-editor').evaluate(container =>
-    [...container.querySelectorAll('[data-template-field]')].map(input => ({ id: input.id, value: input.value, disabled: input.disabled }))),
+    [...container.querySelectorAll('.settings-template[data-template-audience] [data-template-field]')]
+      .map(input => ({ id: input.id, value: input.value, disabled: input.disabled }))),
     builtinBeforeCustomSave, 'Custom built-in-looking keys stay independent of the actual built-in editors.');
   for (const [key, body] of customBodies) {
     const stored = customSaved.stored.templates.find(item => item.templateKey === key && item.organizationId === library && item.isCustom);

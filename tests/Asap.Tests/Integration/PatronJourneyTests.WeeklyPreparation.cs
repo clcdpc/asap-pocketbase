@@ -1,4 +1,5 @@
 using Asap.Web.Features.Staff;
+using Asap.Web.Features.Email;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Jobs;
 using Microsoft.EntityFrameworkCore;
@@ -21,10 +22,17 @@ public sealed partial class PatronJourneyTests
         var staffB = await CreateCorrectiveStaffAsync(administrator, StaffRole.Staff, libraryB);
         var superAdmin = await CreateCorrectiveStaffAsync(administrator, StaffRole.SuperAdmin, 1);
         var staffIds = new[] { staffA.Id, secondA.Id, staffB.Id, superAdmin.Id };
-        var originalFlags = new Dictionary<long, bool>();
+        var originalRecipientSettings = new Dictionary<long, (bool Enabled, string? NotificationEmail, string? WeeklyEmail)>();
         var titles = new List<TitleRequest>();
         var copies = new List<AdditionalCopyRequest>();
         string? originalUrl = null;
+        string? originalSystemSubject = null;
+        string? originalSystemBody = null;
+        EmailTemplate? weeklyOverride = null;
+        long weeklySystemTemplateId = 0;
+        var hadWeeklyOverride = false;
+        var originalOverrideSubject = (string?)null;
+        var originalOverrideBody = (string?)null;
         var selectedRun = Guid.NewGuid();
         var allRun = Guid.NewGuid();
         try
@@ -34,9 +42,38 @@ public sealed partial class PatronJourneyTests
                 var system = await seed.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
                 originalUrl = system.StaffApplicationUrl;
                 system.StaffApplicationUrl = "https://staff.example.org/staff/";
+                var weeklySystemTemplate = await seed.EmailTemplates.SingleAsync(item =>
+                    item.OrganizationId == LibraryScope.SystemOrganizationId &&
+                    item.TemplateKey == StaffEmailTemplateCatalog.WeeklySummary);
+                weeklySystemTemplateId = weeklySystemTemplate.Id;
+                originalSystemSubject = weeklySystemTemplate.SubjectTemplate;
+                originalSystemBody = weeklySystemTemplate.BodyTemplate;
+                weeklySystemTemplate.SubjectTemplate = "System weekly: {{submissionCount}}";
+                weeklyOverride = await seed.EmailTemplates.SingleOrDefaultAsync(item =>
+                    item.OrganizationId == libraryA && item.SourceTemplateId == weeklySystemTemplate.Id);
+                if (weeklyOverride is not null)
+                {
+                    hadWeeklyOverride = true;
+                    originalOverrideSubject = weeklyOverride.SubjectTemplate;
+                    originalOverrideBody = weeklyOverride.BodyTemplate;
+                }
+                else
+                {
+                    weeklyOverride = new EmailTemplate
+                    {
+                        OrganizationId = libraryA,
+                        TemplateKey = StaffEmailTemplateCatalog.WeeklySummary,
+                        SourceTemplateId = weeklySystemTemplate.Id,
+                        IsCustom = false,
+                        IsHidden = false
+                    };
+                    seed.EmailTemplates.Add(weeklyOverride);
+                }
+                weeklyOverride.SubjectTemplate = "Library A weekly: {{submissionCount}}";
                 foreach (var staff in await seed.StaffUsers.Where(item => item.WeeklyActionSummaryEnabled || staffIds.Contains(item.Id)).ToArrayAsync())
                 {
-                    originalFlags.Add(staff.Id, staff.WeeklyActionSummaryEnabled);
+                    originalRecipientSettings.Add(staff.Id,
+                        (staff.WeeklyActionSummaryEnabled, staff.NotificationEmail, staff.WeeklyActionSummaryEmail));
                     staff.WeeklyActionSummaryEnabled = staffIds.Contains(staff.Id);
                     if (staff.WeeklyActionSummaryEnabled)
                     {
@@ -120,13 +157,26 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(firstA.Subject, otherA.Subject);
                 Assert.AreEqual(firstA.BodyText, otherA.BodyText, "Recipients sharing a data scope render the same prepared report.");
                 Assert.AreNotEqual(firstA.ToAddress, otherA.ToAddress, "Addresses remain recipient-specific.");
-                Assert.AreEqual($"Weekly ASAP action summary: 7 new, 7 awaiting bibs, 7 additional copies", firstA.Subject);
-                AssertWeeklyPreparationSection(firstA.BodyText!, "New submissions", "7 active requests", Enumerable.Range(2, 5).Reverse()
-                    .Select(index => $"New {libraryA}-{index}" + (index == 6 ? "" : $" - Author {index}")));
-                AssertWeeklyPreparationSection(firstA.BodyText!, "Approved purchases without bibs", "7 active requests", Enumerable.Range(2, 5).Reverse()
-                    .Select(index => $"Purchase {libraryA}-{index} - Purchase author {index}"));
-                AssertWeeklyPreparationSection(firstA.BodyText!, "Additional copies", "7 open tasks", Enumerable.Range(2, 5).Reverse()
-                    .Select(index => $"Copy {libraryA}-{index} - " + (index == 6 ? "9206" : $"Copy author {index}")));
+                Assert.AreEqual("Library A weekly: 7", firstA.Subject,
+                    "Library-scoped data uses the library override even when the recipient has system authorization.");
+                var librarySubmissions = titles.Where(item => item.LibraryOrganizationId == libraryA && item.Status == "suggestion")
+                    .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).Take(5)
+                    .Select(item => new WeeklyPreparationExample(item.Title, item.Author, item.Id.ToString(),
+                        item.LibraryOrganizationId, item.Status)).ToArray();
+                var libraryPurchases = titles.Where(item => item.LibraryOrganizationId == libraryA && item.Status == "outstanding_purchase")
+                    .Where(item => item.BibId is null)
+                    .OrderByDescending(item => item.UpdatedUtc).ThenByDescending(item => item.Id).Take(5)
+                    .Select(item => new WeeklyPreparationExample(item.Title, item.Author, item.Id.ToString(),
+                        item.LibraryOrganizationId, item.Status)).ToArray();
+                var libraryCopies = copies.Where(item => item.LibraryOrganizationId == libraryA && item.Status == "open")
+                    .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).Take(5)
+                    .Select(item => new WeeklyPreparationExample(item.Title, item.Author, item.Id.ToString(),
+                        item.LibraryOrganizationId, "additional_copies", item.BibId.ToString())).ToArray();
+                AssertWeeklyPreparationSection(firstA.BodyText!, "New submissions", "7 active requests", librarySubmissions);
+                AssertWeeklyPreparationSection(firstA.BodyText!, "Approved purchases without bibs", "7 active requests", libraryPurchases);
+                AssertWeeklyPreparationSection(firstA.BodyText!, "Additional copies", "7 open tasks", libraryCopies);
+                StringAssert.Contains(firstA.BodyHtml!, "&lt;New 99442-6&gt;");
+                Assert.IsFalse(firstA.BodyHtml!.Contains("<New 99442-6>", StringComparison.Ordinal));
                 Assert.IsFalse(firstA.BodyText!.Contains($"{libraryB}-", StringComparison.Ordinal));
                 Assert.IsFalse(firstA.BodyText.Contains("Excluded", StringComparison.Ordinal));
                 var global = rows.Single(row => row.RecipientStaffUserId == superAdmin.Id);
@@ -153,21 +203,53 @@ public sealed partial class PatronJourneyTests
                     var allCopies = await verify.AdditionalCopyRequests.AsNoTracking().Where(item => active.Contains(item.LibraryOrganizationId) && item.Status == "open").ToArrayAsync();
                     var newTitles = allTitles.Where(item => item.Status == "suggestion").ToArray();
                     var purchases = allTitles.Where(item => item.Status == "outstanding_purchase").ToArray();
-                    Assert.AreEqual($"Weekly ASAP action summary: {newTitles.Length} new, {purchases.Length} awaiting bibs, {allCopies.Length} additional copies", global.Subject);
-                    static string Sample(string title, string? author) => title.Replace("<", "").Replace(">", "").Trim() +
-                        (string.IsNullOrWhiteSpace(author) ? "" : " - " + author.Replace("<", "").Replace(">", "").Trim());
-                    AssertWeeklyPreparationSection(global.BodyText!, "New submissions", $"{newTitles.Length} active requests", newTitles
-                        .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).Take(5).Select(item => Sample(item.Title, item.Author)));
-                    AssertWeeklyPreparationSection(global.BodyText!, "Approved purchases without bibs", $"{purchases.Length} active requests", purchases
-                        .OrderByDescending(item => item.UpdatedUtc).ThenByDescending(item => item.Id).Take(5).Select(item => Sample(item.Title, item.Author)));
-                    AssertWeeklyPreparationSection(global.BodyText!, "Additional copies", $"{allCopies.Length} open tasks", allCopies
-                        .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).Take(5)
-                        .Select(item => Sample(item.Title, item.Author ?? item.BibId.ToString(System.Globalization.CultureInfo.InvariantCulture))));
-                    StringAssert.Contains(rows.Single(row => row.RecipientStaffUserId == staffB.Id).BodyText!, $"New {libraryB}-6");
+                    Assert.AreEqual($"System weekly: {newTitles.Length}", global.Subject,
+                        "An all-library summary uses the system template for its system-authorized recipient.");
+                    var systemSubmissions = newTitles.OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).Take(5)
+                        .Select(item => new WeeklyPreparationExample(item.Title, item.Author, item.Id.ToString(),
+                            item.LibraryOrganizationId, item.Status)).ToArray();
+                    var systemPurchases = purchases.OrderByDescending(item => item.UpdatedUtc).ThenByDescending(item => item.Id).Take(5)
+                        .Select(item => new WeeklyPreparationExample(item.Title, item.Author, item.Id.ToString(),
+                            item.LibraryOrganizationId, item.Status)).ToArray();
+                    var systemCopies = allCopies.OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).Take(5)
+                        .Select(item => new WeeklyPreparationExample(item.Title, item.Author, item.Id.ToString(),
+                            item.LibraryOrganizationId, "additional_copies", item.BibId.ToString())).ToArray();
+                    AssertWeeklyPreparationSection(global.BodyText!, "New submissions", $"{newTitles.Length} active requests", systemSubmissions);
+                    AssertWeeklyPreparationSection(global.BodyText!, "Approved purchases without bibs", $"{purchases.Length} active requests", systemPurchases);
+                    AssertWeeklyPreparationSection(global.BodyText!, "Additional copies", $"{allCopies.Length} open tasks", systemCopies);
+                    var libraryBStaff = rows.Single(row => row.RecipientStaffUserId == staffB.Id);
+                    Assert.AreEqual("System weekly: 7", libraryBStaff.Subject,
+                        "A library without an override inherits the current system template.");
+                    StringAssert.Contains(libraryBStaff.BodyText!, $"New {libraryB}-6");
                 }
+                var queueScope = scope.HasValue ? libraryA.ToString() : "system";
                 foreach (var stage in new[] { "submitted", "purchased_waiting_for_bib", "additional_copies" })
                 {
-                    StringAssert.Contains(global.BodyText!, $"https://staff.example.org/staff/?stage={stage}");
+                    StringAssert.Contains(global.BodyText!,
+                        $"https://staff.example.org/staff/?stage={stage}&scope={queueScope}");
+                }
+            }
+
+            Dictionary<string, (string? Subject, string? BodyText, string? BodyHtml)> queuedSnapshots;
+            await using (var beforeEdit = await contexts.CreateDbContextAsync())
+            {
+                queuedSnapshots = await beforeEdit.EmailOutbox.AsNoTracking()
+                    .Where(item => item.BusinessKey!.StartsWith($"weekly-summary-force:{selectedRun:N}:") ||
+                                   item.BusinessKey!.StartsWith($"weekly-summary-force:{allRun:N}:"))
+                    .ToDictionaryAsync(item => item.BusinessKey!, item => (item.Subject, item.BodyText, item.BodyHtml));
+                var template = await beforeEdit.EmailTemplates.SingleAsync(item => item.Id == weeklySystemTemplateId);
+                template.BodyTemplate = originalSystemBody + "\nChanged after these summaries were queued.";
+                await beforeEdit.SaveChangesAsync();
+            }
+            await using (var afterEdit = await contexts.CreateDbContextAsync())
+            {
+                foreach (var (key, snapshot) in queuedSnapshots)
+                {
+                    var stored = await afterEdit.EmailOutbox.AsNoTracking().SingleAsync(item => item.BusinessKey == key);
+                    Assert.AreEqual(snapshot.Subject, stored.Subject);
+                    Assert.AreEqual(snapshot.BodyText, stored.BodyText);
+                    Assert.AreEqual(snapshot.BodyHtml, stored.BodyHtml);
+                    Assert.IsFalse(stored.BodyText!.Contains("Changed after these summaries were queued.", StringComparison.Ordinal));
                 }
             }
         }
@@ -176,14 +258,37 @@ public sealed partial class PatronJourneyTests
             await ExecuteNonQueryAsync("DELETE FROM [asap].[EmailOutbox] WHERE [BusinessKey] LIKE @selected OR [BusinessKey] LIKE @all;",
                 ("@selected", $"weekly-summary-force:{selectedRun:N}:%"), ("@all", $"weekly-summary-force:{allRun:N}:%"));
             await using var restore = await contexts.CreateDbContextAsync();
+            if (weeklySystemTemplateId > 0)
+            {
+                var weeklySystemTemplate = await restore.EmailTemplates.SingleAsync(item => item.Id == weeklySystemTemplateId);
+                weeklySystemTemplate.SubjectTemplate = originalSystemSubject;
+                weeklySystemTemplate.BodyTemplate = originalSystemBody;
+                var currentWeeklyOverride = await restore.EmailTemplates.SingleOrDefaultAsync(item =>
+                    item.OrganizationId == libraryA && item.SourceTemplateId == weeklySystemTemplateId);
+                if (!hadWeeklyOverride)
+                {
+                    if (currentWeeklyOverride is not null)
+                    {
+                        restore.EmailTemplates.Remove(currentWeeklyOverride);
+                    }
+                }
+                else if (currentWeeklyOverride is not null)
+                {
+                    currentWeeklyOverride.SubjectTemplate = originalOverrideSubject;
+                    currentWeeklyOverride.BodyTemplate = originalOverrideBody;
+                }
+            }
             var copyIds = copies.Select(item => item.Id).ToArray();
             var titleIds = titles.Select(item => item.Id).ToArray();
             await restore.AdditionalCopyRequests.Where(item => copyIds.Contains(item.Id)).ExecuteDeleteAsync();
             await restore.TitleRequests.Where(item => titleIds.Contains(item.Id)).ExecuteDeleteAsync();
             (await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1)).StaffApplicationUrl = originalUrl;
-            foreach (var (id, flag) in originalFlags)
+            foreach (var (id, original) in originalRecipientSettings)
             {
-                (await restore.StaffUsers.SingleAsync(item => item.Id == id)).WeeklyActionSummaryEnabled = flag;
+                var staff = await restore.StaffUsers.SingleAsync(item => item.Id == id);
+                staff.WeeklyActionSummaryEnabled = original.Enabled;
+                staff.NotificationEmail = original.NotificationEmail;
+                staff.WeeklyActionSummaryEmail = original.WeeklyEmail;
             }
             await restore.SaveChangesAsync();
             foreach (var id in staffIds)
@@ -193,9 +298,29 @@ public sealed partial class PatronJourneyTests
         }
     }
 
-    private static void AssertWeeklyPreparationSection(string body, string heading, string count, IEnumerable<string> examples)
+    private sealed record WeeklyPreparationExample(
+        string Title,
+        string? Author,
+        string Id,
+        int LibraryOrganizationId,
+        string Stage,
+        string? BibId = null);
+
+    private static void AssertWeeklyPreparationSection(
+        string body,
+        string heading,
+        string count,
+        IEnumerable<WeeklyPreparationExample> examples)
     {
-        var expected = $"{heading}\n{count}\nFive most recent:\n" + string.Join("\n", examples.Select((line, index) => $"{index + 1}. {line}"));
+        var expectedLines = examples.Select((item, index) =>
+        {
+            var author = string.IsNullOrWhiteSpace(item.Author) ? item.BibId : item.Author;
+            var detail = $"{index + 1}. {item.Title}{(string.IsNullOrWhiteSpace(author) ? string.Empty : $" — {author}")}";
+            var kind = item.Stage == "additional_copies" ? "task" : "request";
+            var url = $"https://staff.example.org/staff/?request={item.Id}&stage={item.Stage}&scope={item.LibraryOrganizationId}";
+            return $"{detail}\nView {kind}: {url}";
+        });
+        var expected = $"{heading}\n{count}\nFive most recent:\n" + string.Join("\n", expectedLines);
         StringAssert.Contains(body, expected);
         var section = body[(body.IndexOf(heading, StringComparison.Ordinal) + heading.Length)..].Split("\n\n", 2)[0];
         Assert.AreEqual(5, section.Split('\n').Count(line => line.Length > 2 && char.IsDigit(line[0]) && line[1] == '.'));

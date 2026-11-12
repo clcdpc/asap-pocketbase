@@ -117,7 +117,7 @@ public sealed partial class PatronJourneyTests
 
     [TestMethod]
     [TestCategory(TestCategories.Browser)]
-    public async Task EmailDefaultsBrowserDisplaysFiveSeedsAndPreservesSavedTextAndSparseInheritance()
+    public async Task EmailDefaultsBrowserDisplaysPatronAndStaffSeedsAndPreservesInheritance()
     {
         const int library = 99081;
         factory!.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
@@ -128,6 +128,12 @@ public sealed partial class PatronJourneyTests
         var initialTemplates = await initialContext.EmailTemplates.AsNoTracking()
             .Where(item => item.OrganizationId == 1).ToListAsync();
         foreach (var expected in BuiltInEmailTemplateExpectations.All)
+        {
+            var row = initialTemplates.Single(item => item.TemplateKey == expected.Key);
+            Assert.AreEqual(expected.Subject, row.SubjectTemplate, expected.Key);
+            Assert.AreEqual(expected.Body, row.BodyTemplate, expected.Key);
+        }
+        foreach (var expected in BuiltInEmailTemplateExpectations.Staff)
         {
             var row = initialTemplates.Single(item => item.TemplateKey == expected.Key);
             Assert.AreEqual(expected.Subject, row.SubjectTemplate, expected.Key);
@@ -145,7 +151,11 @@ public sealed partial class PatronJourneyTests
             var artifacts = Path.Combine(root, ".artifacts", "browser", $"email-defaults-{Guid.NewGuid():N}");
             Directory.CreateDirectory(artifacts);
             await File.WriteAllTextAsync(Path.Combine(artifacts, "expected.json"),
-                JsonSerializer.Serialize(BuiltInEmailTemplateExpectations.All,
+                JsonSerializer.Serialize(new
+                {
+                    patron = BuiltInEmailTemplateExpectations.All,
+                    staff = BuiltInEmailTemplateExpectations.Staff
+                },
                     new JsonSerializerOptions(JsonSerializerDefaults.Web)));
             var (exitCode, stdout, stderr) = await RunBrowserScriptAsync(root, "email-defaults.cjs",
                 client.BaseAddress!.GetLeftPart(UriPartial.Authority), artifacts,
@@ -164,13 +174,31 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(expected.Subject + " {{barcode}}" +
                     (expected.Key == "suggestion_submitted" ? " updated" : ""), row.SubjectTemplate);
             }
-            var libraryRow = await verify.EmailTemplates.AsNoTracking().SingleAsync(item => item.OrganizationId == library);
+            foreach (var expected in BuiltInEmailTemplateExpectations.Staff)
+            {
+                var row = savedSystem.Single(item => item.TemplateKey == expected.Key);
+                var original = initialTemplates.Single(item => item.TemplateKey == expected.Key);
+                Assert.AreEqual(original.Id, row.Id);
+                Assert.AreEqual(expected.Key == StaffEmailTemplateCatalog.TitleAssignment
+                    ? expected.Subject + " — System" : expected.Subject, row.SubjectTemplate);
+                Assert.AreEqual(expected.Key == StaffEmailTemplateCatalog.TitleAssignment
+                    ? expected.Body + "\nSystem body update after library pin" : expected.Body, row.BodyTemplate);
+            }
+            var libraryRow = await verify.EmailTemplates.AsNoTracking().SingleAsync(item => item.OrganizationId == library &&
+                item.TemplateKey == "suggestion_submitted");
             Assert.AreEqual("suggestion_submitted", libraryRow.TemplateKey);
             Assert.AreEqual(initialTemplates.Single(item => item.TemplateKey == "suggestion_submitted").Id,
                 libraryRow.SourceTemplateId);
             Assert.IsNull(libraryRow.SubjectTemplate, "A body-only edit must preserve sparse subject inheritance.");
             Assert.AreEqual("Library receipt {{title}} for {{name}}", libraryRow.BodyTemplate);
             Assert.IsFalse(libraryRow.IsCustom);
+            var staffLibraryRow = await verify.EmailTemplates.AsNoTracking().SingleAsync(item => item.OrganizationId == library &&
+                item.TemplateKey == StaffEmailTemplateCatalog.TitleAssignment);
+            Assert.AreEqual("Library staff subject for {{recipientName}}", staffLibraryRow.SubjectTemplate);
+            Assert.IsNull(staffLibraryRow.BodyTemplate);
+            Assert.AreEqual(initialTemplates.Single(item => item.TemplateKey == StaffEmailTemplateCatalog.TitleAssignment).Id,
+                staffLibraryRow.SourceTemplateId);
+            Assert.IsFalse(staffLibraryRow.IsCustom);
         }
         finally
         {

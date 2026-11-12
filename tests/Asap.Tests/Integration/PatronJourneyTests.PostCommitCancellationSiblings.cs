@@ -1079,12 +1079,14 @@ public sealed partial class PatronJourneyTests
             .CreateDbContextAsync();
         var system = await context.EmailSettings.SingleAsync(item => item.OrganizationId == 1);
         var library = await context.EmailSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
+        var systemSettings = await context.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
         var snapshot = new EmailSettingsSnapshot(
             system.FromAddress,
             system.FromName,
             library is not null,
             library?.FromAddress,
-            library?.FromName);
+            library?.FromName,
+            systemSettings.StaffApplicationUrl);
         library ??= new EmailSettings { OrganizationId = 2 };
         if (!snapshot.LibraryExisted)
         {
@@ -1092,6 +1094,7 @@ public sealed partial class PatronJourneyTests
         }
         system.FromAddress = "system.sender@example.org";
         system.FromName = "System Sender";
+        systemSettings.StaffApplicationUrl = "https://trusted.example.org/staff/";
         library.FromAddress = null;
         library.FromName = null;
         await context.SaveChangesAsync();
@@ -1103,8 +1106,10 @@ public sealed partial class PatronJourneyTests
         await using var context = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
             .CreateDbContextAsync();
         var system = await context.EmailSettings.SingleAsync(item => item.OrganizationId == 1);
+        var systemSettings = await context.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
         system.FromAddress = snapshot.SystemFromAddress;
         system.FromName = snapshot.SystemFromName;
+        systemSettings.StaffApplicationUrl = snapshot.StaffApplicationUrl;
         var library = await context.EmailSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
         if (snapshot.LibraryExisted)
         {
@@ -1130,7 +1135,8 @@ public sealed partial class PatronJourneyTests
         string? SystemFromName,
         bool LibraryExisted,
         string? LibraryFromAddress,
-        string? LibraryFromName);
+        string? LibraryFromName,
+        string? StaffApplicationUrl);
 
     private sealed class CancelAfterIdentifierRetryDispatcher(string dispatchMode) : IIdentifierLookupDispatcher
     {

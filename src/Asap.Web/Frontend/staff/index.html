@@ -748,7 +748,7 @@
             <section id="settings-templates" class="settings-panel" role="tabpanel" tabindex="-1" data-settings-panel-content="templates" aria-labelledby="settings-nav-templates" hidden>
               <div class="settings-panel-heading">
                 <h2>Email templates</h2>
-                <p>Customize the email messages your library sends to patrons.</p>
+                <p>Customize the email messages sent to patrons and staff. Staff templates use system defaults with optional library overrides.</p>
               </div>
               <fieldset class="settings-fieldset">
                 <legend>Sender details</legend>
@@ -757,36 +757,74 @@
                   <label class="settings-field" data-setting-section="email" data-setting-key="fromName"><span>From name</span><input id="email-template-from-name" type="text"></label>
                 </div>
               </fieldset>
-              <div id="settings-template-editor" class="settings-template-list">
-                <fieldset class="settings-fieldset settings-template" data-template-key="suggestion_submitted" data-template-prefix="submit">
+              <div id="settings-template-editor" class="settings-template-audiences">
+                <section class="settings-template-audience" aria-labelledby="patron-email-templates-title">
+                  <h3 id="patron-email-templates-title">Patron email templates</h3>
+                  <p>Messages sent to patrons about their suggestions, decisions, and request outcomes.</p>
+                  <div class="settings-template-list">
+                  <fieldset class="settings-fieldset settings-template" data-template-key="suggestion_submitted" data-template-prefix="submit" data-template-audience="patron">
                   <legend>Submission confirmation</legend>
                   <label class="settings-field"><span>Subject</span><input id="email-submit-subject" type="text" data-template-field="subject"></label>
                   <label class="settings-field wide"><span>Body</span><textarea id="email-submit-body" rows="7" data-template-field="body"></textarea></label>
                 </fieldset>
-                <fieldset class="settings-fieldset settings-template" data-template-key="purchase_approved" data-template-prefix="purchase-approved">
+                  <fieldset class="settings-fieldset settings-template" data-template-key="purchase_approved" data-template-prefix="purchase-approved" data-template-audience="patron">
                   <legend>Purchase approved</legend>
                   <label class="settings-field"><span>Subject</span><input id="email-purchase-approved-subject" type="text" data-template-field="subject"></label>
                   <label class="settings-field wide"><span>Body</span><textarea id="email-purchase-approved-body" rows="7" data-template-field="body"></textarea></label>
                 </fieldset>
-                <fieldset class="settings-fieldset settings-template" data-template-key="already_owned" data-template-prefix="owned">
+                  <fieldset class="settings-fieldset settings-template" data-template-key="already_owned" data-template-prefix="owned" data-template-audience="patron">
                   <legend>Already owned</legend>
                   <label class="settings-field"><span>Subject</span><input id="email-owned-subject" type="text" data-template-field="subject"></label>
                   <label class="settings-field wide"><span>Body</span><textarea id="email-owned-body" rows="7" data-template-field="body"></textarea></label>
                 </fieldset>
-                <fieldset class="settings-fieldset settings-template" data-template-key="hold_placed" data-template-prefix="hold">
+                  <fieldset class="settings-fieldset settings-template" data-template-key="hold_placed" data-template-prefix="hold" data-template-audience="patron">
                   <legend>Hold placed</legend>
                   <label class="settings-field"><span>Subject</span><input id="email-hold-subject" type="text" data-template-field="subject"></label>
                   <label class="settings-field wide"><span>Body</span><textarea id="email-hold-body" rows="7" data-template-field="body"></textarea></label>
                 </fieldset>
-                <fieldset class="settings-fieldset settings-template" data-template-key="rejected" data-template-prefix="rejected">
+                  <fieldset class="settings-fieldset settings-template" data-template-key="rejected" data-template-prefix="rejected" data-template-audience="patron">
                   <legend>Rejected</legend>
                   <label class="settings-field"><span>Subject</span><input id="email-rejected-subject" type="text" data-template-field="subject"></label>
                   <label class="settings-field wide"><span>Body</span><textarea id="email-rejected-body" rows="7" data-template-field="body"></textarea></label>
                 </fieldset>
-              </div>
-              <div class="settings-domain-block">
-                <div class="settings-domain-heading"><strong>Additional templates</strong><button id="add-email-template" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add template</button></div>
-                <div id="email-templates-editor" class="settings-row-editor" aria-live="polite"></div>
+                  </div>
+                  <div class="settings-domain-block">
+                    <div class="settings-domain-heading"><strong>Additional patron templates</strong><button id="add-email-template" class="secondary-button" type="button"><i class="fa fa-plus" aria-hidden="true"></i> Add template</button></div>
+                    <div id="email-templates-editor" class="settings-row-editor" aria-live="polite"></div>
+                  </div>
+                </section>
+                <section class="settings-template-audience" aria-labelledby="staff-email-templates-title">
+                  <h3 id="staff-email-templates-title">Staff email templates</h3>
+                  <p>Business notifications for assignments, purchase reminders, additional-copy tasks, and weekly summaries. The diagnostic test email remains a fixed transport check.</p>
+                  <p>Patron name ({{name}}), first name ({{firstName}}), last name ({{lastName}}), and barcode ({{barcode}}) do not apply to staff templates. Use {{recipientName}} for the staff recipient.</p>
+                  <div class="settings-template-list">
+                    <fieldset class="settings-fieldset settings-template" data-template-key="staff_title_assignment" data-template-prefix="staff-title-assignment" data-template-audience="staff">
+                      <legend>Title request assigned</legend>
+                      <label class="settings-field"><span>Subject</span><input id="email-staff-title-assignment-subject" type="text" data-template-field="subject"></label>
+                      <label class="settings-field wide"><span>Body</span><textarea id="email-staff-title-assignment-body" rows="7" data-template-field="body"></textarea></label>
+                    </fieldset>
+                    <fieldset class="settings-fieldset settings-template" data-template-key="staff_purchase_reminder" data-template-prefix="staff-purchase-reminder" data-template-audience="staff">
+                      <legend>Purchase reminder</legend>
+                      <label class="settings-field"><span>Subject</span><input id="email-staff-purchase-reminder-subject" type="text" data-template-field="subject"></label>
+                      <label class="settings-field wide"><span>Body</span><textarea id="email-staff-purchase-reminder-body" rows="7" data-template-field="body"></textarea></label>
+                    </fieldset>
+                    <fieldset class="settings-fieldset settings-template" data-template-key="staff_additional_copy_reminder" data-template-prefix="staff-additional-copy-reminder" data-template-audience="staff">
+                      <legend>Additional-copy reminder</legend>
+                      <label class="settings-field"><span>Subject</span><input id="email-staff-additional-copy-reminder-subject" type="text" data-template-field="subject"></label>
+                      <label class="settings-field wide"><span>Body</span><textarea id="email-staff-additional-copy-reminder-body" rows="7" data-template-field="body"></textarea></label>
+                    </fieldset>
+                    <fieldset class="settings-fieldset settings-template" data-template-key="staff_additional_copy_assignment" data-template-prefix="staff-additional-copy-assignment" data-template-audience="staff">
+                      <legend>Additional-copy task assigned</legend>
+                      <label class="settings-field"><span>Subject</span><input id="email-staff-additional-copy-assignment-subject" type="text" data-template-field="subject"></label>
+                      <label class="settings-field wide"><span>Body</span><textarea id="email-staff-additional-copy-assignment-body" rows="7" data-template-field="body"></textarea></label>
+                    </fieldset>
+                    <fieldset class="settings-fieldset settings-template" data-template-key="staff_weekly_summary" data-template-prefix="staff-weekly-summary" data-template-audience="staff">
+                      <legend>Weekly action summary</legend>
+                      <label class="settings-field"><span>Subject</span><input id="email-staff-weekly-summary-subject" type="text" data-template-field="subject"></label>
+                      <label class="settings-field wide"><span>Body</span><textarea id="email-staff-weekly-summary-body" rows="12" data-template-field="body"></textarea></label>
+                    </fieldset>
+                  </div>
+                </section>
               </div>
             </section>
 

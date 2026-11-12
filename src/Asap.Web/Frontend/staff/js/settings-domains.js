@@ -168,7 +168,12 @@ const BUILTIN_TEMPLATE_KEYS = new Set([
   'purchase_approved',
   'already_owned',
   'hold_placed',
-  'rejected'
+  'rejected',
+  'staff_title_assignment',
+  'staff_purchase_reminder',
+  'staff_additional_copy_reminder',
+  'staff_additional_copy_assignment',
+  'staff_weekly_summary'
 ]);
 
 function normalizeTemplate(value, index) {

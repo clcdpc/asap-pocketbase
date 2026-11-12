@@ -245,3 +245,81 @@ BEGIN
          N'Thank you for helping us build a collection that reflects our community.',
          0, 0, 50);
 END;
+
+-- Staff notification defaults are system-owned templates with optional library
+-- lineage rows. Keep these inserts missing-row-only so deployments preserve
+-- configured content, explicit blanks, hidden state and rowversions.
+IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_title_assignment')
+BEGIN
+    INSERT INTO [asap].[EmailTemplate]
+        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+    VALUES
+        (1, N'staff_title_assignment', N'Title request assigned',
+         N'ASAP request assigned',
+         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
+         N'{{title}} has been assigned to you.' + NCHAR(10) + NCHAR(10) +
+         N'Assigned by: {{actorName}}' + NCHAR(10) + N'Assignee: {{assigneeName}}' + NCHAR(10) + N'Library: {{libraryName}}' + NCHAR(10) + N'Title request: {{requestId}}' + NCHAR(10) + NCHAR(10) +
+         N'Title: {{title}}' + NCHAR(10) + N'Author/creator: {{author}}' + NCHAR(10) + N'Format: {{format}}' + NCHAR(10) + NCHAR(10) + N'View request: {{requestUrl}}',
+         0, 0, 60);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_purchase_reminder')
+BEGIN
+    INSERT INTO [asap].[EmailTemplate]
+        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+    VALUES
+        (1, N'staff_purchase_reminder', N'Purchase reminder',
+         N'ASAP purchase reminder',
+         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
+         N'Purchase requested for {{title}}.' + NCHAR(10) + NCHAR(10) +
+         N'Requested by: {{actorName}}' + NCHAR(10) + N'Library: {{libraryName}}' + NCHAR(10) + N'Title request: {{requestId}}' + NCHAR(10) + NCHAR(10) +
+         N'Title: {{title}}' + NCHAR(10) + N'Author/creator: {{author}}' + NCHAR(10) + N'Format: {{format}}' + NCHAR(10) + N'BIB: {{bibId}}' + NCHAR(10) + NCHAR(10) + N'View request: {{requestUrl}}',
+         0, 0, 70);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_additional_copy_reminder')
+BEGIN
+    INSERT INTO [asap].[EmailTemplate]
+        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+    VALUES
+        (1, N'staff_additional_copy_reminder', N'Additional-copy reminder',
+         N'ASAP additional-copy reminder',
+         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
+         N'Additional-copy task {{taskId}} for {{title}} (BIB {{bibId}}) was created.' + NCHAR(10) + NCHAR(10) +
+         N'Created by: {{actorName}}' + NCHAR(10) + N'Library: {{libraryName}}' + NCHAR(10) + N'Title request: {{requestId}}' + NCHAR(10) + NCHAR(10) +
+         N'Title: {{title}}' + NCHAR(10) + N'Author/creator: {{author}}' + NCHAR(10) + N'Format: {{format}}' + NCHAR(10) + NCHAR(10) + N'View task: {{requestUrl}}',
+         0, 0, 80);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_additional_copy_assignment')
+BEGIN
+    INSERT INTO [asap].[EmailTemplate]
+        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+    VALUES
+        (1, N'staff_additional_copy_assignment', N'Additional-copy task assigned',
+         N'ASAP additional-copy task assigned',
+         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
+         N'Additional-copy task {{taskId}} for {{title}} has been assigned to you.' + NCHAR(10) + NCHAR(10) +
+         N'Assigned by: {{actorName}}' + NCHAR(10) + N'Assignee: {{assigneeName}}' + NCHAR(10) + N'Library: {{libraryName}}' + NCHAR(10) + N'Title request: {{requestId}}' + NCHAR(10) + NCHAR(10) +
+         N'Title: {{title}}' + NCHAR(10) + N'Author/creator: {{author}}' + NCHAR(10) + N'Format: {{format}}' + NCHAR(10) + N'BIB: {{bibId}}' + NCHAR(10) + NCHAR(10) + N'View task: {{requestUrl}}',
+         0, 0, 90);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_weekly_summary')
+BEGIN
+    INSERT INTO [asap].[EmailTemplate]
+        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+    VALUES
+        (1, N'staff_weekly_summary', N'Weekly action summary',
+         N'Weekly ASAP action summary: {{submissionCount}} new, {{purchaseCount}} awaiting bibs, {{additionalCopyCount}} additional copies',
+         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
+         N'Weekly ASAP action summary for {{libraryName}}.' + NCHAR(10) +
+         N'Business period: {{periodStart}} through {{periodEnd}}' + NCHAR(10) + NCHAR(10) +
+         N'New submissions' + NCHAR(10) + N'{{submissionCount}} active requests' + NCHAR(10) + N'Five most recent:' + NCHAR(10) + N'{{submissionItems}}' + NCHAR(10) +
+         N'View new submissions: {{submissionQueueUrl}}' + NCHAR(10) + NCHAR(10) +
+         N'Approved purchases without bibs' + NCHAR(10) + N'{{purchaseCount}} active requests' + NCHAR(10) + N'Five most recent:' + NCHAR(10) + N'{{purchaseItems}}' + NCHAR(10) +
+         N'View purchases awaiting BIBs: {{purchaseQueueUrl}}' + NCHAR(10) + NCHAR(10) +
+         N'Additional copies' + NCHAR(10) + N'{{additionalCopyCount}} open tasks' + NCHAR(10) + N'Five most recent:' + NCHAR(10) + N'{{additionalCopyItems}}' + NCHAR(10) +
+         N'View additional copies: {{additionalCopiesQueueUrl}}',
+         0, 0, 100);
+END;
