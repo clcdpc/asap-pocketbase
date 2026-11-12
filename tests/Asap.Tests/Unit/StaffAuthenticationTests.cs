@@ -38,11 +38,62 @@ public sealed class StaffAuthenticationTests
     [DataRow("https://example.org/staff/", "/staff/")]
     [DataRow("//example.org/staff/", "/staff/")]
     [DataRow("/\\example.org/staff/", "/staff/")]
+    [DataRow("/staff/\\..\\external", "/staff/")]
+    [DataRow("/staff/%2f%2fexample.org", "/staff/")]
+    [DataRow("/staff/%252f%252fexample.org", "/staff/")]
+    [DataRow("/staff/%5c%5cexample.org", "/staff/")]
+    [DataRow("/staff/%0d%0aLocation%3aexample.org", "/staff/")]
+    [DataRow("/staff/?filter=%0d%0aLocation%3aexample.org", "/staff/")]
+    [DataRow("/staff/?filter=%5cexample.org", "/staff/")]
+    [DataRow("/staff/%zz", "/staff/")]
     [DataRow("javascript:alert(1)", "/staff/")]
     [DataRow("/staff/\r\nLocation: https://example.org", "/staff/")]
+    [DataRow("/staff/\t?request=42", "/staff/")]
+    [DataRow("/staff/?request=9223372036854775807&stage=additional_copies&scope=2&copyStatus=closed#copy-task",
+        "/staff/?request=9223372036854775807&stage=additional_copies&scope=2&copyStatus=closed#copy-task")]
     public void StaffReturnUrlAllowsOnlyLocalPaths(string? value, string expected)
     {
         Assert.AreEqual(expected, StaffAuthenticationEndpoints.LocalReturnUrl(value));
+    }
+
+    [TestMethod]
+    public async Task StaffSignInEndpointCarriesTheValidatedDestinationIntoTheOidcChallenge()
+    {
+        var configuration = TestConfigurationFactory.Create();
+        using var host = await new HostBuilder()
+            .ConfigureWebHost(webHost => webHost
+                .UseTestServer()
+                .UseEnvironment("Testing")
+                .ConfigureServices(services =>
+                {
+                    services.AddRouting();
+                    services.AddStaffAuthentication(configuration, new StubWebHostEnvironment("Testing"));
+                    services.AddSingleton<StaffProfileService>(_ => throw new InvalidOperationException(
+                        "The sign-in route does not resolve profile services."));
+                })
+                .Configure(app =>
+                {
+                    app.UseRouting();
+                    app.UseAuthentication();
+                    app.UseAuthorization();
+                    app.UseEndpoints(endpoints => endpoints.MapStaffAuthenticationEndpoints());
+                }))
+            .StartAsync();
+        using var client = host.GetTestClient();
+        const string returnUrl = "/staff/?request=9223372036854775807&stage=additional_copies&scope=2&copyStatus=closed#copy-task";
+
+        using var response = await client.GetAsync(QueryHelpers.AddQueryString(
+            "/api/asap/staff/sign-in",
+            "returnUrl",
+            returnUrl));
+
+        Assert.AreEqual(HttpStatusCode.Redirect, response.StatusCode);
+        var challengeQuery = QueryHelpers.ParseQuery(response.Headers.Location!.Query);
+        var oidc = host.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+            .Get(StaffAuthenticationRegistration.EntraScheme);
+        var challenge = oidc.StateDataFormat!.Unprotect(challengeQuery["state"].ToString());
+        Assert.AreEqual(returnUrl, challenge?.RedirectUri,
+            "The actual sign-in route carries the complete local task URL in the protected OIDC challenge state.");
     }
 
     [TestMethod]
@@ -217,11 +268,23 @@ public sealed class StaffAuthenticationTests
             StaffAuthenticationRegistration.FailureRedirectUri(StaffAuthenticationRegistration.StaffNotAuthorizedReason));
         Assert.AreEqual("/staff/?signInError=temporary",
             StaffAuthenticationRegistration.FailureRedirectUri(StaffAuthenticationRegistration.UnexpectedAuthenticationErrorReason));
+        const string returnUrl = "/staff/?request=9223372036854775807&stage=additional_copies&scope=2&copyStatus=closed#copy-task";
+        Assert.AreEqual(
+            "/staff/?request=9223372036854775807&stage=additional_copies&scope=2&copyStatus=closed&signInError=cancelled#copy-task",
+            StaffAuthenticationRegistration.FailureRedirectUri(
+                StaffAuthenticationRegistration.ExternalAuthenticationCancelledReason,
+                returnUrl));
+        Assert.AreEqual("/base/staff/?signInError=temporary",
+            StaffAuthenticationRegistration.FailureRedirectUri(
+                StaffAuthenticationRegistration.UnexpectedAuthenticationErrorReason,
+                "//evil.example",
+                "/base/staff/"));
     }
 
     [TestMethod]
-    public async Task OidcAccessDeniedCallbackUsesTheControlledStaffFailurePage()
+    public async Task OidcAccessDeniedCallbackReturnsToTheProtectedStaffDestinationWithoutBrowserStorage()
     {
+        const string returnUrl = "/staff/?request=9223372036854775807&stage=additional_copies&scope=2&copyStatus=closed#copy-task";
         using var host = await new HostBuilder()
             .ConfigureWebHost(webHost => webHost
                 .UseTestServer()
@@ -238,7 +301,7 @@ public sealed class StaffAuthenticationTests
                         {
                             await context.ChallengeAsync(
                                 StaffAuthenticationRegistration.EntraScheme,
-                                new OpenIdConnectChallengeProperties { RedirectUri = "/staff/" });
+                                new OpenIdConnectChallengeProperties { RedirectUri = returnUrl });
                             return;
                         }
 
@@ -267,12 +330,15 @@ public sealed class StaffAuthenticationTests
         using var callback = await client.SendAsync(callbackRequest);
 
         Assert.AreEqual(HttpStatusCode.Redirect, callback.StatusCode);
-        Assert.AreEqual("/staff/?signInError=cancelled", callback.Headers.Location?.ToString());
+        Assert.AreEqual(
+            "/staff/?request=9223372036854775807&stage=additional_copies&scope=2&copyStatus=closed&signInError=cancelled#copy-task",
+            callback.Headers.Location?.ToString());
     }
 
     [TestMethod]
     public async Task DisallowedIssuerCallbackLogsOnceAtWarning()
     {
+        const string returnUrl = "/staff/?request=9223372036854775807&stage=closed&scope=2#request-notes";
         var previousNLogConfiguration = NLog.LogManager.Configuration;
         var temporaryRoot = Directory.CreateTempSubdirectory("asap-oidc-auth-log-test-");
         try
@@ -339,7 +405,7 @@ public sealed class StaffAuthenticationTests
                             {
                                 await context.ChallengeAsync(
                                     StaffAuthenticationRegistration.EntraScheme,
-                                    new OpenIdConnectChallengeProperties { RedirectUri = "/staff/" });
+                                    new OpenIdConnectChallengeProperties { RedirectUri = returnUrl });
                                 return;
                             }
 
@@ -375,7 +441,9 @@ public sealed class StaffAuthenticationTests
 
             using var callback = await client.SendAsync(callbackRequest);
             Assert.AreEqual(HttpStatusCode.Redirect, callback.StatusCode);
-            Assert.AreEqual("/staff/?signInError=denied", callback.Headers.Location?.ToString());
+            Assert.AreEqual(
+                "/staff/?request=9223372036854775807&stage=closed&scope=2&signInError=denied#request-notes",
+                callback.Headers.Location?.ToString());
 
             NLog.LogManager.Flush();
             var entries = capture.Logs.Select(ParseLogEntry).ToArray();

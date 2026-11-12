@@ -21,6 +21,7 @@ public static class StaffAuthenticationRegistration
     internal const string ExternalAuthenticationCancelledReason = "external_authentication_cancelled";
     internal const string UnexpectedAuthenticationErrorReason = "unexpected_authentication_error";
     private const string SelectorScheme = "AsapStaffSelector";
+    private const string FailureReturnUrlItemKey = "AsapStaffFailureReturnUrl";
 
     public static IServiceCollection AddStaffAuthentication(
         this IServiceCollection services,
@@ -72,15 +73,28 @@ public static class StaffAuthenticationRegistration
             options.TokenValidationParameters.ValidateIssuer = true;
             options.TokenValidationParameters.IssuerValidator = (issuer, _, _) =>
                 ValidateIssuer(issuer, allowedTenants);
+            options.Events.OnMessageReceived = context =>
+            {
+                if (!string.IsNullOrWhiteSpace(context.Properties?.RedirectUri))
+                {
+                    context.HttpContext.Items[FailureReturnUrlItemKey] = context.Properties.RedirectUri;
+                }
+
+                return Task.CompletedTask;
+            };
             options.Events.OnAuthenticationFailed = context =>
             {
-                HandleAuthenticationFailure(context.HttpContext, context.Exception, exceptionAlreadyLogged: true);
+                HandleAuthenticationFailure(context.HttpContext, context.Exception,
+                    exceptionAlreadyLogged: true,
+                    returnUrl: context.HttpContext.Items[FailureReturnUrlItemKey] as string);
                 context.HandleResponse();
                 return Task.CompletedTask;
             };
             options.Events.OnRemoteFailure = context =>
             {
-                HandleAuthenticationFailure(context.HttpContext, context.Failure, exceptionAlreadyLogged: false);
+                HandleAuthenticationFailure(context.HttpContext, context.Failure,
+                    exceptionAlreadyLogged: false,
+                    returnUrl: context.Properties?.RedirectUri);
                 context.HandleResponse();
                 return Task.CompletedTask;
             };
@@ -89,7 +103,8 @@ public static class StaffAuthenticationRegistration
                 HandleAuthenticationFailure(
                     context.HttpContext,
                     null,
-                    ExternalAuthenticationCancelledReason);
+                    ExternalAuthenticationCancelledReason,
+                    returnUrl: context.Properties?.RedirectUri);
                 context.HandleResponse();
                 return Task.CompletedTask;
             };
@@ -211,9 +226,12 @@ public static class StaffAuthenticationRegistration
         return hasTenantId && hasObjectId && tenantId != Guid.Empty && objectId != Guid.Empty;
     }
 
-    internal static string FailureRedirectUri(string reason)
+    internal static string FailureRedirectUri(string reason, string? returnUrl = null, string fallback = "/staff/")
     {
-        return QueryHelpers.AddQueryString("/staff/", "signInError", FailurePresentation(reason));
+        return QueryHelpers.AddQueryString(
+            StaffAuthenticationEndpoints.LocalReturnUrl(returnUrl, fallback),
+            "signInError",
+            FailurePresentation(reason));
     }
 
     internal static string FailurePresentation(string reason) => reason switch
@@ -257,7 +275,8 @@ public static class StaffAuthenticationRegistration
         HttpContext context,
         Exception? exception,
         string? fixedReason = null,
-        bool exceptionAlreadyLogged = false)
+        bool exceptionAlreadyLogged = false,
+        string? returnUrl = null)
     {
         var reason = ClassifyFailure(exception, fixedReason);
         var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
@@ -300,7 +319,7 @@ public static class StaffAuthenticationRegistration
         }
 
         var path = context.Request.PathBase.Add("/staff/").Value ?? "/staff/";
-        context.Response.Redirect(QueryHelpers.AddQueryString(path, "signInError", FailurePresentation(reason)));
+        context.Response.Redirect(FailureRedirectUri(reason, returnUrl, path));
     }
 
     private sealed class StaffAuthenticationRejectionException(string reason)

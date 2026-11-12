@@ -2,6 +2,7 @@ import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { forgetRecentRequest, readRecentRequests, recentStorageKey, rememberRecentRequest, validRequestId } from './recent-requests.js';
 import { element, statusLabel } from './ui.js';
+import { staffSignInHref } from './router.js';
 
 // Shell owns the application frames and receipt presentation; feature bodies
 // remain owned by their controllers. Receipts are bound to one accepted epoch.
@@ -9,7 +10,7 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
   findTitle, openRecentTitle, onViewIntent, onSignOutIntent, request = authorizedJson }) {
   const get = selector => root.querySelector(selector);
   const dom = { status: get('#app-status'), readiness: get('#email-readiness-warning'), signedOut: get('#signed-out'),
-    title: get('#signed-out-title'), message: get('#signed-out-message'), signInLabel: get('#sign-in-label'),
+    title: get('#signed-out-title'), message: get('#signed-out-message'), signInLabel: get('#sign-in-label'), signIn: get('.sign-in'),
     workspace: get('#workspace'), actions: get('#session-actions'),
     identity: get('#staff-identity'), recent: get('#recent-work'), recentList: get('#recent-request-list') };
   const views = { queue: ['#queue-view', '#queue-title'], 'additional-copies': ['#additional-copy-view', '#additional-copy-title'],
@@ -143,6 +144,7 @@ export function createStaffShell({ root, sessionIdentity, getContext, settingsSc
   }
   function showSignedOut(message, featureMessage = null, accessUnavailable = false) {
     if (disposed) return;
+    dom.signIn.setAttribute('href', staffSignInHref());
     reads.begin('readiness').abort(); dom.readiness.hidden = true;
     const store = storage(); if (store && recentKey) { try { store.removeItem(recentKey); } catch { /* Storage may be unavailable. */ } }
     recentKey = null; dom.recent.open = false; dom.recentList.replaceChildren();
