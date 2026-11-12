@@ -616,6 +616,13 @@ async function main() {
     }
   });
   await check('full CI retains safety, evidence checks and current-source packaging', () => {
+    const diagnostics = workflow.env.ASAP_CI_RESOURCE_DIAGNOSTICS;
+    for (const [value, expected] of [[undefined, 'false'], ['', 'false'], ['false', 'false'], ['1', 'false'], ['true', 'true']]) {
+      assert.equal(evaluate(diagnostics, { vars: value === undefined ? {} : { ASAP_CI_RESOURCE_DIAGNOSTICS: value } }), expected);
+    }
+    for (const job of Object.values(workflow.jobs)) {
+      assert.equal(job.env?.ASAP_CI_RESOURCE_DIAGNOSTICS, undefined, 'Use the single workflow diagnostic switch');
+    }
     assert.equal(reuse.schema, 6);
     assert.deepEqual(reuse.runner_labels, ['ubuntu-24.04']);
     assert.equal(reuse.runner_group, 'GitHub Actions');
