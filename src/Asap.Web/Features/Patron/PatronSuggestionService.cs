@@ -687,10 +687,10 @@ public sealed partial class PatronSuggestionService(
         ValidatedSuggestion currentSuggestion;
         try
         {
-            currentSuggestion = Validate(new PatronSuggestionInput(
+            currentSuggestion = ValidateStaffSubmission(new PatronSuggestionInput(
                 input.Format, input.Title, input.Author, input.Identifier, input.Publication,
                 input.PreferredPickupBranchId, input.Autohold, input.CustomFields),
-                configuration, allowInformationalMessage: true, forcedAutoHold: input.Autohold ?? true,
+                configuration, forcedAutoHold: input.Autohold ?? true,
                 exactPublicationDate: input.ExactPublicationDate, notes: input.Notes,
                 verifiedBibId: capturedSuggestion.VerifiedBibId);
         }
@@ -936,7 +936,7 @@ public sealed partial class PatronSuggestionService(
         }
 
         EnforceStaffPatronEligibility(configuration, patron);
-        var suggestion = Validate(
+        var suggestion = ValidateStaffSubmission(
             new PatronSuggestionInput(
                 input.Format,
                 input.Title,
@@ -947,7 +947,6 @@ public sealed partial class PatronSuggestionService(
                 input.Autohold,
                 input.CustomFields),
             configuration,
-            allowInformationalMessage: true,
             forcedAutoHold: input.Autohold ?? true,
             exactPublicationDate: input.ExactPublicationDate,
             notes: input.Notes,

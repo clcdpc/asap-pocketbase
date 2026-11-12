@@ -57,8 +57,8 @@ async function until(predicate, message) {
     };
     const organizations = [{ id: 2, name: 'Test Library' }];
     const configuration = {
-      availableFormats: ['book', 'comic', 'ebook'],
-      formatLabels: { book: 'Book', comic: 'Comic', ebook: 'eBook' },
+      availableFormats: ['book', 'comic', 'ebook', 'eaudiobook'],
+      formatLabels: { book: 'Book', comic: 'Comic', ebook: 'eBook', eaudiobook: 'eAudiobook' },
       formatRules: {
         book: {
           messageBehavior: 'none',
@@ -76,7 +76,7 @@ async function until(predicate, message) {
             title: { mode: 'required', label: 'Comic title' },
             author: { mode: 'hidden', label: 'Author' },
             identifier: { mode: 'hidden', label: 'Identifier' },
-            publication: { mode: 'optional', label: 'Publication timing' }
+            publication: { mode: 'required', label: 'Publication timing' }
           },
           customFields: {}
         },
@@ -85,6 +85,16 @@ async function until(predicate, message) {
           fields: {
             title: { mode: 'required', label: 'eBook title' },
             author: { mode: 'required', label: 'eBook author' },
+            identifier: { mode: 'optional', label: 'Identifier' },
+            publication: { mode: 'optional', label: 'Publication timing' }
+          },
+          customFields: { audience: { mode: 'required', label: 'Who is it for?' } }
+        },
+        eaudiobook: {
+          messageBehavior: 'none',
+          fields: {
+            title: { mode: 'required', label: 'eAudiobook title' },
+            author: { mode: 'required', label: 'eAudiobook author' },
             identifier: { mode: 'optional', label: 'Identifier' },
             publication: { mode: 'optional', label: 'Publication timing' }
           },
@@ -103,7 +113,7 @@ async function until(predicate, message) {
     const createdRequest = {
       id: '9007199254740993', version: 'request-version', title: 'Staff title', author: 'Author',
       barcode: '20000000000001', nameFirst: 'Alex', nameLast: 'Example', email: 'alex@example.org',
-      libraryOrgId: 2, libraryOrgName: 'Test Library', status: 'suggestion', format: 'book', formatLabel: 'Book',
+      libraryOrgId: 2, libraryOrgName: 'Test Library', status: 'suggestion', format: 'eaudiobook', formatLabel: 'eAudiobook',
       identifier: null, bibid: null, publication: 'not_published', preferredPickupBranchId: 101,
       preferredPickupBranchName: 'Main Library', workflowTags: [], capabilities: {}
     };
@@ -111,10 +121,13 @@ async function until(predicate, message) {
     let suggestionRequests = 0;
     let duplicateNextSuggestion = false;
     let partialDuplicateNextSuggestion = false;
+    let rejectNextSuggestion = false;
     let expireNextSuggestion = false;
     let malformedNextSuggestion = false;
     let currentPickupAtLookup = 101;
     let staleLookupResolve = null;
+    let delayNextConfigurationRefresh = false;
+    let configurationRefreshResolve = null;
     global.fetch = async (url, options = {}) => {
       requests.push({ url, options });
       if (url.endsWith('/session')) {
@@ -126,7 +139,12 @@ async function until(predicate, message) {
         });
       }
       if (url.endsWith('/suggestion-configuration?libraryOrgId=2')) {
-        return response(200, { libraryOrgId: 2, libraryOrgName: 'Test Library', configuration });
+        const configured = response(200, { libraryOrgId: 2, libraryOrgName: 'Test Library', configuration });
+        if (delayNextConfigurationRefresh) {
+          delayNextConfigurationRefresh = false;
+          return new Promise(resolve => { configurationRefreshResolve = () => resolve(configured); });
+        }
+        return configured;
       }
       if (url.endsWith('/api/asap/config?libraryOrgId=2')) return response(200, configuration);
       if (url.endsWith('/patron-lookup')) {
@@ -194,6 +212,16 @@ async function until(predicate, message) {
         assert.equal(body.verifiedBibId, null);
         assert.equal(body.emailPatronConfirmation, false);
         if (!created) assert.equal(body.autohold, false);
+        if (rejectNextSuggestion) {
+          rejectNextSuggestion = false;
+          currentPickupAtLookup = body.preferredPickupBranchId;
+          return response(409, {
+            code: 'request_not_created_pickup_changed',
+            pickupPreferenceChanged: true,
+            reasonCode: 'submission_configuration_changed',
+            message: 'The suggestion was not created, but the patron\'s preferred pickup location was changed successfully. Submission settings changed.'
+          });
+        }
         if (malformedNextSuggestion) {
           malformedNextSuggestion = false;
           return {
@@ -259,6 +287,17 @@ async function until(predicate, message) {
       .some(label => label.textContent.includes('Who is it for?')),
     'format-specific custom-field label overrides must be rendered');
     const format = document.querySelector('#staff-suggestion-body select[aria-label="Material format"]');
+    assert.deepEqual([...format.options].map(option => option.value), ['', 'book', 'comic', 'eaudiobook'],
+      'Only enabled submission formats remain, in configured order, with their configured labels.');
+    assert.equal(format.value, 'book', 'The first eligible format is selected by default.');
+    assert.equal(format.options[0].textContent, 'Choose a material format');
+    format.value = 'eaudiobook';
+    format.dispatchEvent(new dom.window.Event('change'));
+    const author = document.querySelectorAll('.staff-suggestion-fields input[maxlength="500"]')[1];
+    author.value = 'Staff author';
+    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
+      'A submission-enabled digital format remains available.');
+    assert.equal(format.value, 'eaudiobook');
     format.value = 'comic';
     format.dispatchEvent(new dom.window.Event('change'));
     assert.equal(document.querySelector('#staff-suggestion-body input[aria-label="Author"]'), null,
@@ -272,29 +311,8 @@ async function until(predicate, message) {
     format.dispatchEvent(new dom.window.Event('change'));
     assert.ok([...document.querySelectorAll('#staff-suggestion-body label')]
       .some(label => label.textContent.includes('Who is it for?')));
-    format.value = 'ebook';
-    format.dispatchEvent(new dom.window.Event('change'));
-    const notice = document.querySelector('.staff-format-notice');
-    assert.equal(notice.textContent, configuration.ebookMessage);
-    assert.equal(notice.querySelector('p'), null);
-    assert.equal(notice.querySelector('a').getAttribute('href'), 'https://example.org/help');
-    assert.equal(notice.querySelector('a').textContent, 'https://example.org/help');
-    assert.equal(notice.querySelector('a').rel, 'noopener noreferrer');
-    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
-      'informational eBook format must remain available for staff creation');
-    assert.equal(document.querySelector('.staff-suggestion-fields input[maxlength="500"]').required, true);
-    configuration.ebookMessage = '<script>window.staffMessageScriptRan = true</script><a href="javascript:alert(1)">JS</a><a href="data:text/html,unsafe">Data</a><a href="vbscript:msgbox(1)">VB</a><span onclick="window.staffMessageEventRan = true">Safe text</span>';
-    format.dispatchEvent(new dom.window.Event('change'));
-    assert.equal(notice.querySelector('script'), null);
-    assert.equal(dom.window.staffMessageScriptRan, undefined);
-    assert.equal(notice.textContent, configuration.ebookMessage, 'Custom markup must remain literal text.');
-    assert.equal(notice.querySelectorAll('a, span').length, 0);
-    configuration.ebookMessage = '';
-    format.dispatchEvent(new dom.window.Event('change'));
-    assert.equal(notice.hidden, true);
-    assert.equal(notice.childNodes.length, 0);
-    format.value = 'book';
-    format.dispatchEvent(new dom.window.Event('change'));
+    assert.equal([...format.options].some(option => option.value === 'ebook'), false,
+      'Referral-only eBook formats are not offered in the staff creation form.');
     assert.ok([...document.querySelectorAll('#staff-suggestion-body button')]
       .some(button => button.textContent.includes('Search Polaris catalog')));
     const autohold = [...document.querySelectorAll('.staff-suggestion-fields label')]
@@ -311,13 +329,97 @@ async function until(predicate, message) {
       .find(control => control.getAttribute('aria-label')?.startsWith('Who is it for?'));
     assert.ok(audience, 'configured custom field must be visible');
     audience.value = 'adult';
+    const publication = [...document.querySelectorAll('.staff-suggestion-fields select')]
+      .find(control => control.labels?.[0]?.textContent.includes('Publication timing'));
+    publication.value = 'not_published';
+    const pickupChoice = document.querySelector('.staff-suggestion-fields select[aria-label="Preferred pickup location"]');
+    pickupChoice.value = '102';
+    const notes = document.querySelector('.staff-suggestion-fields textarea');
+    notes.value = 'Retain these staff notes';
+    const titleBeforeRejection = title.value;
+    rejectNextSuggestion = true;
+    document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await until(() => suggestionRequests === 1 && document.getElementById('staff-suggestion-status').textContent.includes('settings changed'),
+      'a stale format configuration must produce actionable guidance');
+    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, true,
+      'A rejected stale format cannot be resubmitted by the error finalizer.');
+    assert.equal(document.activeElement.textContent.includes('Refresh eligible formats'), true,
+      'A confirmed pickup change moves focus to the recovery action.');
+    assert.match(document.getElementById('staff-suggestion-status').textContent, /pickup preference changed successfully/i);
+    assert.match(document.querySelector('#staff-suggestion-pickup-update-notice').textContent, /changed to North Branch/i);
+    assert.equal(title.value, titleBeforeRejection, 'The title draft must survive configuration rejection.');
+    assert.equal(notes.value, 'Retain these staff notes', 'Staff notes survive configuration rejection.');
+    assert.equal(format.value, 'book', 'The stale format selection remains visible until current settings load.');
+    document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await settle();
+    assert.equal(suggestionRequests, 1, 'A stale format is not sent again before explicit refresh.');
+    configuration.formatRules.book.messageBehavior = 'ebookMessage';
+    configuration.publicationOptions = ['published', 'coming_soon'];
+    const formatRefresh = [...document.querySelectorAll('#staff-suggestion-body button')]
+      .find(button => button.textContent.includes('Refresh eligible formats'));
+    assert.ok(formatRefresh, 'Configuration rejection exposes a refresh action.');
+    delayNextConfigurationRefresh = true;
+    formatRefresh.click();
+    await until(() => configurationRefreshResolve, 'the settings refresh must remain pending for the race regression');
+    publication.value = 'published';
+    publication.dispatchEvent(new dom.window.Event('change'));
+    configurationRefreshResolve();
+    await until(() => !formatRefresh.disabled && format.options.length === 3,
+      'the refreshed options must exclude the now referral-only book format');
+    assert.equal(format.value, '', 'A no-longer-eligible selection is cleared instead of silently replaced.');
+    assert.equal(format.options[1].value, 'comic');
+    assert.equal(format.options[2].value, 'eaudiobook');
+    assert.equal(title.value, titleBeforeRejection, 'Refreshing formats must retain other draft values.');
+    assert.equal(notes.value, 'Retain these staff notes', 'Refreshing formats must retain staff notes.');
+    assert.deepEqual([...publication.options].map(option => option.value), ['', 'published', 'coming_soon'],
+      'The refreshed publication options retain the blank choice and all current alternatives.');
+    assert.equal([...publication.options].some(option => option.value === 'not_published'), false,
+      'A publication option removed or disabled in current settings is no longer selectable.');
+    assert.equal(publication.value, 'published',
+      'A valid publication selection made while refresh is pending must survive the response.');
+    assert.equal(publication.labels[0].querySelector('[role="status"]').hidden, true,
+      'A still-valid selection does not require reselection.');
+    format.value = 'eaudiobook';
+    format.dispatchEvent(new dom.window.Event('change'));
+    document.querySelectorAll('.staff-suggestion-fields input[maxlength="500"]')[1].value = 'Staff author';
+    const refreshedAudience = [...document.querySelectorAll('.staff-suggestion-fields select')]
+      .find(control => control.getAttribute('aria-label')?.startsWith('Who is it for?'));
+    assert.equal(refreshedAudience.value, 'adult', 'Visible custom-field draft values survive the refresh.');
+    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
+      'A current publication selection preserved through refresh allows submission.');
+    format.value = 'comic';
+    format.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(publication.required, true, 'The current format rule keeps publication required.');
+    publication.value = '';
+    publication.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(publication.checkValidity(), false, 'A required publication field rejects the blank choice.');
+    document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await settle();
+    assert.equal(suggestionRequests, 1, 'A required blank publication value is not submitted.');
+    format.value = 'eaudiobook';
+    format.dispatchEvent(new dom.window.Event('change'));
+    document.querySelectorAll('.staff-suggestion-fields input[maxlength="500"]')[1].value = 'Staff author';
+    assert.equal(publication.required, false, 'The optional publication rule allows an explicit clear.');
+    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
+      'An optional clear releases the re-selection guard.');
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
-    await until(() => suggestionRequests === 1, 'double submit must make one request');
+    await until(() => suggestionRequests === 2, 'double submit after reselection must make one new request');
+    assert.equal(requests.filter(item => item.url.endsWith('/suggestions')).length, 2);
+    assert.equal(JSON.parse(requests.filter(item => item.url.endsWith('/suggestions'))[1].options.body).format, 'eaudiobook',
+      'The explicitly selected eligible digital format is submitted unchanged.');
+    const corrected = JSON.parse(requests.filter(item => item.url.endsWith('/suggestions'))[1].options.body);
+    assert.equal(corrected.currentPreferredPickupBranchIdAtLoad, 102,
+      'A corrected submission uses the pickup preference confirmed by the first partial-success response.');
+    assert.equal(corrected.preferredPickupBranchId, 102, 'The corrected submission does not reverse the pickup change.');
+    assert.equal(corrected.publication, null, 'An explicitly cleared optional publication value is submitted as null.');
     await until(() => !document.getElementById('staff-suggestion-dialog').open, 'successful creation must close the dialog');
     assert.match(document.getElementById('app-status').textContent, /9007199254740993/);
     assert.match(document.getElementById('app-status').textContent, /No confirmation email was requested/);
     assert.equal(requests.filter(item => item.url.endsWith('/catalog-search')).length, 0);
+    configuration.formatRules.book.messageBehavior = 'none';
+    configuration.publicationOptions = ['not_published', 'published'];
+    currentPickupAtLookup = 101;
 
     document.getElementById('new-suggestion').click();
     currentPickupAtLookup = null;

@@ -306,17 +306,32 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     const context = result.patron;
     const patron = context.patron;
     const fakeRequest = { customFields: {} };
-    const availableFormats = Array.isArray(configuration.availableFormats)
+    let activeConfiguration = configuration;
+    let enabledFormats = Array.isArray(configuration.availableFormats)
       ? configuration.availableFormats : [];
-    const format = selectWithHistorical(availableFormats, availableFormats[0] || null, configuration.formatLabels || {});
+    const customFieldDrafts = new Map();
+    const format = element('select');
     format.setAttribute('aria-label', 'Material format');
     format.required = true;
+    const formatEmpty = element('small', {
+      id: 'staff-suggestion-format-empty',
+      className: 'field-help wide',
+      role: 'status',
+      'aria-live': 'polite'
+    });
+    const refreshFormats = element('button', { type: 'button', className: 'secondary-button' },
+      [icon('refresh'), 'Refresh eligible formats']);
+    const formatEligibility = {
+      eligibleFormats: enabledFormats.filter(code =>
+        configuration.formatRules?.[code]?.messageBehavior === 'none'),
+      needsRefresh: false,
+      staleFormatCode: null,
+      refreshFormats
+    };
     const title = element('input', { maxlength: '500', autocomplete: 'off' });
     const author = element('input', { maxlength: '500', autocomplete: 'off' });
     const identifier = element('input', { maxlength: '100', autocomplete: 'off' });
-    const publication = selectWithHistorical(configuration.publicationOptions, null);
-    publication.options[0].textContent = 'Not specified';
-    publication.value = '';
+    const publication = selectWithHistorical([], null);
     const exactDate = element('input', { type: 'date' });
     const notes = element('textarea', { maxlength: '10000' });
     const autohold = element('input', { type: 'checkbox', checked: true });
@@ -334,10 +349,19 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     }
     const customFields = element('div', { className: 'custom-fields wide' });
     const formatNotice = element('div', { className: 'staff-format-notice field-help wide', hidden: true });
+    let publicationNeedsReselection = false;
+    let stalePublicationValue = null;
     const titleField = labeledInput('Title', title);
     const authorField = labeledInput('Author', author);
     const identifierField = labeledInput('Identifier / ISBN', identifier);
     const publicationField = labeledInput('Publication timing', publication);
+    const publicationRecoveryHelp = element('small', {
+      className: 'field-help',
+      role: 'status',
+      'aria-live': 'polite',
+      hidden: true
+    });
+    publicationField.append(publicationRecoveryHelp);
     const exactDateField = labeledInput('Exact publication date', exactDate);
     const pickupField = labeledInput('Preferred pickup location', pickup);
     const pickupHelp = element('small', {
@@ -352,7 +376,15 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       'Pickup choices refreshed: ', element('time', { datetime: context.pickupBranchesRefreshedAt,
         text: dateTime(context.pickupBranchesRefreshedAt) })
     ]);
-    pickupField.append(element('div', { className: 'form-field-help' }, [pickupHelp, pickupWarning, refreshed]));
+    const pickupPreferenceText = element('p', { text: `Current Polaris pickup preference: ${context.currentPreferredPickupBranchName ||
+      (context.currentPreferredPickupState === 'invalid' ? 'Invalid preference; choose an eligible location' :
+        context.currentPreferredPickupBranchId ? `Branch ${context.currentPreferredPickupBranchId} (not currently eligible)` : 'Not recorded')}` });
+    const pickupUpdateNotice = element('small', {
+      id: 'staff-suggestion-pickup-update-notice',
+      className: 'field-help',
+      hidden: true
+    });
+    pickupField.append(element('div', { className: 'form-field-help' }, [pickupHelp, pickupWarning, refreshed, pickupUpdateNotice]));
 
     const bib = element('input', { type: 'hidden' });
     const catalogStatus = element('p', { className: 'field-help', role: 'status', 'aria-live': 'polite' });
@@ -391,10 +423,138 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       autohold, emailConfirmation, pickup, bib,
       customFieldControls: new Map(),
       titleField, authorField, identifierField, publicationField, exactDateField,
-      catalogStatus
+      catalogStatus, pickupPreferenceText, pickupUpdateNotice, publicationRecoveryHelp,
+      publicationNeedsReselection: () => publicationNeedsReselection
+    };
+    const rebuildPublicationChoices = (options, selectedValue = '') => {
+      const available = [...new Set((Array.isArray(options) ? options : [])
+        .filter(value => typeof value === 'string' && value.trim().length > 0))];
+      const unavailable = Boolean(selectedValue) && !available.includes(selectedValue);
+      publication.replaceChildren();
+      if (unavailable) {
+        publication.append(element('option', {
+          value: '__publication_reselect__',
+          text: 'Choose a current publication option',
+          disabled: true
+        }));
+      }
+      publication.append(element('option', { value: '', text: 'Not specified' }));
+      for (const value of available) {
+        publication.append(element('option', { value, text: value }));
+      }
+      if (unavailable) {
+        publication.value = '__publication_reselect__';
+        stalePublicationValue = selectedValue;
+        publicationNeedsReselection = true;
+        publicationRecoveryHelp.textContent = `“${selectedValue}” is no longer available. Choose a current publication option or Not specified before creating the suggestion.`;
+        publicationRecoveryHelp.hidden = false;
+      } else {
+        publication.value = selectedValue || '';
+        stalePublicationValue = null;
+        publicationNeedsReselection = false;
+        publicationRecoveryHelp.textContent = '';
+        publicationRecoveryHelp.hidden = true;
+      }
+      return unavailable;
+    };
+    rebuildPublicationChoices(configuration.publicationOptions);
+    const renderFormatChoices = (selectedCode = null, chooseDefault = false) => {
+      format.replaceChildren(element('option', { value: '', text: 'Choose a material format' }));
+      for (const code of formatEligibility.eligibleFormats) {
+        format.append(element('option', {
+          value: code,
+          text: activeConfiguration.formatLabels?.[code] || code
+        }));
+      }
+      const selected = selectedCode && formatEligibility.eligibleFormats.includes(selectedCode)
+        ? selectedCode
+        : chooseDefault ? formatEligibility.eligibleFormats[0] || '' : '';
+      format.value = selected;
+      format.disabled = formatEligibility.eligibleFormats.length === 0 || formatEligibility.needsRefresh;
+      refreshFormats.hidden = formatEligibility.eligibleFormats.length > 0 && !formatEligibility.needsRefresh;
+      if (formatEligibility.needsRefresh) {
+        formatEmpty.textContent = 'The format settings changed after this form loaded. Refresh eligible formats before continuing; your draft values are retained.';
+        formatEmpty.hidden = false;
+      } else if (formatEligibility.eligibleFormats.length === 0 && enabledFormats.length === 0) {
+        formatEmpty.textContent = 'No enabled material formats are available for staff requests. Ask an administrator to enable a format.';
+        formatEmpty.hidden = false;
+      } else if (formatEligibility.eligibleFormats.length === 0) {
+        formatEmpty.textContent = 'All enabled formats are handled through the library’s referral route. Staff cannot create a request for them here. Ask an administrator to enable a submission format if appropriate.';
+        formatEmpty.hidden = false;
+      } else {
+        formatEmpty.textContent = '';
+        formatEmpty.hidden = true;
+      }
+    };
+    renderFormatChoices(null, true);
+    const rememberCustomFieldDrafts = () => {
+      for (const [key, value] of controls.customFieldControls) {
+        if (value.mode !== 'hidden') {
+          customFieldDrafts.set(key, value.input.value);
+        }
+      }
+    };
+    const refreshEligibleFormats = async token => {
+      const current = suggestion;
+      if (!isCurrentGeneration(token) || current.stage !== 'create' || current.submitting || current.outcomeUnconfirmed) return;
+      const previousFormat = formatEligibility.staleFormatCode || format.value;
+      const previousLabel = activeConfiguration.formatLabels?.[previousFormat] || previousFormat;
+      const currentActor = actor;
+      const scopeId = Number(current.scopeId);
+      const load = reads.begin('staff-suggestion-configuration');
+      refreshFormats.disabled = true;
+      setStaffSuggestionStatus('Refreshing eligible material formats...');
+      try {
+        const configured = await send(
+          `/api/asap/staff/suggestion-configuration?libraryOrgId=${encodeURIComponent(scopeId)}`,
+          { signal: load.signal });
+        if (!load.isCurrent() || !isCurrentGeneration(token) || !isCurrent(current) ||
+            !sessionIdentity.isCurrent(currentActor) || configured.libraryOrgId !== scopeId) return;
+
+        rememberCustomFieldDrafts();
+        activeConfiguration = configured.configuration || {};
+        const refreshedEnabledFormats = Array.isArray(activeConfiguration.availableFormats)
+          ? activeConfiguration.availableFormats : [];
+        const previousPublication = stalePublicationValue || publication.value;
+        const publicationNeedsNewChoice = rebuildPublicationChoices(
+          activeConfiguration.publicationOptions,
+          previousPublication);
+        enabledFormats = refreshedEnabledFormats;
+        formatEligibility.eligibleFormats = refreshedEnabledFormats.filter(code =>
+          activeConfiguration.formatRules?.[code]?.messageBehavior === 'none');
+        formatEligibility.needsRefresh = false;
+        formatEligibility.staleFormatCode = null;
+        current.configuration = activeConfiguration;
+        renderFormatChoices(previousFormat, false);
+        updateFormat(true);
+        if (formatEligibility.eligibleFormats.length === 0) {
+          setStaffSuggestionStatus(`${formatEmpty.textContent}${publicationNeedsNewChoice && !publicationField.hidden
+            ? ` ${publicationRecoveryHelp.textContent}` : ''}`, 'error');
+        } else if (previousFormat && !formatEligibility.eligibleFormats.includes(previousFormat)) {
+          setStaffSuggestionStatus(
+            `${previousLabel} is no longer eligible. Choose an available format; your other draft values are retained.${
+              publicationNeedsNewChoice && !publicationField.hidden ? ` ${publicationRecoveryHelp.textContent}` : ''}`, 'error');
+          format.focus();
+        } else if (publicationNeedsNewChoice && !publicationField.hidden) {
+          setStaffSuggestionStatus(publicationRecoveryHelp.textContent, 'error');
+          publication.focus();
+        } else {
+          setStaffSuggestionStatus('Format settings refreshed. Review the selected format and create the suggestion.');
+        }
+      } catch (error) {
+        if (!load.isCurrent() || !isCurrentGeneration(token) || isAbortError(error) || error.status === 401) return;
+        setStaffSuggestionStatus(
+          error.response?.message || error.message || 'Format settings could not be refreshed. Your draft values are retained; try again.',
+          'error');
+      } finally {
+        reads.finish('staff-suggestion-configuration', load.token);
+        if (isCurrentGeneration(token)) {
+          refreshFormats.disabled = false;
+        }
+      }
     };
     const applyFieldRule = (field, input, key, fallbackLabel, forceRequired = false) => {
-      const rule = configuration.formatRules?.[format.value]?.fields?.[key] || {};
+      const rule = activeConfiguration.formatRules?.[format.value]?.fields?.[key] || {};
       const hidden = !forceRequired && rule.mode === 'hidden';
       field.hidden = hidden;
       input.disabled = hidden;
@@ -404,26 +564,63 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       field.firstElementChild.textContent = `${label}${input.required ? ' *' : ''}`;
     };
     let submitButton;
+    const updateSubmitAvailability = () => {
+      if (submitButton) {
+        submitButton.disabled = branches.length === 0 || formatEligibility.needsRefresh ||
+          formatEligibility.eligibleFormats.length === 0 ||
+          !formatEligibility.eligibleFormats.includes(format.value) ||
+          publicationNeedsReselection && !publicationField.hidden;
+      }
+    };
     const updateFormat = (preserveCustomFields = false) => {
+      if (preserveCustomFields) {
+        rememberCustomFieldDrafts();
+      }
       applyFieldRule(titleField, title, 'title', 'Title', true);
       applyFieldRule(authorField, author, 'author', 'Author');
       applyFieldRule(identifierField, identifier, 'identifier', 'Identifier / ISBN');
       applyFieldRule(publicationField, publication, 'publication', 'Publication timing');
       exactDateField.hidden = publicationField.hidden;
       exactDate.disabled = publicationField.hidden;
-      controls.customFieldControls = renderCustomFieldEditor(customFields, fakeRequest, configuration, format.value,
+      fakeRequest.customFields = Object.fromEntries([...customFieldDrafts]
+        .filter(([key]) => ['required', 'optional'].includes(
+          activeConfiguration.formatRules?.[format.value]?.customFields?.[key]?.mode))
+        .map(([key, value]) => [key, { value }]));
+      controls.customFieldControls = renderCustomFieldEditor(customFields, fakeRequest, activeConfiguration, format.value,
         preserveCustomFields ? controls.customFieldControls : null);
-      const formatRule = configuration.formatRules?.[format.value];
+      const formatRule = activeConfiguration.formatRules?.[format.value];
       const behavior = formatRule?.messageBehavior;
       const message = behavior === 'ebookMessage'
-        ? configuration.ebookMessage
-        : behavior === 'eaudiobookMessage' ? configuration.eaudiobookMessage : formatRule?.message;
+        ? activeConfiguration.ebookMessage
+        : behavior === 'eaudiobookMessage' ? activeConfiguration.eaudiobookMessage : formatRule?.message;
       formatNotice.replaceChildren();
       if (message) renderPatronText(formatNotice, message);
       formatNotice.hidden = !message;
-      if (submitButton) submitButton.disabled = branches.length === 0;
+      format.disabled = formatEligibility.eligibleFormats.length === 0 || formatEligibility.needsRefresh;
+      publicationRecoveryHelp.hidden = publicationField.hidden || !publicationNeedsReselection;
+      updateSubmitAvailability();
     };
-    listen(format, 'change', () => updateFormat(true));
+    listen(publication, 'change', () => {
+      if (publication.value !== '__publication_reselect__') {
+        publicationNeedsReselection = false;
+        stalePublicationValue = null;
+        publicationRecoveryHelp.textContent = '';
+        publicationRecoveryHelp.hidden = true;
+        updateSubmitAvailability();
+      }
+    });
+    listen(format, 'change', () => {
+      updateFormat(true);
+      if (!formatEligibility.needsRefresh && formatEligibility.eligibleFormats.includes(format.value)) {
+        setStaffSuggestionStatus('Eligible format selected. Complete the configured fields, then create the suggestion.');
+      }
+    });
+    const stageTokenForRefresh = stageToken;
+    listen(refreshFormats, 'click', () => refreshEligibleFormats(stageTokenForRefresh));
+    formatEligibility.renderStale = () => {
+      renderFormatChoices(format.value || formatEligibility.staleFormatCode, false);
+      updateFormat(true);
+    };
 
     const patronCard = element('section', { className: 'staff-patron-card', 'aria-labelledby': 'staff-patron-card-title' }, [
       element('h3', { id: 'staff-patron-card-title' }, [researchRecordValue(patron.name || 'Verified patron', context.research, 'patron')]),
@@ -434,14 +631,14 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       element('p', { text: context.searchLibraryLimited
         ? 'Patron search is limited to this servicing library.'
         : 'Patrons from other participating home libraries may be serviced here.' }),
-      element('p', { text: `Current Polaris pickup preference: ${context.currentPreferredPickupBranchName ||
-        (context.currentPreferredPickupState === 'invalid' ? 'Invalid preference; choose an eligible location' :
-          context.currentPreferredPickupBranchId ? `Branch ${context.currentPreferredPickupBranchId} (not currently eligible)` : 'Not recorded')}` }),
+      pickupPreferenceText,
       element('p', { text: context.email || 'No patron email is recorded.' })
     ]);
     const fields = element('div', { className: 'edit-form staff-suggestion-fields' }, [
       patronCard,
       labeledInput('Material format', format, 'wide'),
+      formatEmpty,
+      refreshFormats,
       formatNotice,
       titleField,
       authorField,
@@ -473,8 +670,9 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       ...suggestion,
       stage: 'create',
       result,
-      configuration,
+      configuration: activeConfiguration,
       controls,
+      formatEligibility,
       verifiedBibId: null,
       patronIneligible: false,
       submitting: false
@@ -484,12 +682,16 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       branches.length ? 'Patron verified. Complete the configured fields, then create the suggestion.'
         : 'Pickup locations are unavailable; the suggestion cannot be created.',
       branches.length ? '' : 'error');
-    if (availableFormats.length === 0) {
-      setStaffSuggestionStatus('No enabled material formats are available for this library.', 'error');
+    if (formatEligibility.eligibleFormats.length === 0) {
+      setStaffSuggestionStatus(formatEmpty.textContent, 'error');
       submitButton.disabled = true;
     }
     bindDraft();
-    title.focus();
+    if (formatEligibility.eligibleFormats.length === 0) {
+      refreshFormats.focus();
+    } else {
+      title.focus();
+    }
   }
 
   async function submitStaffSuggestion(event) {
@@ -506,6 +708,18 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
     if (!isCurrent(current) || current.stage !== 'create' || current.submitting || current.outcomeUnconfirmed || current.patronIneligible ||
         !drafts.admit({ consumes: draft }).allowed || !dom.staffSuggestionForm.reportValidity()) return;
     const owner = actor, controls = current.controls, result = current.result;
+    const formatEligibility = current.formatEligibility;
+    if (formatEligibility.needsRefresh || !formatEligibility.eligibleFormats.includes(controls.format.value)) {
+      formatEligibility.refreshFormats.hidden = false;
+      setStaffSuggestionStatus(
+        'Refresh eligible formats and choose a currently available option. Your draft values are retained.', 'error');
+      return;
+    }
+    if (controls.publicationNeedsReselection() && !controls.publicationField.hidden) {
+      setStaffSuggestionStatus(controls.publicationRecoveryHelp.textContent, 'error');
+      controls.publication.focus();
+      return;
+    }
     const body = Object.freeze({
       libraryOrgId: Number(current.scopeId),
       barcode: result.patron.patron.barcode,
@@ -555,6 +769,18 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       const pickupChanged = error.response?.code === 'request_not_created_pickup_changed' && error.response?.pickupPreferenceChanged === true;
       const uncertain = !pickupChanged && (error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error));
       attempt.outcome = pickupChanged ? 'pickup_changed' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
+      if (pickupChanged) {
+        const selectedPickupId = Number(attempt.body.preferredPickupBranchId);
+        const selectedPickup = current.result?.patron?.pickupBranches?.find(branch => Number(branch.id) === selectedPickupId);
+        if (Number.isSafeInteger(selectedPickupId) && selectedPickup && isCurrent(current)) {
+          const pickupName = selectedPickup.label || `Branch ${selectedPickupId}`;
+          current.result.patron.currentPreferredPickupBranchId = selectedPickupId;
+          current.result.patron.currentPreferredPickupBranchName = pickupName;
+          controls.pickupPreferenceText.textContent = `Current Polaris pickup preference: ${pickupName}`;
+          controls.pickupUpdateNotice.textContent = `Polaris confirmed the preferred pickup location changed to ${pickupName}. This suggestion was not created. Refreshing settings and submitting a corrected request will not repeat or reverse that pickup change.`;
+          controls.pickupUpdateNotice.hidden = false;
+        }
+      }
       if (pickupChanged) onReceipt(`${error.response?.message || error.message || "The suggestion was not created, but the patron's preferred pickup location was changed successfully."} Sign in again to restore staff access before continuing.`, owner, attempt);
       if (uncertain) onReceipt('Suggestion creation is unconfirmed. Sign in again and review the servicing library queue before another submission.', owner, attempt);
       if (!isCurrent(current) || error.status === 401) return;
@@ -571,6 +797,26 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
         for (const control of dom.staffSuggestionBody.querySelectorAll('.staff-suggestion-fields select, .staff-suggestion-fields button')) {
           control.disabled = true;
         }
+      }
+      const reasonCode = error.response?.reasonCode;
+      const configurationChanged = ['submission_configuration_changed', 'material_format_changed', 'material_format_ineligible']
+        .includes(error.response?.code) ||
+        ['submission_configuration_changed', 'material_format_changed', 'material_format_ineligible'].includes(reasonCode);
+      if (configurationChanged) {
+        current.formatEligibility.staleFormatCode = controls.format.value;
+        current.formatEligibility.needsRefresh = true;
+        current.formatEligibility.renderStale();
+        current.formatEligibility.refreshFormats.hidden = false;
+        current.formatEligibility.refreshFormats.disabled = false;
+        const partialPickup = pickupChanged && reasonCode === 'submission_configuration_changed';
+        const message = partialPickup
+          ? 'The pickup preference changed successfully. This suggestion was not created because its submission settings changed. Refresh eligible formats and review the retained draft before creating a corrected suggestion.'
+          : 'The format configuration changed while this suggestion was being submitted. Refresh eligible formats and reselect if needed; your draft values are retained.';
+        setStaffSuggestionStatus(message, 'error');
+        dom.staffSuggestionForm.inert = false;
+        current.formatEligibility.refreshFormats.focus();
+        if (pickupChanged) clearReceipt(attempt);
+        return;
       }
       dom.staffSuggestionBody.querySelector('.staff-suggestion-conflict')?.remove();
       const duplicateId = error.response?.duplicate?.id;
@@ -592,7 +838,10 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       attempt.pending = false; if (activeAttempt === attempt) activeAttempt = null;
       if (isCurrent(current)) {
         current.submitting = false; dom.staffSuggestionForm.inert = current.outcomeUnconfirmed === true;
-        if (submit?.isConnected) submit.disabled = current.outcomeUnconfirmed === true || current.patronIneligible === true;
+        const currentFormatEligibility = current.formatEligibility;
+        if (submit?.isConnected) submit.disabled = current.outcomeUnconfirmed === true || current.patronIneligible === true ||
+          currentFormatEligibility.needsRefresh || currentFormatEligibility.eligibleFormats.length === 0 || controls.pickup.options.length === 0 ||
+          !currentFormatEligibility.eligibleFormats.includes(controls.format.value);
         if (controls.changeButton?.isConnected) controls.changeButton.disabled = current.outcomeUnconfirmed === true;
         if (current.patronIneligible && controls.changeButton?.isConnected) controls.changeButton.focus();
       }

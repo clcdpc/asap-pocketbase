@@ -207,11 +207,14 @@ public sealed class StaffSuggestionService(
         catch (PatronFlowException exception)
         {
             var response = exception.Response;
+            var reasonCode = exception.InnerException is PatronFlowException { Response: { } cause } &&
+                cause.GetType().GetProperty("code")?.GetValue(cause) is string causeCode
+                    ? causeCode
+                    : null;
             if (response is PatronSuggestionPickupChangedFailure partialFailure &&
-                exception.InnerException is PatronFlowException { Response: { } cause } &&
-                cause.GetType().GetProperty("code")?.GetValue(cause) is "patron_ineligible")
+                (reasonCode is "patron_ineligible" or "submission_configuration_changed"))
             {
-                response = partialFailure with { ReasonCode = "patron_ineligible" };
+                response = partialFailure with { ReasonCode = reasonCode };
             }
 
             throw new StaffSuggestionException(

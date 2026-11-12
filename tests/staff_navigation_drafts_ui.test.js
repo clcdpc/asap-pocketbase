@@ -170,7 +170,7 @@ async function fixture(route, journey, options = {}) {
       if (pathname.endsWith(`/additional-copies/${copyRequest.id}`)) return response(200, copyRequest);
       if (pathname.endsWith('/config') || pathname.endsWith('/suggestion-configuration')) {
         const configuration = { availableFormats: ['book'], formatLabels: { book: 'Book' },
-          publicationOptions: ['published'], additionalFieldDefinitions: [], formatRules: {} };
+          publicationOptions: ['published'], additionalFieldDefinitions: [], formatRules: { book: { messageBehavior: 'none' } } };
         return response(200, pathname.endsWith('/config') ? configuration :
           { libraryOrgId: Number(parsed.searchParams.get('libraryOrgId')), configuration });
       }

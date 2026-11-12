@@ -5,6 +5,7 @@ using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Testing;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -13,6 +14,108 @@ namespace Asap.Tests.Integration;
 
 public sealed partial class PatronJourneyTests
 {
+    [TestMethod]
+    [TestCategory(TestCategories.Browser)]
+    public async Task StaffSuggestionRecoveryBrowserKeepsPartialPickupStateAndRequiresRefresh()
+    {
+        const string barcode = "20000000001993";
+        var title = $"Suggestion recovery browser {Guid.NewGuid():N}";
+        var raceFormatCode = $"browser-race-{Guid.NewGuid():N}";
+        var correctedFormatCode = $"browser-current-{Guid.NewGuid():N}";
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var provider = new ControllablePickupPatronProvider();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        long raceFormatId;
+        long correctedFormatId;
+        await using (var setup = await contextFactory.CreateDbContextAsync())
+        {
+            var raceFormat = new MaterialFormat
+            {
+                OwnerOrganizationId = 2,
+                Code = raceFormatCode,
+                Label = "Temporary eligible format",
+                SortOrder = 990,
+                IsEnabled = true,
+                MessageBehavior = "none",
+                TitleMode = "required",
+                AuthorMode = "optional",
+                IdentifierMode = "optional",
+                PublicationMode = "optional",
+                CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
+            };
+            var correctedFormat = new MaterialFormat
+            {
+                OwnerOrganizationId = 2,
+                Code = correctedFormatCode,
+                Label = "Current eligible format",
+                SortOrder = 991,
+                IsEnabled = true,
+                MessageBehavior = "none",
+                TitleMode = "required",
+                AuthorMode = "required",
+                AuthorLabel = "Refreshed format author",
+                IdentifierMode = "optional",
+                PublicationMode = "optional",
+                CreatedUtc = timeProvider.GetUtcNow().UtcDateTime,
+                UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
+            };
+            setup.MaterialFormats.AddRange(raceFormat, correctedFormat);
+            await setup.SaveChangesAsync();
+            raceFormatId = raceFormat.Id;
+            correctedFormatId = correctedFormat.Id;
+        }
+
+        provider.AfterUpdate = () =>
+        {
+            using var connection = new SqlConnection(databaseConnectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE [asap].[MaterialFormat] SET [MessageBehavior] = N'message' WHERE [Id] = @id;";
+            command.Parameters.AddWithValue("@id", raceFormatId);
+            Assert.AreEqual(1, command.ExecuteNonQuery(), "The selected format becomes referral-only after pickup succeeds.");
+        };
+
+        await using var scopedFactory = factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IPatronProvider>();
+            services.AddSingleton<IPatronProvider>(provider);
+        }));
+        scopedFactory.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
+        using var client = scopedFactory.CreateClient();
+        var root = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
+        var artifacts = Path.Combine(root, ".artifacts", "browser", $"staff-suggestion-recovery-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(artifacts);
+        try
+        {
+            var (exitCode, stdout, stderr) = await RunBrowserScriptAsync(root, "staff-suggestion-recovery.cjs",
+                client.BaseAddress!.GetLeftPart(UriPartial.Authority), artifacts,
+                actor.Id.ToString(CultureInfo.InvariantCulture), actor.EntraTenantId.ToString(), actor.AuthenticationEmail,
+                "2", barcode, raceFormatCode, correctedFormatCode, title);
+            Assert.AreEqual(0, exitCode, $"{artifacts}{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
+
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            var created = await verify.TitleRequests.AsNoTracking()
+                .SingleAsync(item => item.LibraryOrganizationId == 2 && item.Barcode == barcode && item.Title == title);
+            Assert.AreEqual(correctedFormatId, created.MaterialFormatId);
+            Assert.IsNull(created.Publication, "The explicit optional publication clear is persisted as null.");
+            Assert.AreEqual(102, created.PreferredPickupBranchId);
+            Assert.AreEqual(1, provider.UpdateCount, "The corrected request reuses the confirmed pickup change without sending another pickup update.");
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync("""
+                DELETE FROM [asap].[TitleRequestEvent]
+                WHERE [TitleRequestId] IN (SELECT [Id] FROM [asap].[TitleRequest] WHERE [Barcode] = @barcode);
+                DELETE FROM [asap].[TitleRequest] WHERE [Barcode] = @barcode;
+                DELETE FROM [asap].[PickupPreferenceOperation] WHERE [Barcode] = @barcode;
+                DELETE FROM [asap].[FormatAutoClaimRule] WHERE [MaterialFormatId] IN (@raceFormatId, @correctedFormatId);
+                DELETE FROM [asap].[MaterialFormatCustomFieldRule] WHERE [MaterialFormatId] IN (@raceFormatId, @correctedFormatId);
+                DELETE FROM [asap].[MaterialFormat] WHERE [Id] IN (@raceFormatId, @correctedFormatId);
+                """, ("@barcode", barcode), ("@raceFormatId", raceFormatId), ("@correctedFormatId", correctedFormatId));
+        }
+    }
+
     [TestMethod]
     [TestCategory(TestCategories.Browser)]
     public async Task StaffQueueAndDetailQuickCreateBrowserUsesFreshContextAndExplicitAllScope()

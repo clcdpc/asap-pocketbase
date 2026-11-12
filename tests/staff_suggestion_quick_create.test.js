@@ -1,6 +1,15 @@
 const assert = require('node:assert/strict');
 const { fixture } = require('./helpers/staff-controller.cjs');
 const actor = { id: '20', tenantId: 'a', authenticationEmail: 'a@example.org', role: 'super_admin', organizationId: 1 };
+const quickCreateConfiguration = {
+  availableFormats: ['ebook', 'book', 'eaudiobook'],
+  formatLabels: { ebook: 'eBook', book: 'Book', eaudiobook: 'Library eAudiobook' },
+  formatRules: {
+    ebook: { messageBehavior: 'ebookMessage' },
+    book: { messageBehavior: 'none' },
+    eaudiobook: { messageBehavior: 'none' }
+  }
+};
 const settle = async () => { for (let index = 0; index < 6; index++) await new Promise(resolve => setImmediate(resolve)); };
 const verified = barcode => ({ status: 'verified', libraryOrgId: 2, libraryOrgName: 'Servicing library', searchLibraryLimited: false,
   patron: { patron: { barcode, name: 'Current patron', patronOrganizationId: 301, homeLibraryOrganizationId: 3,
@@ -66,7 +75,7 @@ const verified = barcode => ({ status: 'verified', libraryOrgId: 2, libraryOrgNa
         request: async (path, options) => {
           calls.push({ path, body: options?.body });
           return path.includes('patron-lookup') ? verified('CURRENT-BARCODE') :
-            { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+            { libraryOrgId: 2, configuration: quickCreateConfiguration };
         } });
       await controller.open(null, { barcode: 'OLD-BARCODE', email: 'old@example.org', preferredPickupBranchId: 500,
         focusReturn: { isCurrent: () => true, target: () => target } });
@@ -83,6 +92,10 @@ const verified = barcode => ({ status: 'verified', libraryOrgId: 2, libraryOrgNa
       for (const text of ['CURRENT-BARCODE', 'current@example.org', 'Registered branch (301)', 'Home library (3)',
         'Servicing library (2)', 'other participating home libraries', 'Invalid preference']) assert.ok(card.textContent.includes(text), text);
       assert.ok(!card.textContent.includes('old@example.org'));
+      const format = get('[aria-label="Material format"]');
+      assert.deepEqual([...format.options].map(option => option.value), ['', 'book', 'eaudiobook']);
+      assert.equal(format.options[2].textContent, 'Library eAudiobook');
+      assert.equal(format.value, 'book', 'Quick-create chooses the first eligible configured format.');
       const pickup = get('[aria-label="Preferred pickup location"]');
       assert.equal(pickup.value, '', 'An invalid live preference cannot silently preselect another branch');
       assert.equal(pickup.required, true);
@@ -110,7 +123,7 @@ const verified = barcode => ({ status: 'verified', libraryOrgId: 2, libraryOrgNa
       request: async (path, options) => {
         calls.push(path);
         if (path.includes('patron-lookup')) return new Promise(resolve => pending.set(options.body.barcode, resolve));
-        return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+        return { libraryOrgId: 2, configuration: quickCreateConfiguration };
       } });
     await controller.open(null, { barcode: 'PATRON-A' });
     await controller.open(null, { barcode: 'PATRON-B' });
@@ -119,6 +132,32 @@ const verified = barcode => ({ status: 'verified', libraryOrgId: 2, libraryOrgNa
     assert.ok(get('.staff-patron-card').textContent.includes('PATRON-B'));
     assert.ok(!get('.staff-patron-card').textContent.includes('PATRON-A'));
     assert.equal(calls.filter(path => path.includes('suggestion-configuration')).length, 1);
+    controller.dispose();
+  });
+  await fixture(async ({ load, get }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createSuggestionController } = await load('suggestion-controller');
+    const identity = createSessionIdentity(); identity.accept(actor);
+    let configuration = {
+      availableFormats: ['ebook'],
+      formatLabels: { ebook: 'eBook' },
+      formatRules: { ebook: { messageBehavior: 'ebookMessage' } }
+    };
+    const controller = createSuggestionController({ root: get('#staff-suggestion-dialog'), trigger: get('#new-suggestion'),
+      sessionIdentity: identity, polarisLookup: { close() {}, invalidate() {} }, announce() {},
+      getScope: () => '2', getLibraries: () => [{ id: 2, name: 'Servicing library' }],
+      beforeOpen: () => true, beforeClose: () => true, onReceipt() {}, clearReceipt() {},
+      request: async path => path.includes('patron-lookup') ? verified('REFERRAL-ONLY')
+        : { libraryOrgId: 2, configuration } });
+    await controller.open(null, { barcode: 'REFERRAL-ONLY' });
+    await settle();
+    const format = get('[aria-label="Material format"]');
+    assert.equal(format.disabled, true);
+    assert.equal(format.options.length, 1, 'No referral-only format is offered as a staff request choice.');
+    assert.match(get('#staff-suggestion-format-empty').textContent, /referral route/);
+    assert.equal(get('#staff-suggestion-actions button[type="submit"]').disabled, true);
+    assert.equal([...get('#staff-suggestion-body').querySelectorAll('button')]
+      .some(button => button.textContent.includes('Refresh eligible formats') && !button.hidden), true);
     controller.dispose();
   });
   console.log('Specific queue scope, explicit All scope, authoritative barcode-only quick-create, context, focus and stale ownership passed');

@@ -97,7 +97,7 @@ public sealed partial class PatronSuggestionService
         ValidatedSuggestion currentSuggestion;
         try
         {
-            currentSuggestion = Validate(
+            currentSuggestion = ValidateStaffSubmission(
                 new PatronSuggestionInput(
                     input.Format,
                     input.Title,
@@ -108,7 +108,6 @@ public sealed partial class PatronSuggestionService
                     input.Autohold,
                     input.CustomFields),
                 currentConfiguration,
-                allowInformationalMessage: true,
                 forcedAutoHold: input.Autohold ?? true,
                 exactPublicationDate: input.ExactPublicationDate,
                 notes: input.Notes,

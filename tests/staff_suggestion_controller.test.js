@@ -19,7 +19,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
         request: async (path, init = {}) => {
           if (path.endsWith('/patron-lookup')) return { status: 'verified', libraryOrgId: 2, patron: {
             patron: { barcode: '20000000000001', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101 } };
-          if (path.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+          if (path.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'], formatRules: { book: { messageBehavior: 'none' } } } };
           posted.push(init); return new Promise((resolve, fail) => { complete = resolve; reject = fail; });
         } };
       const first = createSuggestionController(options); await first.open();
@@ -92,7 +92,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
             pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101
           } };
           if (path.includes('/suggestion-configuration')) {
-            return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+            return { libraryOrgId: 2, configuration: { availableFormats: ['book'], formatRules: { book: { messageBehavior: 'none' } } } };
           }
           posted.push(init);
           return new Promise(resolve => { complete = resolve; });
@@ -145,7 +145,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       beforeOpen: () => true, beforeClose: () => true, openCreatedTitle() {}, openExistingTitle() {}, onReceipt() {}, clearReceipt() {},
       request: async path => path.endsWith('/patron-lookup')
         ? { status: 'verified', libraryOrgId: 2, patron: { patron: { barcode: '20000000000001', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101 } }
-        : { libraryOrgId: 2, configuration: { availableFormats: ['book'] } } });
+        : { libraryOrgId: 2, configuration: { availableFormats: ['book'], formatRules: { book: { messageBehavior: 'none' } } } } });
     await controller.open();
     root.querySelector('select').value = '2'; root.querySelector('select').dispatchEvent(new dom.window.Event('change'));
     root.querySelector('input[type="search"]').value = 'Patron';
@@ -199,7 +199,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
           if (target.endsWith('/patron-lookup')) return { status: 'verified', libraryOrgId: 2, patron: {
             patron: { barcode: '20000000000001', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }],
             currentPreferredPickupBranchId: 101 } };
-          if (target.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+          if (target.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'], formatRules: { book: { messageBehavior: 'none' } } } };
           posted.push(init.body);
           return { id: '9223372036854775807', libraryOrgId: 2, notificationStatus };
         } });
@@ -248,7 +248,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
         polarisLookup: { close() {}, invalidate() {} }, announce() {}, beforeOpen: () => true, beforeClose: () => true,
         onReceipt() {}, clearReceipt() {}, request: async (path, init = {}) => {
           calls.push({ path, body: init.body });
-          if (path.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'] } };
+          if (path.includes('/suggestion-configuration')) return { libraryOrgId: 2, configuration: { availableFormats: ['book'], formatRules: { book: { messageBehavior: 'none' } } } };
           if (path.endsWith('/suggestions')) throw denied();
           if (outcome.startsWith('submit')) return { status: 'verified', libraryOrgId: 2, patron: {
             patron: { barcode: 'verified-card', name: 'Patron' }, pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101 } };
@@ -311,5 +311,175 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
       } finally { controller.dispose(); }
     });
   }
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createSuggestionController } = await load('suggestion-controller');
+    const session = createSessionIdentity(); session.accept(actorA);
+    const root = get('#staff-suggestion-dialog');
+    let configurationReads = 0, submissions = 0, submittedBody = null, lookupContext = null;
+    const currentConfiguration = {
+      availableFormats: ['book'],
+      formatLabels: { book: 'Book' },
+      formatRules: { book: { messageBehavior: 'none' } },
+      publicationOptions: ['Coming soon']
+    };
+    const controller = createSuggestionController({ root, trigger: get('#new-suggestion'), sessionIdentity: session,
+      getLibraries: () => [{ id: '2', name: 'A' }], getScope: () => '2',
+      polarisLookup: { close() {}, invalidate() {}, open: context => { lookupContext = context; } }, announce() {}, beforeOpen: () => true, beforeClose: () => true,
+      openCreatedTitle: async () => null, openExistingTitle() {}, onReceipt() {}, clearReceipt() {},
+      request: async (path, init = {}) => {
+        if (path.endsWith('/patron-lookup')) return { status: 'verified', libraryOrgId: 2, patron: {
+          patron: { barcode: '20000000000001', name: 'Patron' },
+          pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101
+        } };
+        if (path.includes('/suggestion-configuration')) {
+          configurationReads += 1;
+          if (configurationReads === 1) return { libraryOrgId: 2, configuration: {
+            availableFormats: ['book'], formatLabels: { book: 'Book' },
+            formatRules: { book: { messageBehavior: 'message' } }, publicationOptions: ['Coming soon']
+          } };
+          if (configurationReads === 2) throw Object.assign(new Error('Temporary configuration failure.'), {
+            status: 503, response: { message: 'Current settings could not be refreshed. Try again.' }
+          });
+          return { libraryOrgId: 2, configuration: currentConfiguration };
+        }
+        submissions += 1;
+        submittedBody = init.body;
+        return { id: '9223372036854775807', libraryOrgId: 2, notificationStatus: 'not_requested' };
+      } });
+    try {
+      await controller.open();
+      const search = root.querySelector('input[type="search"]'); search.value = 'Patron';
+      get('#staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+      await flush(); await flush();
+      const format = root.querySelector('[aria-label="Material format"]');
+      const refresh = [...root.querySelectorAll('button')].find(button => button.textContent.includes('Refresh eligible formats'));
+      assert.ok(format.disabled, 'No eligible format leaves the format control disabled.');
+      assert.ok(refresh && !refresh.hidden, 'Zero eligible formats expose an enabled refresh action.');
+      assert.match(root.querySelector('#staff-suggestion-format-empty').textContent, /referral route|enable a format/i);
+      assert.equal(document.activeElement, refresh, 'Focus moves to the recovery action when no format can be selected.');
+
+      root.querySelector('button[title="Search and select a verified Polaris record. Manual text remains unverified."]').click();
+      lookupContext.apply({ bibId: 9001, title: 'Verified catalog title', author: 'Verified catalog author',
+        identifier: '9780000000001', publication: '', format: 'book' });
+      assert.match(root.querySelector('.staff-suggestion-fields').textContent, /Verified Polaris BIB 9001 selected/);
+
+      refresh.click(); await flush(); await flush();
+      assert.equal(refresh.disabled, false, 'A failed refresh remains retryable.');
+      assert.match(get('#staff-suggestion-status').textContent, /settings could not be refreshed.*Try again/i);
+      assert.equal(submissions, 0);
+      refresh.click(); await flush(); await flush();
+      assert.equal(format.disabled, false, 'A successful retry enables the newly eligible format.');
+      assert.equal(format.value, '', 'Refresh does not silently select a new format.');
+      assert.equal(submissions, 0);
+      format.value = 'book'; format.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      const title = root.querySelector('.staff-suggestion-fields input[maxlength="500"]'); title.value = 'Corrected request';
+      get('#staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+      await flush(); await flush();
+      assert.equal(submissions, 1, 'The corrected deliberate submit is sent once.');
+      assert.equal(submittedBody.verifiedBibId, 9001, 'A verified BIB selection survives refresh.');
+      assert.equal(submittedBody.title, 'Corrected request', 'The edited title draft remains intact through refresh.');
+      assert.equal(controller.isOpen(), false);
+    } finally { controller.dispose(); }
+  });
+
+  await fixture(async ({ load, get, dom }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createSuggestionController } = await load('suggestion-controller');
+    const session = createSessionIdentity(); session.accept(actorA);
+    const root = get('#staff-suggestion-dialog');
+    const scope = { value: '2' };
+    const delayed = new Map();
+    const reads = new Map();
+    let rejectNextSuggestion = false;
+    const config = (libraryId, format, label) => ({ libraryOrgId: libraryId, configuration: {
+      availableFormats: [format], formatLabels: { [format]: label },
+      formatRules: { [format]: { messageBehavior: 'none' } }, publicationOptions: ['Coming soon']
+    } });
+    const newDeferred = key => {
+      let resolve;
+      const promise = new Promise(complete => { resolve = complete; });
+      delayed.set(key, { promise, resolve });
+      return delayed.get(key);
+    };
+    const request = async (path, init = {}) => {
+      if (path.endsWith('/patron-lookup')) {
+        const libraryId = init.body.libraryOrgId;
+        return { status: 'verified', libraryOrgId: libraryId, patron: {
+          patron: { barcode: `card-${libraryId}`, name: 'Patron' },
+          pickupBranches: [{ id: 101, label: 'Main' }], currentPreferredPickupBranchId: 101
+        } };
+      }
+      if (path.includes('/suggestion-configuration')) {
+        const libraryId = Number(new URL(path, 'https://localhost').searchParams.get('libraryOrgId'));
+        const count = (reads.get(libraryId) || 0) + 1; reads.set(libraryId, count);
+        if (libraryId === 2 && count === 2) return newDeferred('library-2-refresh').promise;
+        if (libraryId === 3 && count === 2) return newDeferred('library-3-refresh').promise;
+        if (libraryId === 2 && count === 1) return { libraryOrgId: 2, configuration: {
+          availableFormats: [], formatLabels: {}, formatRules: {}, publicationOptions: []
+        } };
+        if (libraryId === 2) return config(2, 'book', 'Library Two Book');
+        if (session.actor()?.id === actorB.id) return config(3, 'comic', 'Identity B Comic');
+        return config(3, 'ebook', 'Library Three eBook');
+      }
+      if (path.endsWith('/suggestions')) {
+        if (rejectNextSuggestion) {
+          rejectNextSuggestion = false;
+          throw Object.assign(new Error('Settings changed.'), { status: 409,
+            response: { code: 'submission_configuration_changed', message: 'Settings changed.' } });
+        }
+        return { id: '9223372036854775807', libraryOrgId: 3, notificationStatus: 'not_requested' };
+      }
+      throw new Error(`Unexpected request ${path}`);
+    };
+    const makeController = () => createSuggestionController({ root, trigger: get('#new-suggestion'), sessionIdentity: session,
+      getLibraries: () => [{ id: '2', name: 'Two' }, { id: '3', name: 'Three' }], getScope: () => scope.value,
+      polarisLookup: { close() {}, invalidate() {} }, announce() {}, beforeOpen: () => true, beforeClose: () => true,
+      openCreatedTitle: async () => null, openExistingTitle() {}, onReceipt() {}, clearReceipt() {}, request });
+    const verify = async controller => {
+      const search = root.querySelector('input[type="search"]'); search.value = 'Patron';
+      get('#staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+      await flush(); await flush();
+      return root.querySelector('[aria-label="Material format"]');
+    };
+    let controller = makeController();
+    try {
+      await controller.open(); await verify(controller);
+      const refreshLibraryTwo = [...root.querySelectorAll('button')].find(button => button.textContent.includes('Refresh eligible formats'));
+      refreshLibraryTwo.click();
+      await flush();
+      assert.ok(delayed.has('library-2-refresh'), 'The first library refresh is delayed.');
+
+      await controller.close({ force: true, focusButton: false });
+      scope.value = '3';
+      await controller.open();
+      const libraryThreeFormat = await verify(controller);
+      assert.deepEqual([...libraryThreeFormat.options].map(option => option.value), ['', 'ebook']);
+      delayed.get('library-2-refresh').resolve(config(2, 'audio', 'Retired Library Two Audio'));
+      await flush(); await flush();
+      assert.match(root.querySelector('.staff-patron-card').textContent, /card-3/);
+      assert.deepEqual([...root.querySelector('[aria-label="Material format"]').options].map(option => option.value), ['', 'ebook'],
+        'A retired library response cannot replace the current library form.');
+
+      rejectNextSuggestion = true;
+      const title = root.querySelector('.staff-suggestion-fields input[maxlength="500"]'); title.value = 'Draft for library three';
+      get('#staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+      await flush(); await flush();
+      const refreshLibraryThree = [...root.querySelectorAll('button')].find(button => button.textContent.includes('Refresh eligible formats'));
+      refreshLibraryThree.click(); await flush();
+      assert.ok(delayed.has('library-3-refresh'), 'The second scoped refresh is delayed.');
+
+      controller.dispose();
+      session.clear(); session.accept(actorB);
+      controller = makeController();
+      await controller.open();
+      const identityFormat = await verify(controller);
+      assert.deepEqual([...identityFormat.options].map(option => option.value), ['', 'comic']);
+      delayed.get('library-3-refresh').resolve(config(3, 'audio', 'Retired Identity A Audio'));
+      await flush(); await flush();
+      assert.deepEqual([...root.querySelector('[aria-label="Material format"]').options].map(option => option.value), ['', 'comic'],
+        'A retired identity response cannot replace the current staff form.');
+    } finally { controller.dispose(); }
+  });
   console.log('Suggestion scope, notification, actor safety and accessible patron-code rejections passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

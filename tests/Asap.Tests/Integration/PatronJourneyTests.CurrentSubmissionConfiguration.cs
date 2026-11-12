@@ -49,6 +49,8 @@ public sealed partial class PatronJourneyTests
     [DataRow("hidden-author")]
     [DataRow("hidden-identifier")]
     [DataRow("hidden-publication")]
+    [DataRow("informational-format")]
+    [DataRow("post-pickup-informational")]
     public Task StaffPickupIntentUsesCompleteCurrentSettingsWithoutBroadeningPublicPermissions(string change) =>
         SuggestionSettingsRaceAsync(change, pickupChanges: true, staff: true);
 
@@ -62,6 +64,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("hidden-author")]
     [DataRow("hidden-identifier")]
     [DataRow("hidden-publication")]
+    [DataRow("informational-format")]
     [DataRow("harmless-label")]
     [DataRow("harmless-scalar")]
     [DataRow("autohold-opt-out")]
@@ -231,6 +234,13 @@ public sealed partial class PatronJourneyTests
                         { [key] = new { mode = "required", labelOverride = (string?)null } } }
                     };
                 }
+                else if (change == "informational-format")
+                {
+                    changes["formatRules"] = new[]
+                    {
+                        new { code = "book", messageBehavior = "message", customFields = new Dictionary<string, object>() }
+                    };
+                }
                 else
                 {
                     changes["patron"] = new { loginNote = "Harmless text changed during readiness" };
@@ -239,16 +249,31 @@ public sealed partial class PatronJourneyTests
                     provider.OrganizationId.ToString(), changes);
                 Assert.AreEqual("saved", saved.RootElement.GetProperty("code").GetString());
             }
-            if (change == "post-pickup-option")
+            if (change is "post-pickup-option" or "post-pickup-informational")
             {
                 provider.AfterEffect = async token =>
                 {
                     token.ThrowIfCancellationRequested();
                     using var current = await ReadSettingsDocumentAsync(client, provider.OrganizationId.ToString());
-                    var fields = JsonNode.Parse(current.RootElement.GetProperty("stored").GetProperty("customFields").GetRawText())!.AsArray();
-                    fields.Single(item => item!["key"]!.GetValue<string>() == key)!["options"]![0]!["enabled"] = false;
+                    Dictionary<string, object?> changes;
+                    if (change == "post-pickup-option")
+                    {
+                        var fields = JsonNode.Parse(current.RootElement.GetProperty("stored").GetProperty("customFields").GetRawText())!.AsArray();
+                        fields.Single(item => item!["key"]!.GetValue<string>() == key)!["options"]![0]!["enabled"] = false;
+                        changes = new Dictionary<string, object?> { ["customFields"] = fields };
+                    }
+                    else
+                    {
+                        changes = new Dictionary<string, object?>
+                        {
+                            ["formatRules"] = new[]
+                            {
+                                new { code = "book", messageBehavior = "message", customFields = new Dictionary<string, object>() }
+                            }
+                        };
+                    }
                     using var saved = await SaveSettingsDocumentAsync(client, current.RootElement,
-                        provider.OrganizationId.ToString(), new Dictionary<string, object?> { ["customFields"] = fields });
+                        provider.OrganizationId.ToString(), changes);
                     Assert.AreEqual("saved", saved.RootElement.GetProperty("code").GetString());
                 };
             }
@@ -273,9 +298,9 @@ public sealed partial class PatronJourneyTests
             {
                 var failure = await Assert.ThrowsAsync<PatronFlowException>(() => submission);
                 Assert.AreEqual(409, failure.StatusCode);
-                Assert.AreEqual(change == "post-pickup-option" ? 1 : 0, provider.Writes,
+                Assert.AreEqual(change is "post-pickup-option" or "post-pickup-informational" ? 1 : 0, provider.Writes,
                     "Configuration invalid before intent must not dispatch an external pickup write.");
-                if (change == "post-pickup-option")
+                if (change is "post-pickup-option" or "post-pickup-informational")
                 {
                     Assert.IsInstanceOfType<PatronSuggestionPickupChangedFailure>(failure.Response);
                     var partial = (PatronSuggestionPickupChangedFailure)failure.Response;
@@ -300,7 +325,8 @@ public sealed partial class PatronJourneyTests
                 }
                 await AssertNoSuggestionSideEffectsAsync(contexts, provider, title, beforeOutbox, expectedRequestCount: 1);
             }
-            var expectedWrites = pickupChanges && (acceptedChange || change == "post-pickup-option") ? 1 : 0;
+            var expectedWrites = pickupChanges && (acceptedChange ||
+                change is "post-pickup-option" or "post-pickup-informational") ? 1 : 0;
             if (acceptedChange)
             {
                 Assert.AreEqual(expectedWrites, provider.Writes);
