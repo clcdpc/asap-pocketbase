@@ -207,9 +207,12 @@ async function until(predicate, message) {
         if (!created) assert.equal(body.autohold, false);
         if (rejectNextSuggestion) {
           rejectNextSuggestion = false;
+          currentPickupAtLookup = body.preferredPickupBranchId;
           return response(409, {
-            code: 'submission_configuration_changed',
-            message: 'The suggestion form changed while it was being submitted. Refresh the form and try again.'
+            code: 'request_not_created_pickup_changed',
+            pickupPreferenceChanged: true,
+            reasonCode: 'submission_configuration_changed',
+            message: 'The suggestion was not created, but the patron\'s preferred pickup location was changed successfully. Submission settings changed.'
           });
         }
         if (malformedNextSuggestion) {
@@ -319,18 +322,32 @@ async function until(predicate, message) {
       .find(control => control.getAttribute('aria-label')?.startsWith('Who is it for?'));
     assert.ok(audience, 'configured custom field must be visible');
     audience.value = 'adult';
+    const publication = [...document.querySelectorAll('.staff-suggestion-fields select')]
+      .find(control => control.labels?.[0]?.textContent.includes('Publication timing'));
+    publication.value = 'not_published';
+    const pickupChoice = document.querySelector('.staff-suggestion-fields select[aria-label="Preferred pickup location"]');
+    pickupChoice.value = '102';
+    const notes = document.querySelector('.staff-suggestion-fields textarea');
+    notes.value = 'Retain these staff notes';
     const titleBeforeRejection = title.value;
     rejectNextSuggestion = true;
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
-    await until(() => suggestionRequests === 1 && document.getElementById('staff-suggestion-status').textContent.includes('configuration changed'),
+    await until(() => suggestionRequests === 1 && document.getElementById('staff-suggestion-status').textContent.includes('settings changed'),
       'a stale format configuration must produce actionable guidance');
     assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, true,
       'A rejected stale format cannot be resubmitted by the error finalizer.');
+    assert.equal(document.activeElement.textContent.includes('Refresh eligible formats'), true,
+      'A confirmed pickup change moves focus to the recovery action.');
+    assert.match(document.getElementById('staff-suggestion-status').textContent, /pickup preference changed successfully/i);
+    assert.match(document.querySelector('#staff-suggestion-pickup-update-notice').textContent, /changed to North Branch/i);
     assert.equal(title.value, titleBeforeRejection, 'The title draft must survive configuration rejection.');
+    assert.equal(notes.value, 'Retain these staff notes', 'Staff notes survive configuration rejection.');
+    assert.equal(format.value, 'book', 'The stale format selection remains visible until current settings load.');
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await settle();
     assert.equal(suggestionRequests, 1, 'A stale format is not sent again before explicit refresh.');
     configuration.formatRules.book.messageBehavior = 'ebookMessage';
+    configuration.publicationOptions = ['published', 'coming_soon'];
     const formatRefresh = [...document.querySelectorAll('#staff-suggestion-body button')]
       .find(button => button.textContent.includes('Refresh eligible formats'));
     assert.ok(formatRefresh, 'Configuration rejection exposes a refresh action.');
@@ -341,23 +358,40 @@ async function until(predicate, message) {
     assert.equal(format.options[1].value, 'comic');
     assert.equal(format.options[2].value, 'eaudiobook');
     assert.equal(title.value, titleBeforeRejection, 'Refreshing formats must retain other draft values.');
+    assert.equal(notes.value, 'Retain these staff notes', 'Refreshing formats must retain staff notes.');
+    assert.equal(publication.value, '__publication_reselect__', 'A removed publication choice is not silently replaced.');
+    assert.match(publication.labels[0].querySelector('[role="status"]').textContent,
+      /not_published.*no longer available.*Not specified/i);
+    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, true,
+      'A removed publication choice requires an explicit current selection.');
     format.value = 'eaudiobook';
     format.dispatchEvent(new dom.window.Event('change'));
     document.querySelectorAll('.staff-suggestion-fields input[maxlength="500"]')[1].value = 'Staff author';
     const refreshedAudience = [...document.querySelectorAll('.staff-suggestion-fields select')]
       .find(control => control.getAttribute('aria-label')?.startsWith('Who is it for?'));
     assert.equal(refreshedAudience.value, 'adult', 'Visible custom-field draft values survive the refresh.');
+    publication.value = 'published';
+    publication.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
+      'Choosing a current publication option releases the re-selection guard.');
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await until(() => suggestionRequests === 2, 'double submit after reselection must make one new request');
     assert.equal(requests.filter(item => item.url.endsWith('/suggestions')).length, 2);
     assert.equal(JSON.parse(requests.filter(item => item.url.endsWith('/suggestions'))[1].options.body).format, 'eaudiobook',
       'The explicitly selected eligible digital format is submitted unchanged.');
+    const corrected = JSON.parse(requests.filter(item => item.url.endsWith('/suggestions'))[1].options.body);
+    assert.equal(corrected.currentPreferredPickupBranchIdAtLoad, 102,
+      'A corrected submission uses the pickup preference confirmed by the first partial-success response.');
+    assert.equal(corrected.preferredPickupBranchId, 102, 'The corrected submission does not reverse the pickup change.');
+    assert.equal(corrected.publication, 'published', 'The corrected request uses the explicitly selected current publication option.');
     await until(() => !document.getElementById('staff-suggestion-dialog').open, 'successful creation must close the dialog');
     assert.match(document.getElementById('app-status').textContent, /9007199254740993/);
     assert.match(document.getElementById('app-status').textContent, /No confirmation email was requested/);
     assert.equal(requests.filter(item => item.url.endsWith('/catalog-search')).length, 0);
     configuration.formatRules.book.messageBehavior = 'none';
+    configuration.publicationOptions = ['not_published', 'published'];
+    currentPickupAtLookup = 101;
 
     document.getElementById('new-suggestion').click();
     currentPickupAtLookup = null;

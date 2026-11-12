@@ -988,6 +988,116 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
+    public async Task StaffSuggestionConfigurationRejectionAfterPickupReturnsReasonAndDoesNotInsertRequest()
+    {
+        const string barcode = "20000000001992";
+        var title = $"Configuration changed after pickup {Guid.NewGuid():N}";
+        var formatCode = $"race-{Guid.NewGuid():N}";
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var provider = new ControllablePickupPatronProvider();
+        var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
+        long formatId;
+        await using (var setup = await contextFactory.CreateDbContextAsync())
+        {
+            var customFormat = new MaterialFormat
+            {
+                OwnerOrganizationId = 2,
+                Code = formatCode,
+                Label = "Temporary submission format",
+                SortOrder = 999,
+                IsEnabled = true,
+                MessageBehavior = "none",
+                TitleMode = "required",
+                AuthorMode = "optional",
+                IdentifierMode = "optional",
+                PublicationMode = "optional",
+                CreatedUtc = timeProvider!.GetUtcNow().UtcDateTime,
+                UpdatedUtc = timeProvider.GetUtcNow().UtcDateTime
+            };
+            setup.MaterialFormats.Add(customFormat);
+            await setup.SaveChangesAsync();
+            formatId = customFormat.Id;
+        }
+
+        provider.AfterUpdate = () =>
+        {
+            using var connection = new SqlConnection(databaseConnectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE [asap].[MaterialFormat] SET [MessageBehavior] = N'message' WHERE [Id] = @id;";
+            command.Parameters.AddWithValue("@id", formatId);
+            Assert.AreEqual(1, command.ExecuteNonQuery(), "The authoritative format changes after pickup succeeds.");
+        };
+
+        try
+        {
+            await using var scopedFactory = factory.WithWebHostBuilder(builder =>
+                builder.ConfigureServices(services =>
+                {
+                    services.RemoveAll<IPatronProvider>();
+                    services.AddSingleton<IPatronProvider>(provider);
+                }));
+            using var client = scopedFactory.CreateClient();
+            AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+            client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+            using var response = await client.PostAsJsonAsync("/api/asap/staff/suggestions", new
+            {
+                libraryOrgId = 2,
+                barcode,
+                format = formatCode,
+                title,
+                author = "Race author",
+                publication = (string?)null,
+                preferredPickupBranchId = 102,
+                currentPreferredPickupBranchIdAtLoad = 101,
+                currentPreferredPickupBranchObservedAtLoad = true,
+                autohold = false,
+                emailPatronConfirmation = false,
+                customFields = new Dictionary<string, string?>()
+            });
+
+            var raw = await response.Content.ReadAsStringAsync();
+            Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode, raw);
+            using var body = JsonDocument.Parse(raw);
+            Assert.AreEqual("request_not_created_pickup_changed", body.RootElement.GetProperty("code").GetString());
+            Assert.AreEqual("submission_configuration_changed", body.RootElement.GetProperty("reasonCode").GetString());
+            Assert.IsTrue(body.RootElement.GetProperty("pickupPreferenceChanged").GetBoolean());
+            var message = body.RootElement.GetProperty("message").GetString()!;
+            StringAssert.Contains(message, "preferred pickup location was changed successfully");
+            StringAssert.Contains(message, "suggestion form changed while it was being submitted");
+            Assert.AreEqual(1, provider.UpdateCount);
+            Assert.AreEqual(102, provider.CurrentPickupBranchId);
+
+            await using var verify = await contextFactory.CreateDbContextAsync();
+            Assert.AreEqual(0, await verify.TitleRequests.AsNoTracking()
+                .CountAsync(item => item.LibraryOrganizationId == 2 && item.Barcode == barcode && item.Title == title),
+                "A final configuration rejection does not insert the suggestion.");
+            Assert.AreEqual(0, await verify.TitleRequestEvents.AsNoTracking()
+                .CountAsync(item => item.Message != null && item.Message.Contains(title)),
+                "A rejected suggestion does not create request history.");
+            Assert.AreEqual(1, await ReadCountWithParameterAsync("""
+                SELECT COUNT(*) FROM [asap].[PickupPreferenceOperation]
+                WHERE [Barcode] = @barcode AND [State] = 2 AND [CompletedUtc] IS NULL
+                  AND [TitleRequestId] IS NULL AND [ProviderConfirmedUtc] IS NOT NULL
+                  AND [DispatchFinishedUtc] IS NOT NULL AND [ConfirmedByRead] = 0 AND [FailureCode] IS NULL;
+                """, ("@barcode", barcode)),
+                "The successful pickup update remains durably journaled with no linked request.");
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync("""
+                DELETE FROM [asap].[TitleRequestEvent]
+                WHERE [TitleRequestId] IN (SELECT [Id] FROM [asap].[TitleRequest] WHERE [Barcode] = @barcode);
+                DELETE FROM [asap].[TitleRequest] WHERE [Barcode] = @barcode AND [Title] = @title;
+                DELETE FROM [asap].[PickupPreferenceOperation] WHERE [Barcode] = @barcode;
+                DELETE FROM [asap].[FormatAutoClaimRule] WHERE [MaterialFormatId] = @formatId;
+                DELETE FROM [asap].[MaterialFormatCustomFieldRule] WHERE [MaterialFormatId] = @formatId;
+                DELETE FROM [asap].[MaterialFormat] WHERE [Id] = @formatId;
+                """, ("@barcode", barcode), ("@title", title), ("@formatId", formatId));
+        }
+    }
+
+    [TestMethod]
     public async Task StaffBecomingInactiveBeforeCreationCannotReachPickupProvider()
     {
         var actor = await ReadConfiguredSuperAdminAsync();
