@@ -76,7 +76,7 @@ async function until(predicate, message) {
             title: { mode: 'required', label: 'Comic title' },
             author: { mode: 'hidden', label: 'Author' },
             identifier: { mode: 'hidden', label: 'Identifier' },
-            publication: { mode: 'optional', label: 'Publication timing' }
+            publication: { mode: 'required', label: 'Publication timing' }
           },
           customFields: {}
         },
@@ -126,6 +126,8 @@ async function until(predicate, message) {
     let malformedNextSuggestion = false;
     let currentPickupAtLookup = 101;
     let staleLookupResolve = null;
+    let delayNextConfigurationRefresh = false;
+    let configurationRefreshResolve = null;
     global.fetch = async (url, options = {}) => {
       requests.push({ url, options });
       if (url.endsWith('/session')) {
@@ -137,7 +139,12 @@ async function until(predicate, message) {
         });
       }
       if (url.endsWith('/suggestion-configuration?libraryOrgId=2')) {
-        return response(200, { libraryOrgId: 2, libraryOrgName: 'Test Library', configuration });
+        const configured = response(200, { libraryOrgId: 2, libraryOrgName: 'Test Library', configuration });
+        if (delayNextConfigurationRefresh) {
+          delayNextConfigurationRefresh = false;
+          return new Promise(resolve => { configurationRefreshResolve = () => resolve(configured); });
+        }
+        return configured;
       }
       if (url.endsWith('/api/asap/config?libraryOrgId=2')) return response(200, configuration);
       if (url.endsWith('/patron-lookup')) {
@@ -351,7 +358,12 @@ async function until(predicate, message) {
     const formatRefresh = [...document.querySelectorAll('#staff-suggestion-body button')]
       .find(button => button.textContent.includes('Refresh eligible formats'));
     assert.ok(formatRefresh, 'Configuration rejection exposes a refresh action.');
+    delayNextConfigurationRefresh = true;
     formatRefresh.click();
+    await until(() => configurationRefreshResolve, 'the settings refresh must remain pending for the race regression');
+    publication.value = 'published';
+    publication.dispatchEvent(new dom.window.Event('change'));
+    configurationRefreshResolve();
     await until(() => !formatRefresh.disabled && format.options.length === 3,
       'the refreshed options must exclude the now referral-only book format');
     assert.equal(format.value, '', 'A no-longer-eligible selection is cleared instead of silently replaced.');
@@ -359,21 +371,37 @@ async function until(predicate, message) {
     assert.equal(format.options[2].value, 'eaudiobook');
     assert.equal(title.value, titleBeforeRejection, 'Refreshing formats must retain other draft values.');
     assert.equal(notes.value, 'Retain these staff notes', 'Refreshing formats must retain staff notes.');
-    assert.equal(publication.value, '__publication_reselect__', 'A removed publication choice is not silently replaced.');
-    assert.match(publication.labels[0].querySelector('[role="status"]').textContent,
-      /not_published.*no longer available.*Not specified/i);
-    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, true,
-      'A removed publication choice requires an explicit current selection.');
+    assert.deepEqual([...publication.options].map(option => option.value), ['', 'published', 'coming_soon'],
+      'The refreshed publication options retain the blank choice and all current alternatives.');
+    assert.equal([...publication.options].some(option => option.value === 'not_published'), false,
+      'A publication option removed or disabled in current settings is no longer selectable.');
+    assert.equal(publication.value, 'published',
+      'A valid publication selection made while refresh is pending must survive the response.');
+    assert.equal(publication.labels[0].querySelector('[role="status"]').hidden, true,
+      'A still-valid selection does not require reselection.');
     format.value = 'eaudiobook';
     format.dispatchEvent(new dom.window.Event('change'));
     document.querySelectorAll('.staff-suggestion-fields input[maxlength="500"]')[1].value = 'Staff author';
     const refreshedAudience = [...document.querySelectorAll('.staff-suggestion-fields select')]
       .find(control => control.getAttribute('aria-label')?.startsWith('Who is it for?'));
     assert.equal(refreshedAudience.value, 'adult', 'Visible custom-field draft values survive the refresh.');
-    publication.value = 'published';
-    publication.dispatchEvent(new dom.window.Event('change'));
     assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
-      'Choosing a current publication option releases the re-selection guard.');
+      'A current publication selection preserved through refresh allows submission.');
+    format.value = 'comic';
+    format.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(publication.required, true, 'The current format rule keeps publication required.');
+    publication.value = '';
+    publication.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(publication.checkValidity(), false, 'A required publication field rejects the blank choice.');
+    document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await settle();
+    assert.equal(suggestionRequests, 1, 'A required blank publication value is not submitted.');
+    format.value = 'eaudiobook';
+    format.dispatchEvent(new dom.window.Event('change'));
+    document.querySelectorAll('.staff-suggestion-fields input[maxlength="500"]')[1].value = 'Staff author';
+    assert.equal(publication.required, false, 'The optional publication rule allows an explicit clear.');
+    assert.equal(document.querySelector('#staff-suggestion-actions button[type="submit"]').disabled, false,
+      'An optional clear releases the re-selection guard.');
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     document.getElementById('staff-suggestion-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await until(() => suggestionRequests === 2, 'double submit after reselection must make one new request');
@@ -384,7 +412,7 @@ async function until(predicate, message) {
     assert.equal(corrected.currentPreferredPickupBranchIdAtLoad, 102,
       'A corrected submission uses the pickup preference confirmed by the first partial-success response.');
     assert.equal(corrected.preferredPickupBranchId, 102, 'The corrected submission does not reverse the pickup change.');
-    assert.equal(corrected.publication, 'published', 'The corrected request uses the explicitly selected current publication option.');
+    assert.equal(corrected.publication, null, 'An explicitly cleared optional publication value is submitted as null.');
     await until(() => !document.getElementById('staff-suggestion-dialog').open, 'successful creation must close the dialog');
     assert.match(document.getElementById('app-status').textContent, /9007199254740993/);
     assert.match(document.getElementById('app-status').textContent, /No confirmation email was requested/);

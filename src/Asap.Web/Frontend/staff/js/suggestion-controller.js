@@ -423,7 +423,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       autohold, emailConfirmation, pickup, bib,
       customFieldControls: new Map(),
       titleField, authorField, identifierField, publicationField, exactDateField,
-      catalogStatus, pickupPreferenceText, pickupUpdateNotice,
+      catalogStatus, pickupPreferenceText, pickupUpdateNotice, publicationRecoveryHelp,
       publicationNeedsReselection: () => publicationNeedsReselection
     };
     const rebuildPublicationChoices = (options, selectedValue = '') => {
@@ -437,9 +437,8 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
           text: 'Choose a current publication option',
           disabled: true
         }));
-      } else {
-        publication.append(element('option', { value: '', text: 'Not specified' }));
       }
+      publication.append(element('option', { value: '', text: 'Not specified' }));
       for (const value of available) {
         publication.append(element('option', { value, text: value }));
       }
@@ -500,7 +499,6 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       if (!isCurrentGeneration(token) || current.stage !== 'create' || current.submitting || current.outcomeUnconfirmed) return;
       const previousFormat = formatEligibility.staleFormatCode || format.value;
       const previousLabel = activeConfiguration.formatLabels?.[previousFormat] || previousFormat;
-      const previousPublication = stalePublicationValue || publication.value;
       const currentActor = actor;
       const scopeId = Number(current.scopeId);
       const load = reads.begin('staff-suggestion-configuration');
@@ -517,6 +515,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
         activeConfiguration = configured.configuration || {};
         const refreshedEnabledFormats = Array.isArray(activeConfiguration.availableFormats)
           ? activeConfiguration.availableFormats : [];
+        const previousPublication = stalePublicationValue || publication.value;
         const publicationNeedsNewChoice = rebuildPublicationChoices(
           activeConfiguration.publicationOptions,
           previousPublication);
@@ -717,7 +716,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       return;
     }
     if (controls.publicationNeedsReselection() && !controls.publicationField.hidden) {
-      setStaffSuggestionStatus(publicationRecoveryHelp.textContent, 'error');
+      setStaffSuggestionStatus(controls.publicationRecoveryHelp.textContent, 'error');
       controls.publication.focus();
       return;
     }

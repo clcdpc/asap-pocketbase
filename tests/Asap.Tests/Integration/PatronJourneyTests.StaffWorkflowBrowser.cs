@@ -98,6 +98,7 @@ public sealed partial class PatronJourneyTests
             var created = await verify.TitleRequests.AsNoTracking()
                 .SingleAsync(item => item.LibraryOrganizationId == 2 && item.Barcode == barcode && item.Title == title);
             Assert.AreEqual(correctedFormatId, created.MaterialFormatId);
+            Assert.IsNull(created.Publication, "The explicit optional publication clear is persisted as null.");
             Assert.AreEqual(102, created.PreferredPickupBranchId);
             Assert.AreEqual(1, provider.UpdateCount, "The corrected request reuses the confirmed pickup change without sending another pickup update.");
         }

@@ -79,10 +79,11 @@ journeys use the Testing Kestrel fixtures:
   Analytics helper adds four applied-range and invalid-range checkpoints at 200%.
 - `staff-suggestion-recovery.cjs`: zero eligible formats, keyboard refresh and
   focus restoration, configuration rejection after a confirmed pickup change,
-  retained draft and custom fields, refreshed field modes/labels, and one
-  corrected HTTP/SQL insertion. It checks desktop/mobile layout and native 200%
-  browser zoom, plus delayed refresh responses retired by close/reopen, library,
-  and identity changes in the controller contract suite.
+  retained draft and custom fields, removed publication choices with optional
+  clearing, refreshed field modes/labels, and one corrected HTTP/SQL insertion.
+  It checks desktop/mobile layout and native 200% browser zoom, plus delayed
+  refresh responses retired by close/reopen, library, and identity changes in
+  the controller contract suite.
 
 - `frontend-cache.cjs`: published staff/patron files served through Program,
   with a controlled deployment, real Chromium cache, stale-module negative

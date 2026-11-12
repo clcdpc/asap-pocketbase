@@ -43,6 +43,12 @@ async function installGuards(context, page) {
     return route.abort('blockedbyclient');
   });
   page.on('pageerror', error => report.errors.push(error.message));
+  await page.addInitScript(() => {
+    window.__asapUnhandledRejections = [];
+    window.addEventListener('unhandledrejection', event => {
+      window.__asapUnhandledRejections.push(String(event.reason?.message || event.reason));
+    });
+  });
   rejectNativeDialogs(page, report.errors);
 }
 
@@ -164,10 +170,24 @@ async function main() {
   const page = await context.newPage();
   await installGuards(context, page);
   let mockedFirstConfig = false;
+  let removePublicationOnNextRefresh = false;
+  let releasePublicationRefresh;
+  let signalPublicationRefreshStarted;
+  const publicationRefreshStarted = new Promise(resolve => { signalPublicationRefreshStarted = resolve; });
   await context.route('**/api/asap/staff/suggestion-configuration?*', route => {
     if (!mockedFirstConfig && isSuggestionConfiguration(route.request())) {
       mockedFirstConfig = true;
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyConfiguration(library)) });
+    }
+    if (isSuggestionConfiguration(route.request()) && removePublicationOnNextRefresh) {
+      removePublicationOnNextRefresh = false;
+      return route.fetch().then(async response => {
+        const configured = await response.json();
+        configured.configuration.publicationOptions = [];
+        signalPublicationRefreshStarted();
+        await new Promise(resolve => { releasePublicationRefresh = resolve; });
+        return route.fulfill({ response, body: JSON.stringify(configured) });
+      });
     }
     return route.continue();
   });
@@ -179,6 +199,13 @@ async function main() {
       report.requests.push({ method: 'POST', format: request.postDataJSON().format });
     }
   });
+  page.on('response', response => {
+    const request = response.request();
+    if (request.method() === 'POST' && new URL(response.url()).pathname === '/api/asap/staff/suggestions' &&
+        response.status() === 409) {
+      removePublicationOnNextRefresh = true;
+    }
+  });
   await page.goto(`${baseURL}/staff/?stage=queue&scope=${library}&status=suggestion`, { waitUntil: 'networkidle' });
   const dialog = page.locator('#staff-suggestion-dialog');
   const opener = page.getByRole('button', { name: 'New suggestion', exact: true });
@@ -188,6 +215,9 @@ async function main() {
 
   const format = dialog.getByLabel('Material format', { exact: true });
   const refresh = dialog.getByRole('button', { name: 'Refresh eligible formats', exact: true });
+  const publication = dialog.getByLabel(/publication timing/i);
+  let selectedPublicationOption;
+  let publicationAlternativeOption;
   assert.equal(await format.isDisabled(), true);
   assert.equal(await refresh.isVisible(), true);
   assert.match(await dialog.locator('#staff-suggestion-format-empty').textContent(), /referral route|enable a format/i);
@@ -213,7 +243,14 @@ async function main() {
   await page.setViewportSize({ width: 1280, height: 900 });
   await opener.click();
   await searchPatron(page, dialog, barcode);
+  const currentPublicationOptions = await publication.locator('option').evaluateAll(options =>
+    options.map(option => option.value).filter(value => value && value !== '__publication_reselect__'));
+  selectedPublicationOption = currentPublicationOptions[0] || null;
+  publicationAlternativeOption = currentPublicationOptions.find(value => value !== selectedPublicationOption) || null;
+  assert.ok(selectedPublicationOption, 'The current settings provide a publication choice to remove.');
+  assert.ok(publicationAlternativeOption, 'The current settings provide another publication choice for the pending-refresh race.');
   await format.selectOption(raceFormat);
+  await publication.selectOption(selectedPublicationOption);
   const titleInput = dialog.getByLabel(/^Title/);
   const authorInput = dialog.getByLabel(/^Author/);
   const notesInput = dialog.getByLabel('Staff notes', { exact: true });
@@ -253,6 +290,9 @@ async function main() {
 
   const refreshedConfiguration = page.waitForResponse(response => isSuggestionConfiguration(response.request()));
   await page.keyboard.press('Enter');
+  await publicationRefreshStarted;
+  await publication.selectOption(publicationAlternativeOption);
+  releasePublicationRefresh();
   assert.equal((await refreshedConfiguration).status(), 200);
   await page.waitForFunction(({ currentCode, staleCode }) => {
     const select = document.querySelector('[aria-label="Material format"]');
@@ -264,6 +304,17 @@ async function main() {
   assert.equal(await titleInput.inputValue(), title);
   assert.equal(await authorInput.inputValue(), 'Draft author');
   assert.equal(await notesInput.inputValue(), 'Retain these staff notes');
+  assert.equal(await publication.inputValue(), '__publication_reselect__',
+    'A publication option removed by refreshed settings stays unselected and requires a decision.');
+  assert.deepEqual(await publication.locator('option').evaluateAll(options => options.map(option => option.value)),
+    ['__publication_reselect__', ''], 'Even with no current publication options, Not specified remains available.');
+  assert.equal(await publication.locator('option').evaluateAll((options, value) =>
+    options.some(option => option.value === value), selectedPublicationOption), false,
+    'The obsolete publication choice is removed from the refreshed options.');
+  assert.ok((await publication.evaluate(node => node.labels[0].querySelector('[role="status"]').textContent))
+    .includes(publicationAlternativeOption),
+    'When the latest value is also removed during refresh, recovery guidance names that latest value.');
+  assert.equal(await publication.locator('option[value=""]').textContent(), 'Not specified');
   await page.setViewportSize({ width: 1280, height: 900 });
 
   await format.focus();
@@ -276,14 +327,33 @@ async function main() {
   assert.equal(await refreshedAuthor.count(), 1, 'The current field label is applied after selecting the refreshed format.');
   assert.equal(await refreshedAuthor.evaluate(node => node.required), true,
     'The current required field mode is applied after selecting the refreshed format.');
+  const create = dialog.getByRole('button', { name: 'Create suggestion', exact: true });
+  const errorsBeforeBlockedSubmit = report.errors.length;
+  await titleInput.focus();
+  await dialog.locator('form').evaluate(form => form.requestSubmit());
+  await dialog.locator('form').evaluate(form => form.requestSubmit());
+  await page.waitForTimeout(50);
+  assert.equal(createRequests.length, 1, 'Repeated programmatic submissions send no POST before publication correction.');
+  assert.equal(report.errors.length, errorsBeforeBlockedSubmit, 'Blocked submissions produce no page error.');
+  assert.deepEqual(await page.evaluate(() => window.__asapUnhandledRejections), [],
+    'Blocked submissions produce no unhandled rejection.');
+  assert.equal(await publication.evaluate(node => node === document.activeElement), true,
+    'Blocked submission returns focus to the publication control.');
+  await publication.focus();
+  await publication.selectOption('');
+  assert.equal(await publication.inputValue(), '', 'Not specified explicitly clears the optional publication value.');
+  assert.equal(await publication.evaluate(node => node === document.activeElement), true,
+    'The publication control retains focus for the explicit correction.');
+  assert.equal(await create.isDisabled(), false, 'Clearing an optional publication field permits submission.');
   const createdResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
     new URL(response.url()).pathname === '/api/asap/staff/suggestions');
-  await dialog.getByRole('button', { name: 'Create suggestion', exact: true }).focus();
+  await create.focus();
   await page.keyboard.press('Enter');
   const created = await createdResponse;
   assert.equal(created.status(), 201, await created.text());
   assert.equal(createRequests.length, 2);
   assert.equal(createRequests[1].format, correctedFormat);
+  assert.equal(createRequests[1].publication, null, 'An explicit optional clear reaches the server as null.');
   assert.equal(createRequests[1].preferredPickupBranchId, 102);
   assert.equal(createRequests[1].currentPreferredPickupBranchIdAtLoad, 102,
     'Corrected creation uses the pickup preference confirmed by the partial-success response.');
