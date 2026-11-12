@@ -7,6 +7,7 @@ const staff = {
   displayName: 'Staff User', role: 'library', organizationId: 2, organizationName: 'Library Two'
 };
 const requestId = '9007199254741993';
+const flush = () => new Promise(resolve => setImmediate(resolve));
 
 (async () => {
   await fixture(async ({ load, dom, get }) => {
@@ -85,6 +86,100 @@ const requestId = '9007199254741993';
         navigation.dispose();
         shell.dispose();
       }
+    }
+  });
+  await fixture(async ({ load, dom, get }) => {
+    const { createSessionIdentity } = await load('session-identity');
+    const { createSessionCoordinator } = await load('session');
+    const { createStaffShell } = await load('shell');
+    const { createRouter } = await load('router');
+    const { createNavigationController } = await load('navigation');
+    const requestId = '9223372036854775807';
+    const titleRoute = `/staff/?stage=closed&scope=2&request=${requestId}&sort=recent#title-notes`;
+    dom.window.history.replaceState({}, '', titleRoute);
+
+    const identity = createSessionIdentity();
+    const router = createRouter();
+    const resolved = [];
+    const presented = [];
+    const makeView = name => ({
+      async prepareDetail(id, options) {
+        resolved.push({ name, id, scope: options.scope });
+        return { request: { id, status: 'closed' }, isCurrent: () => true };
+      },
+      async prepare(context) { return { scope: context.scope, isCurrent: () => true, accept() {} }; },
+      presentDetail(detail) { presented.push({ name, id: detail.request.id }); },
+      activate() {}, deactivate() {}, async refresh() { return true; }, isReady() { return true; }
+    });
+    const queue = makeView('queue');
+    const copies = makeView('additional-copies');
+    const shell = createStaffShell({ root: document, sessionIdentity: identity,
+      getContext: () => navigation.context(), settingsScope: () => 'system', operationsScope: () => 'all',
+      findTitle: () => null, openRecentTitle() {}, onViewIntent() {}, onSignOutIntent() {},
+      request: async () => ({ state: 'ready' }) });
+    const navigation = createNavigationController({ router, sessionIdentity: identity, detailHost: {},
+      getFeatures: () => [], views: { queue, 'additional-copies': copies, settings: { currentScope: () => 'system' } },
+      announce() {}, present: shell.presentView, closeTransient() {}, onInvalidate() {}, onContextChanged() {} });
+    const session = createSessionCoordinator({ identity, shell, navigation, getFeatures: () => [],
+      onAccepted: owner => navigation.align({ scope: String(owner.organizationId) }), onPreferencesChanged() {},
+      sessionRequest: async () => ({ authenticated: true, accessAllowed: true, staff }) });
+
+    try {
+      navigation.start();
+      await session.start();
+      router.pushRequest(requestId, 'additional_copies', { scope: '2', copyStatus: 'closed' });
+      await navigation.navigateFromUrl();
+      assert.deepEqual(resolved.slice(-1), [{ name: 'additional-copies', id: requestId, scope: '2' }]);
+      assert.deepEqual(presented.slice(-1), [{ name: 'additional-copies', id: requestId }]);
+
+      session.lose('Your staff session ended. Sign in again.');
+      const signIn = get('.sign-in');
+      assert.equal(signIn.tagName, 'A', 'sign-in remains an ordinary keyboard-activatable link');
+      const assertSignInTargetMatchesCurrentRoute = () => {
+        const current = `${dom.window.location.pathname}${dom.window.location.search}${dom.window.location.hash}`;
+        const target = new URL(signIn.getAttribute('href'), dom.window.location.origin);
+        assert.equal(target.searchParams.get('returnUrl'), current);
+        return current;
+      };
+      const traverse = async direction => {
+        const popped = new Promise((resolve, reject) => {
+          const timeout = dom.window.setTimeout(() => reject(new Error(`history.${direction}() did not emit popstate`)), 1000);
+          dom.window.addEventListener('popstate', () => { dom.window.clearTimeout(timeout); resolve(); }, { once: true });
+        });
+        dom.window.history[direction]();
+        await popped;
+        await flush();
+      };
+
+      await traverse('back');
+      assert.equal(assertSignInTargetMatchesCurrentRoute(), titleRoute);
+      await traverse('forward');
+      const taskRoute = assertSignInTargetMatchesCurrentRoute();
+      assert.equal(new URL(taskRoute, dom.window.location.origin).searchParams.get('stage'), 'additional_copies');
+      await traverse('back');
+      const intendedRoute = assertSignInTargetMatchesCurrentRoute();
+      assert.equal(intendedRoute, titleRoute);
+
+      // Follow the ordinary anchor's challenge URL through its local returnUrl,
+      // then let a fresh authenticated session resolve and present that route.
+      const challenge = new URL(signIn.getAttribute('href'), dom.window.location.origin);
+      assert.equal(challenge.pathname, '/api/asap/staff/sign-in');
+      dom.window.history.replaceState({}, '', challenge.searchParams.get('returnUrl'));
+      session.dispose();
+      resolved.length = 0;
+      presented.length = 0;
+      const returnedSession = createSessionCoordinator({ identity, shell, navigation, getFeatures: () => [],
+        onAccepted: owner => navigation.align({ scope: String(owner.organizationId) }), onPreferencesChanged() {},
+        sessionRequest: async () => ({ authenticated: true, accessAllowed: true, staff }) });
+      await returnedSession.start();
+      assert.deepEqual(resolved, [{ name: 'queue', id: requestId, scope: '2' }]);
+      assert.deepEqual(presented, [{ name: 'queue', id: requestId }],
+        'authentication returns to and opens the title request selected after history traversal');
+      returnedSession.dispose();
+    } finally {
+      session.dispose();
+      navigation.dispose();
+      shell.dispose();
     }
   });
   console.log('Staff sign-in destination, retry, and post-auth route resolution passed');
