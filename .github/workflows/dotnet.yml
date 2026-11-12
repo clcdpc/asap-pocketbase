@@ -31,7 +31,7 @@ permissions:
   actions: read
 
 env:
-  ASAP_CI_RESOURCE_DIAGNOSTICS: ${{ vars.ASAP_CI_RESOURCE_DIAGNOSTICS == 'true' && 'true' || 'false' }}
+  CI_PERFORMANCE_DIAGNOSTICS: ${{ vars.CI_PERFORMANCE_DIAGNOSTICS == 'true' && 'true' || 'false' }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}-{1}', github.run_id, github.run_attempt) }}

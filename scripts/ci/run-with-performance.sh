@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Keep the workload's streams, arguments, environment and shell exit status intact.
-if [ "${ASAP_CI_RESOURCE_DIAGNOSTICS:-false}" != true ]; then
+if [ "${CI_PERFORMANCE_DIAGNOSTICS:-false}" != true ]; then
   exec "$@"
 fi
 if command -v python3 >/dev/null 2>&1; then

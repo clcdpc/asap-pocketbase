@@ -294,7 +294,7 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("await 2.80 ms (operation-weighted), 10.00 ms peak interval", text)
 
 
-@unittest.skipUnless(os.environ.get("ASAP_CI_RESOURCE_DIAGNOSTICS") == "true",
+@unittest.skipUnless(os.environ.get("CI_PERFORMANCE_DIAGNOSTICS") == "true",
                      "Resource diagnostics lifecycle checks are opt-in")
 class LifecycleTests(unittest.TestCase):
     def setUp(self):

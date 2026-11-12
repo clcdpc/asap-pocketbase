@@ -1,7 +1,7 @@
 # .NET/SQL CI diagnostics
 
 Continuous host, Docker and SQL resource sampling is **off by default**. Set the
-repository Actions variable `ASAP_CI_RESOURCE_DIAGNOSTICS` to `true` to enable it;
+repository Actions variable `CI_PERFORMANCE_DIAGNOSTICS` to `true` to enable it;
 remove the variable or set it to `false` to disable it again. Fresh test commands,
 TRX/results, fixture/test timings, failure artifacts and evidence verification
 remain unchanged in either mode. Existing artifact directory names are retained.

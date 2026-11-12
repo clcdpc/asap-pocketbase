@@ -30,9 +30,9 @@ class DiagnosticsSwitchTests(unittest.TestCase):
                     marker = root / "collector-started"
                     marker.unlink(missing_ok=True)
                     env = dict(os.environ, WORKLOAD_VALUE="kept")
-                    env.pop("ASAP_CI_RESOURCE_DIAGNOSTICS", None)
+                    env.pop("CI_PERFORMANCE_DIAGNOSTICS", None)
                     if value is not None:
-                        env["ASAP_CI_RESOURCE_DIAGNOSTICS"] = value
+                        env["CI_PERFORMANCE_DIAGNOSTICS"] = value
                     workload = [sys.executable, "-c",
                         "import os,sys; print(sys.argv[1]); print(sys.stdin.read()); "
                         "print(os.environ['WORKLOAD_VALUE'],file=sys.stderr); raise SystemExit(23)",
@@ -49,7 +49,7 @@ class DiagnosticsSwitchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             wrapper = Path(directory) / source.name
             shutil.copyfile(source, wrapper)
-            env = dict(os.environ, PATH="", ASAP_CI_RESOURCE_DIAGNOSTICS="false")
+            env = dict(os.environ, PATH="", CI_PERFORMANCE_DIAGNOSTICS="false")
             result = subprocess.run([shutil.which("bash"), str(wrapper), sys.executable,
                 "-c", "print('workload ran')"], env=env, capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 0)
