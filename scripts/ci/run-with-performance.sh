@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Keep the workload's streams, arguments, environment and shell exit status intact.
+if [ "${CI_PERFORMANCE_DIAGNOSTICS:-false}" != true ]; then
+  exec "$@"
+fi
 if command -v python3 >/dev/null 2>&1; then
   collector="$(dirname -- "${BASH_SOURCE[0]}")/performance.py"
   # Check interpreter/import/syntax availability before handing it the workload.

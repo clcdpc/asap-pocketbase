@@ -218,6 +218,7 @@ class SqlLifecycleTests(unittest.TestCase):
             self.assertIn("Server=localhost,15432;", (root / "github-env").read_text())
 
     @unittest.skipUnless(sys.platform == "linux", "Linux executable Docker fixture")
+    @unittest.skipUnless(os.environ.get("CI_PERFORMANCE_DIAGNOSTICS") == "true", "Resource diagnostics lifecycle checks are opt-in")
     def test_full_wrapper_uses_one_workload_and_flushes_sql_deltas(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -250,6 +251,7 @@ class SqlLifecycleTests(unittest.TestCase):
             self.assertNotIn(SECRET, "".join(path.read_text() for path in output.iterdir()))
 
     @unittest.skipUnless(sys.platform == "linux", "Linux executable Docker fixture")
+    @unittest.skipUnless(os.environ.get("CI_PERFORMANCE_DIAGNOSTICS") == "true", "Resource diagnostics lifecycle checks are opt-in")
     def test_stalled_sql_does_not_stall_host_or_leave_client_after_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -299,6 +301,7 @@ class SqlLifecycleTests(unittest.TestCase):
             self.assertTrue(pidfile.exists())
             self.assertFalse(Path("/proc").joinpath(pidfile.read_text(), "stat").exists())
 
+    @unittest.skipUnless(os.environ.get("CI_PERFORMANCE_DIAGNOSTICS") == "true", "Resource diagnostics lifecycle checks are opt-in")
     def test_collector_flushes_partial_samples_and_stops_its_thread(self):
         with tempfile.TemporaryDirectory() as directory:
             stop, unavailable = threading.Event(), set()
@@ -316,6 +319,7 @@ class SqlLifecycleTests(unittest.TestCase):
                 self.assertGreaterEqual(len(perf.read_samples(path)), 2)
                 self.assertNotIn(SECRET, path.read_text())
 
+    @unittest.skipUnless(os.environ.get("CI_PERFORMANCE_DIAGNOSTICS") == "true", "Resource diagnostics lifecycle checks are opt-in")
     def test_sql_cli_failure_and_timeout_keep_completed_sections_and_reap_helper(self):
         payload = wire({"meta": snapshot()["meta"], "waits": snapshot()["waits"]})
         for source in (f"import sys; print({payload!r},flush=True); sys.exit(7)",

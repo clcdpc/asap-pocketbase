@@ -1,10 +1,24 @@
-# .NET/SQL CI performance telemetry
+# .NET/SQL CI diagnostics
+
+Continuous host, Docker and SQL resource sampling is **off by default**. Set the
+repository Actions variable `CI_PERFORMANCE_DIAGNOSTICS` to `true` to enable it;
+remove the variable or set it to `false` to disable it again. Fresh test commands,
+TRX/results, fixture/test timings, failure artifacts and evidence verification
+remain unchanged in either mode. Existing artifact directory names are retained.
+Reused suites do not execute fresh workloads or collect new resource samples;
+use the existing `force_full_ci` dispatch option when investigating a fresh run.
+
+Resource-collector lifecycle tests follow the same switch. Deterministic metric
+and report tests, wrapper-mode checks, SQL bootstrap, selection and reuse safety
+checks remain mandatory. The known optional-command descendant-cleanup issue is
+deferred, not fixed here: address it before re-enabling resource diagnostics.
+No process-lifecycle implementation is changed by this switch.
 
 Ready PR, push and manual CI suites can reuse verified original executions;
 draft PRs run fast build/unit/frontend checks. See
 [CI policy and test reuse](test-reuse.md) for the draft/ready matrix, required
 full gate, PR cancellation groups, fingerprints, trust boundaries and forced
-full CI. Performance collection below still wraps every fresh .NET/SQL
+full CI. When enabled, performance collection below wraps fresh .NET/SQL
 execution; reused runs link to original test timing instead of inventing samples.
 
 Full qualification occupies three concurrent standard GitHub-hosted Ubuntu 24.04 workers after
@@ -34,8 +48,8 @@ reporter arguments and the opt-in `ASAP_CI_FIXTURE_TIMINGS` output path.
 Python 3.9+ and its standard library are sufficient on either Ubuntu runner.
 The Bash launcher falls back to the command if Python or collector imports are
 unavailable. Collector startup, sampling, storage and summary failures warn and
-leave the command's exit status intact. The optional collector checks and artifact
-upload use `continue-on-error: true`; the actual test step does not.
+leave the command's exit status intact. Artifact uploads are best-effort; the
+actual test step and enabled collector lifecycle tests remain mandatory.
 
 `performance.py` retains its guest/Docker sampling thread and starts a separate
 SQL DMV thread so SQL cannot delay guest samples. It forwards SIGINT/SIGTERM to the
