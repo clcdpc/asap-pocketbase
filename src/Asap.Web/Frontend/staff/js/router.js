@@ -3,6 +3,38 @@ import { readUrl, historyPath, applyQueueContext, replaceStageUrl, replaceReques
   requestedSettingsScopeFromUrl, requestedOperationalScopeFromUrl, requestedCopyStatusFromUrl,
   requestedOperationsContextFromUrl, applyOperationsContext } from './url-utils.js';
 
+function safeStaffReturnUrl(value) {
+  if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//') ||
+      value.includes('\\') || /[\u0000-\u001f\u007f]/.test(value)) return null;
+  let target;
+  try {
+    target = new URL(value, window.location.origin);
+    decodeURIComponent(value);
+    let decodedPath = target.pathname;
+    for (let depth = 0; depth < 8; depth++) {
+      if (decodedPath.includes('\\') || /[\u0000-\u001f\u007f]/.test(decodedPath) || decodedPath.startsWith('//')) return null;
+      const decoded = decodeURIComponent(decodedPath);
+      if (decoded === decodedPath) break;
+      decodedPath = decoded;
+      if (depth === 7) return null;
+    }
+  } catch {
+    return null;
+  }
+  if (target.origin !== window.location.origin || !/(?:^|\/)staff\/?$/i.test(target.pathname)) return null;
+  return `${target.pathname}${target.search}${target.hash}`;
+}
+
+function currentStaffReturnUrl() {
+  return safeStaffReturnUrl(`${window.location.pathname}${window.location.search}${window.location.hash}`) || '/staff/';
+}
+
+export function staffSignInHref() {
+  const href = new URL('/api/asap/staff/sign-in', window.location.origin);
+  href.searchParams.set('returnUrl', currentStaffReturnUrl());
+  return `${href.pathname}${href.search}`;
+}
+
 export function readInitialSignInFailure() {
   const location = new URL(window.location.href);
   if (!location.searchParams.has('signInError')) return null;

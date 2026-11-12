@@ -56,20 +56,101 @@ public static class StaffAuthenticationEndpoints
         context.Items[StaffCurrentUserMiddleware.ItemKey] as CurrentStaff ??
         throw new InvalidOperationException("Current staff was not resolved.");
 
-    internal static string LocalReturnUrl(string? value)
+    internal static string LocalReturnUrl(string? value, string fallback = "/staff/")
     {
         if (string.IsNullOrWhiteSpace(value))
         {
-            return "/staff/";
+            return fallback;
+        }
+
+        if (value.Any(char.IsControl))
+        {
+            return fallback;
         }
 
         var trimmed = value.Trim();
-        return trimmed.StartsWith("/", StringComparison.Ordinal) &&
-               !trimmed.StartsWith("//", StringComparison.Ordinal) &&
-               !trimmed.StartsWith("/\\", StringComparison.Ordinal) &&
-               !trimmed.Contains('\r') && !trimmed.Contains('\n')
-            ? trimmed
-            : "/staff/";
+        if (!trimmed.StartsWith("/", StringComparison.Ordinal) ||
+            trimmed.StartsWith("//", StringComparison.Ordinal) ||
+            trimmed.Contains('\\') ||
+            trimmed.Any(char.IsWhiteSpace) ||
+            !Uri.TryCreate(trimmed, UriKind.Relative, out _) ||
+            !HasValidEscapes(trimmed) ||
+            !HasSafeEscapedCharacters(trimmed) ||
+            !HasSafeEscapedPath(trimmed))
+        {
+            return fallback;
+        }
+
+        return trimmed;
+    }
+
+    private static bool HasValidEscapes(string value)
+    {
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (value[index] != '%')
+            {
+                continue;
+            }
+
+            if (index + 2 >= value.Length ||
+                !Uri.IsHexDigit(value[index + 1]) ||
+                !Uri.IsHexDigit(value[index + 2]))
+            {
+                return false;
+            }
+
+            index += 2;
+        }
+
+        return true;
+    }
+
+    private static bool HasSafeEscapedPath(string value)
+    {
+        var pathEnd = value.IndexOfAny(['?', '#']);
+        var path = pathEnd < 0 ? value : value[..pathEnd];
+        for (var depth = 0; depth < 8; depth++)
+        {
+            var decoded = Uri.UnescapeDataString(path);
+            if (decoded.Any(char.IsControl) ||
+                decoded.Contains('\\') ||
+                decoded.Contains("//", StringComparison.Ordinal) ||
+                decoded.Split('/').Any(segment => segment is "." or ".."))
+            {
+                return false;
+            }
+
+            if (decoded == path)
+            {
+                return true;
+            }
+
+            path = decoded;
+        }
+
+        return false;
+    }
+
+    private static bool HasSafeEscapedCharacters(string value)
+    {
+        for (var depth = 0; depth < 8; depth++)
+        {
+            var decoded = Uri.UnescapeDataString(value);
+            if (decoded.Any(char.IsControl) || decoded.Contains('\\'))
+            {
+                return false;
+            }
+
+            if (decoded == value)
+            {
+                return true;
+            }
+
+            value = decoded;
+        }
+
+        return false;
     }
 
     internal static object ToSessionDto(CurrentStaff staff) => new
