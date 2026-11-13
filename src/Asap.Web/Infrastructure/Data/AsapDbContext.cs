@@ -55,6 +55,8 @@ public sealed class AsapDbContext(DbContextOptions<AsapDbContext> options) : DbC
         });
 
         modelBuilder.Entity<Organization>().Property(value => value.Id).ValueGeneratedNever();
+        modelBuilder.Entity<StaffUser>().Property(value => value.NewPatronRequestEmailEnabled)
+            .HasDefaultValue(true).HasSentinel(true);
         modelBuilder.Entity<QueueProgress>().HasKey(value => new { value.QueueName, value.ScopeOrganizationId });
         modelBuilder.Entity<QueueProgress>().Property(value => value.UpdatedUtc).HasColumnType("datetime2(7)");
         modelBuilder.Entity<SystemSettings>().HasKey(value => value.OrganizationId);

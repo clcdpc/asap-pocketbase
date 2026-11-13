@@ -24,6 +24,7 @@ CREATE TABLE [asap].[StaffUser]
     [Role] nvarchar(32) NOT NULL,
     [OrganizationId] int NOT NULL,
     [IsActive] bit NOT NULL,
+    [NewPatronRequestEmailEnabled] bit NOT NULL CONSTRAINT [DF_StaffUser_NewPatronRequestEmailEnabled] DEFAULT (1),
     [WeeklyActionSummaryEnabled] bit NOT NULL CONSTRAINT [DF_StaffUser_WeeklyActionSummaryEnabled] DEFAULT (0),
     [WeeklyActionSummaryEmail] nvarchar(320) NULL,
     [PurchaseReminderDefault] bit NOT NULL CONSTRAINT [DF_StaffUser_PurchaseReminderDefault] DEFAULT (0),

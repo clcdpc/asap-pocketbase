@@ -91,7 +91,8 @@ CREATE TABLE [asap].[EmailOutbox]
         ([TitleRequestId] IS NULL OR [MessageKind] IS NOT NULL) AND
         ([MessageKind] IS NULL OR ([DeliveryClass] <> N'operational_test' AND [MessageKind] IN
             (N'confirmation', N'assignment', N'purchase_reminder', N'purchase_approved', N'already_owned',
-             N'rejection', N'hold_placed', N'timeout', N'additional_copy_reminder', N'additional_copy_assignment')))
+             N'rejection', N'hold_placed', N'timeout', N'additional_copy_reminder', N'additional_copy_assignment',
+             N'new_patron_request')))
     ),
     CONSTRAINT [CK_EmailOutbox_DeliveryClass] CHECK ([DeliveryClass] IN (N'business_event', N'staff_authorization_sensitive', N'operational_test')),
     CONSTRAINT [CK_EmailOutbox_Status] CHECK ([Status] IN (N'pending', N'sending', N'sent', N'failed', N'suppressed')),
@@ -103,7 +104,7 @@ CREATE TABLE [asap].[EmailOutbox]
          NULLIF(LTRIM(RTRIM([RecipientAuthenticationEmail])), N'') IS NOT NULL AND
          [AuthorizationOrganizationId] IS NOT NULL AND
          [RecipientAddressKind] IS NOT NULL AND
-         [RecipientAddressKind] IN (N'notification_email', N'weekly_summary', N'weekly_summary_primary', N'weekly_summary_additional')) OR
+         [RecipientAddressKind] IN (N'notification_email', N'new_request', N'weekly_summary', N'weekly_summary_primary', N'weekly_summary_additional')) OR
         ([DeliveryClass] <> N'staff_authorization_sensitive' AND
          [RecipientStaffUserId] IS NULL AND
          [RecipientAuthenticationEmail] IS NULL AND

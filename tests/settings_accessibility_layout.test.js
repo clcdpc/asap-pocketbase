@@ -84,7 +84,9 @@ const { JSDOM } = require('jsdom');
     const patronTemplates = templateAudiences[0].querySelectorAll('fieldset.settings-template[data-template-audience="patron"]');
     const staffTemplates = templateAudiences[1].querySelectorAll('fieldset.settings-template[data-template-audience="staff"]');
     assert.strictEqual(patronTemplates.length, 5);
-    assert.strictEqual(staffTemplates.length, 5);
+    assert.strictEqual(staffTemplates.length, 6);
+    assert.ok([...staffTemplates].some(template => template.dataset.templateKey === 'staff_new_patron_request'),
+      'The new patron request template is included in the staff template editor');
     assert.strictEqual(templateAudiences[0].querySelectorAll('[data-template-audience="staff"]').length, 0);
     assert.strictEqual(templateAudiences[1].querySelectorAll('[data-template-audience="patron"]').length, 0);
     assert.match(templateAudiences[1].textContent, /diagnostic test email remains a fixed transport check/);

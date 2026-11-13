@@ -20,7 +20,8 @@ internal static class RequestEmailEvidence
         ["hold_placed"] = "Hold placed notification",
         ["timeout"] = "Request timeout notification",
         ["additional_copy_reminder"] = "Additional-copy reminder",
-        ["additional_copy_assignment"] = "Additional-copy assignment notification"
+        ["additional_copy_assignment"] = "Additional-copy assignment notification",
+        ["new_patron_request"] = "New patron purchase request notification"
     };
 
     internal sealed record LegacyIdentity(long Id, bool IsCopy, string MessageKind);

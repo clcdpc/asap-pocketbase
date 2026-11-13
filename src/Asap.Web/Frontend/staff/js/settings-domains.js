@@ -170,6 +170,7 @@ const BUILTIN_TEMPLATE_KEYS = new Set([
   'hold_placed',
   'rejected',
   'staff_title_assignment',
+  'staff_new_patron_request',
   'staff_purchase_reminder',
   'staff_additional_copy_reminder',
   'staff_additional_copy_assignment',

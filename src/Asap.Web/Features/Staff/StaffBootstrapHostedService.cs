@@ -70,6 +70,7 @@ public sealed class StaffBootstrapHostedService(
             Role = StaffRole.SuperAdmin,
             OrganizationId = LibraryScope.SystemOrganizationId,
             IsActive = true,
+            NewPatronRequestEmailEnabled = true,
             LastLoginUtc = null
         });
         await context.SaveChangesAsync(cancellationToken);

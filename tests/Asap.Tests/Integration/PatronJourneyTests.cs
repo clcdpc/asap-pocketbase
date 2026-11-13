@@ -286,7 +286,50 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         Assert.IsTrue(long.TryParse(requestIdText, System.Globalization.NumberStyles.None,
             System.Globalization.CultureInfo.InvariantCulture, out var requestId));
         Assert.AreEqual(requestId.ToString(System.Globalization.CultureInfo.InvariantCulture), requestIdText);
-        Assert.HasCount(1, dispatcher!.EnqueuedIds);
+        var confirmationOutboxId = await FindSubmissionOutboxIdAsync(requestId);
+        CollectionAssert.Contains(dispatcher!.EnqueuedIds, confirmationOutboxId);
+
+        var staffNotificationCount = 0;
+        await using (var emailContext = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync())
+        {
+            var staffOutbox = await emailContext.EmailOutbox.AsNoTracking()
+                .Where(item => item.TitleRequestId == requestId && item.MessageKind == "new_patron_request")
+                .ToArrayAsync();
+            Assert.IsGreaterThanOrEqualTo(1, staffOutbox.Length,
+                "A public patron submission creates request-specific staff notification intent.");
+            staffNotificationCount = staffOutbox.Length;
+            Assert.AreEqual(staffOutbox.Length, staffOutbox.Select(item => item.RecipientStaffUserId).Distinct().Count());
+            foreach (var row in staffOutbox)
+            {
+                Assert.AreEqual($"new-patron-request:{requestId}:{row.RecipientStaffUserId}", row.BusinessKey);
+                Assert.AreEqual("new_request", row.RecipientAddressKind);
+                Assert.AreEqual("new_patron_request", row.MessageKind);
+                Assert.AreEqual(1, await emailContext.EmailDeliveryEvents.CountAsync(item => item.EmailOutboxId == row.Id));
+            }
+        }
+
+        using (var duplicateSubmission = await client.PostAsJsonAsync(
+                   "/api/asap/patron/suggestions",
+                   new
+                   {
+                       format = "book",
+                       title = "A Tracer Through the Stack",
+                       author = "Ada Example",
+                       isbn = "9780000000001",
+                       publication = "Coming soon",
+                       preferredPickupBranchId = 101,
+                       autohold = true,
+                       customFields = new Dictionary<string, string?>()
+                   }))
+        {
+            Assert.AreEqual(HttpStatusCode.Conflict, duplicateSubmission.StatusCode,
+                "Replayed public input is rejected without another request or notification.");
+        }
+        await using (var replayCheck = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync())
+        {
+            Assert.AreEqual(staffNotificationCount, await replayCheck.EmailOutbox.CountAsync(item =>
+                item.TitleRequestId == requestId && item.MessageKind == "new_patron_request"));
+        }
 
         await using (var connection = new SqlConnection(databaseConnectionString))
         {
@@ -303,7 +346,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 WHERE r.[Id] = @requestId;
                 """;
             command.Parameters.AddWithValue("@requestId", requestId);
-            command.Parameters.AddWithValue("@outboxId", dispatcher.EnqueuedIds.Single());
+            command.Parameters.AddWithValue("@outboxId", confirmationOutboxId);
             await using var reader = await command.ExecuteReaderAsync();
             Assert.IsTrue(await reader.ReadAsync());
             Assert.AreEqual("20000000000001", reader.GetString(0));
@@ -400,13 +443,23 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         Assert.AreEqual(2, await ScalarAsync(
             connection,
             "SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [Barcode] IN (N'20000000000801', N'20000000000802');"));
-        Assert.HasCount(2, dispatcher!.EnqueuedIds);
         await using var outbox = connection.CreateCommand();
         outbox.CommandText =
-            "SELECT COUNT(*) FROM [asap].[EmailOutbox] WHERE [Id] IN (@first, @second) AND [Status] = N'pending';";
-        outbox.Parameters.AddWithValue("@first", dispatcher.EnqueuedIds[0]);
-        outbox.Parameters.AddWithValue("@second", dispatcher.EnqueuedIds[1]);
-        Assert.AreEqual(2, Convert.ToInt32(await outbox.ExecuteScalarAsync()));
+            "SELECT [Id] FROM [asap].[EmailOutbox] WHERE [MessageKind] = N'confirmation' AND [TitleRequestId] IN (SELECT [Id] FROM [asap].[TitleRequest] WHERE [Barcode] IN (N'20000000000801', N'20000000000802'));";
+        await using var outboxReader = await outbox.ExecuteReaderAsync();
+        var confirmationIds = new List<long>();
+        while (await outboxReader.ReadAsync())
+        {
+            confirmationIds.Add(outboxReader.GetInt64(0));
+        }
+        await outboxReader.CloseAsync();
+        Assert.HasCount(2, confirmationIds);
+        Assert.IsTrue(confirmationIds.All(dispatcher!.EnqueuedIds.Contains));
+        await using var pending = connection.CreateCommand();
+        pending.CommandText = "SELECT COUNT(*) FROM [asap].[EmailOutbox] WHERE [Id] IN (@first, @second) AND [Status] = N'pending';";
+        pending.Parameters.AddWithValue("@first", confirmationIds[0]);
+        pending.Parameters.AddWithValue("@second", confirmationIds[1]);
+        Assert.AreEqual(2, Convert.ToInt32(await pending.ExecuteScalarAsync()));
     }
 
     [TestMethod]
@@ -2594,6 +2647,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             new
             {
                 version,
+                newPatronRequestEmailEnabled = true,
                 weeklyActionSummaryEnabled = true,
                 weeklyActionSummaryEmail = "weekly@example.org",
                 purchaseReminderDefault = true,
@@ -2609,6 +2663,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             new
             {
                 version,
+                newPatronRequestEmailEnabled = true,
                 weeklyActionSummaryEnabled = true,
                 weeklyActionSummaryEmail = " weekly@example.org ",
                 purchaseReminderDefault = true,
@@ -2618,6 +2673,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         Assert.AreEqual(HttpStatusCode.OK, update.StatusCode, await update.Content.ReadAsStringAsync());
         using var updateBody = JsonDocument.Parse(await update.Content.ReadAsStringAsync());
         var updated = updateBody.RootElement.GetProperty("staff");
+        Assert.IsTrue(updated.GetProperty("newPatronRequestEmailEnabled").GetBoolean());
         Assert.IsTrue(updated.GetProperty("weeklyActionSummaryEnabled").GetBoolean());
         Assert.AreEqual("weekly@example.org", updated.GetProperty("weeklyActionSummaryEmail").GetString());
         Assert.IsTrue(updated.GetProperty("purchaseReminderDefault").GetBoolean());
@@ -2629,6 +2685,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             new
             {
                 version = updated.GetProperty("version").GetString(),
+                newPatronRequestEmailEnabled = true,
                 weeklyActionSummaryEnabled = true,
                 weeklyActionSummaryEmail = (string?)null,
                 purchaseReminderDefault = true,
@@ -2646,6 +2703,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             new
             {
                 version,
+                newPatronRequestEmailEnabled = true,
                 weeklyActionSummaryEnabled = false,
                 weeklyActionSummaryEmail = "stale@example.org",
                 purchaseReminderDefault = false,
@@ -2659,6 +2717,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             new
             {
                 version = cleared.GetProperty("version").GetString(),
+                newPatronRequestEmailEnabled = true,
                 weeklyActionSummaryEnabled = true,
                 weeklyActionSummaryEmail = "legacy@staff.asap.local",
                 purchaseReminderDefault = false,
@@ -2670,7 +2729,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
         await using var verifyCommand = new SqlCommand(
-            "SELECT [NotificationEmail], [WeeklyActionSummaryEmail], [PurchaseReminderDefault] FROM [asap].[StaffUser] WHERE [Id] = @id;",
+            "SELECT [NotificationEmail], [WeeklyActionSummaryEmail], [PurchaseReminderDefault], [NewPatronRequestEmailEnabled] FROM [asap].[StaffUser] WHERE [Id] = @id;",
             verify);
         verifyCommand.Parameters.AddWithValue("@id", staffUserId);
         await using var reader = await verifyCommand.ExecuteReaderAsync();
@@ -2678,6 +2737,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         Assert.AreEqual("admin@example.org", reader.GetString(0));
         Assert.IsTrue(reader.IsDBNull(1));
         Assert.IsTrue(reader.GetBoolean(2));
+        Assert.IsTrue(reader.GetBoolean(3));
     }
 
     [TestMethod]

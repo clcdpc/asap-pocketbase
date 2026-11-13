@@ -31,6 +31,7 @@ async function main() {
     await page.route('**/api/asap/staff/profile', async route => {
       const body = route.request().postDataJSON(); report.posts.push(body);
       assert.equal(Object.hasOwn(body, 'notificationEmail'), false);
+      assert.equal(typeof body.newPatronRequestEmailEnabled, 'boolean');
       const response = await route.fetch();
       if (conflictNext) {
         conflictNext = false;
@@ -97,6 +98,10 @@ async function main() {
       return selection.toString();
     });
     assert.equal(selectedPrimary, 'primary@example.org', 'account email remains selectable and copyable');
+    const newRequestSubscription = page.getByRole('checkbox', {
+      name: 'Email me when a new patron purchase request is submitted.', exact: true
+    });
+    assert.equal(await newRequestSubscription.isChecked(), true, 'New accounts are subscribed by default.');
     const missingPage = await bind(await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers }),
       { missingPrimary: true });
     assert.equal(await missingPage.locator('#notification-email').textContent(),
@@ -121,10 +126,13 @@ async function main() {
     await field.fill(''); await save(page);
     assert.equal(report.posts.at(-1).weeklyActionSummaryEmail, null);
     await field.focus(); await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'new-patron-request-email-enabled');
+    await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'weekly-enabled');
-    await field.fill('additional@example.org'); await save(page);
+    await field.fill('additional@example.org'); await newRequestSubscription.uncheck(); await save(page);
     await page.reload({ waitUntil: 'networkidle' });
     assert.equal(await field.inputValue(), 'additional@example.org');
+    assert.equal(await newRequestSubscription.isChecked(), false, 'Saved opt-out survives a fresh session read.');
     assert.equal(await page.locator('#weekly-enabled').isChecked(), true);
     await scan(page, 'desktop');
 
@@ -170,7 +178,7 @@ async function main() {
     await scan(zoomPage, 'native-200-percent');
     const visualGeometry = await zoomPage.evaluate(() => {
       const selectors = ['#profile-form', '#notification-email-label', '#notification-email', '#notification-email-help',
-        '#weekly-email-label', '#weekly-email', '#weekly-email-help', '#weekly-enabled', '#purchase-default',
+        '#weekly-email-label', '#weekly-email', '#weekly-email-help', '#new-patron-request-email-enabled', '#weekly-enabled', '#purchase-default',
         '#additional-copy-default', '#mine-default', '#profile-form .form-actions'];
       return { width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth,
         bounds: Object.fromEntries(selectors.map(selector => {

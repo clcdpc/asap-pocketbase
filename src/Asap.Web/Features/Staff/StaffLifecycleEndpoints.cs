@@ -166,6 +166,7 @@ public static class StaffLifecycleEndpoints
         role = user.Role,
         organizationId = user.OrganizationId,
         active = user.IsActive,
+        newPatronRequestEmailEnabled = user.NewPatronRequestEmailEnabled,
         weeklyActionSummaryEnabled = user.WeeklyActionSummaryEnabled,
         weeklyActionSummaryEmail = user.WeeklyActionSummaryEmail,
         purchaseReminderDefault = user.PurchaseReminderDefault,

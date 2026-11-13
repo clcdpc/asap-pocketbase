@@ -27,6 +27,12 @@ public sealed partial class PatronJourneyTests
         await startup.GetAsync("/api/asap/staff/session");
         var actor = await ReadConfiguredSuperAdminAsync();
         var target = await CreateCorrectiveStaffAsync(actor, "staff", 2);
+        Assert.IsTrue(target.NewPatronRequestEmailEnabled, "Newly provisioned staff subscribe by default.");
+        var profile = await factory.Services.GetRequiredService<StaffProfileService>().UpdateAsync(
+            await ReadCorrectiveStaffAsync(target),
+            new StaffProfileInput(StaffVersion.Encode(target.RowVersion), false, null, false, false, false, false),
+            CancellationToken.None);
+        Assert.AreEqual("updated", profile.Code);
         var newObjectId = Guid.NewGuid();
         var signIn = factory.Services.GetRequiredService<StaffSignInService>();
         await signIn.RecordSuccessfulSignInAsync(
@@ -45,6 +51,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(target.NormalizedUserPrincipalName, persisted.NormalizedUserPrincipalName);
         Assert.AreEqual("Current identity", persisted.DisplayName);
         Assert.AreEqual(target.NotificationEmail, persisted.NotificationEmail);
+        Assert.IsFalse(persisted.NewPatronRequestEmailEnabled, "Sign-in preserves the saved opt-out.");
         Assert.IsNotNull(persisted.LastLoginUtc);
 
         var laterObjectId = Guid.NewGuid();
@@ -373,7 +380,7 @@ public sealed partial class PatronJourneyTests
         var staff = await CreateCorrectiveStaffAsync(superAdmin, "staff", organization.Id);
         var actor = await ReadCorrectiveStaffAsync(staff);
         var profiles = factory.Services.GetRequiredService<StaffProfileService>();
-        var input = new StaffProfileInput(StaffVersion.Encode(staff.RowVersion), true, "profile@example.org", true, true, true);
+        var input = new StaffProfileInput(StaffVersion.Encode(staff.RowVersion), true, "profile@example.org", true, true, true, false);
         organization.IsActive = false;
         await context.SaveChangesAsync();
         var result = await profiles.UpdateAsync(actor, input, CancellationToken.None);
@@ -381,12 +388,14 @@ public sealed partial class PatronJourneyTests
         var unchanged = await context.StaffUsers.AsNoTracking().SingleAsync(item => item.Id == staff.Id);
         CollectionAssert.AreEqual(staff.RowVersion, unchanged.RowVersion, "Forbidden preference updates must not commit before reporting failure.");
         Assert.IsFalse(unchanged.WeeklyActionSummaryEnabled);
+        Assert.IsTrue(unchanged.NewPatronRequestEmailEnabled);
         organization.IsActive = true;
         await context.SaveChangesAsync();
         var saved = await profiles.UpdateAsync(actor, input, CancellationToken.None);
         Assert.AreEqual("updated", saved.Code);
         Assert.IsTrue(saved.Staff!.WeeklyActionSummaryEnabled);
         Assert.AreEqual("profile@example.org", saved.Staff.WeeklyActionSummaryEmail);
+        Assert.IsFalse(saved.Staff.NewPatronRequestEmailEnabled);
         Assert.AreEqual("stale_version", (await profiles.UpdateAsync(actor, input, CancellationToken.None)).Code);
     }
 
@@ -575,6 +584,19 @@ public sealed partial class PatronJourneyTests
 
         var admin = await CreateCorrectiveStaffAsync(superAdmin, "admin", 2);
         var actor = await ReadCorrectiveStaffAsync(admin);
+        var provisionedDefault = await service.CreateAsync(
+            superAdmin,
+            new StaffCreateInput($"default.{Guid.NewGuid():N}@example.org", "staff", 2),
+            CancellationToken.None);
+        Assert.AreEqual("created", provisionedDefault.Code);
+        Assert.IsTrue(provisionedDefault.User!.NewPatronRequestEmailEnabled);
+        var disabledDefault = await service.DeactivateAsync(
+            superAdmin,
+            provisionedDefault.User.Id,
+            new StaffDeactivateInput(StaffVersion.Encode(provisionedDefault.User.RowVersion)),
+            CancellationToken.None);
+        Assert.AreEqual("updated", disabledDefault.Code);
+
         var target = await CreateCorrectiveStaffAsync(superAdmin, "staff", 2);
         Assert.IsNull(target.EntraTenantId);
         Assert.IsNull(target.EntraObjectId);
@@ -587,7 +609,7 @@ public sealed partial class PatronJourneyTests
 
         var profile = await factory.Services.GetRequiredService<StaffProfileService>().UpdateAsync(
             await ReadCorrectiveStaffAsync(target),
-            new StaffProfileInput(StaffVersion.Encode(target.RowVersion), true, "weekly@example.org", true, true, false),
+            new StaffProfileInput(StaffVersion.Encode(target.RowVersion), true, "weekly@example.org", true, true, false, false),
             CancellationToken.None);
         Assert.AreEqual("updated", profile.Code);
         var deactivated = await service.DeactivateAsync(
@@ -602,6 +624,7 @@ public sealed partial class PatronJourneyTests
             CancellationToken.None);
         Assert.AreEqual("created", reactivated.Code);
         Assert.AreEqual(target.Id, reactivated.User!.Id);
+        Assert.IsFalse(reactivated.User.NewPatronRequestEmailEnabled, "Reactivation preserves an explicit opt-out.");
         Assert.IsTrue(reactivated.User.WeeklyActionSummaryEnabled);
         Assert.AreEqual("weekly@example.org", reactivated.User.WeeklyActionSummaryEmail);
 
