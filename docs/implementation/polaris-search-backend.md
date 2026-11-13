@@ -1,9 +1,8 @@
-# Polaris search and direct queue backend (#389, P1)
+# Polaris catalog research and direct queue contracts
 
-P1 supplies the server contract for the later Polaris search UI. It adds no
-result buttons or changes to editor drafts. The current frontend continues to
-use its existing search, Apply to Form, and workflow paths. P2 owns the result
-cards, confirmations, accessibility, and browser interaction changes.
+The staff Search Polaris dialog uses these scoped search, exact-BIB, holdings
+and direct-queue contracts. Its bibliographic selection updates the verified
+BIB and reconciles Title while preserving other editor drafts.
 
 ## Catalog lookup
 
@@ -27,7 +26,7 @@ leave fewer results. `totalMatchesKind: provider` means a single provider query.
 For existing alternative ISBN/UPC/LCCN and title/author searches,
 `provider_maximum` means the largest reported provider total across attempts.
 Those result sets overlap; the API does not claim to know their union size and
-never substitutes the number of returned rows. P2 should label alternative
+never substitutes the number of returned rows. The UI should label alternative
 search totals accordingly instead of presenting them as an exact union count.
 Provider failure remains an error, distinct from a definitive empty search.
 
@@ -39,12 +38,69 @@ and library (24 hours; one minute before retrying failed reference reads).
 Existing textual labels are a fallback; unresolved numeric codes display
 `Unknown`. Optional presentation failure does not erase trustworthy BIB results.
 
-Icons use the existing **system-only** SQL setting
-`SystemSettings.MaterialTypeIconUrlPattern`. Supported tokens are `{id}`,
-`{id2}`, `{MARCTypeOfMaterialID}`, `{MARCTypeOfMaterialID2}`, and `{SearchCode}`.
-Only validated HTTP(S) URLs without credentials, or single-slash local paths,
-are returned. Missing/unsafe icons are null. P2 must still handle image failure
-and use decorative alt text. Catalog material types never set ASAP Format.
+The result layout places material artwork and its full readable format label in
+a left rail, bibliographic/holdings details in the center, and aligned BIB
+actions in a separate right column. Actions stack below at narrow widths.
+Catalog material types never set ASAP Material formats.
+
+### Catalog presentation configuration
+
+Settings → Getting started → Polaris catalog and material icons edits **PAC base
+URL** and **material-type icon URL pattern** as system defaults with library
+overrides (`catalog.pacBaseUrl`, `catalog.formatIconUrlPattern`). The system icon
+default remains `SystemSettings.MaterialTypeIconUrlPattern`; its existing
+`systemSettings.formatIconUrlPattern` API write name remains supported. No
+stored icon patterns are migrated or discarded. LEAP remains system-only.
+
+For either field, SQL/API `null` means inherit; an explicit empty string means
+disabled at that scope. An omitted write leaves the value untouched. The editor
+shows effective values and marks ownership; **Use system value** clears that
+field's override. **Reset inherited overrides** clears both catalog overrides
+while preserving the library-owned **PAC organization ID** mapping.
+
+PAC base URLs are absolute HTTP(S) catalog application roots, optionally with a
+path, without query, fragment, credentials or placeholders. Example:
+`https://catalog.example.org/polaris`. Icon patterns accept HTTP(S) URLs or
+existing single-slash local paths, without credentials. Supported tokens are:
+
+| Token | Substitution / requirement |
+| --- | --- |
+| `{pacBaseUrl}` | Effective PAC base, without trailing slash; only at the pattern's start, followed by `/`. |
+| `{pacOrgId}` | Explicit positive library PAC organization ID. Required only when referenced. Never inferred from ASAP, requesting or pickup IDs. |
+| `{id}`, `{MARCTypeOfMaterialID}` | Provider material-type ID. |
+| `{id2}`, `{MARCTypeOfMaterialID2}` | Same ID padded to at least two digits. |
+| `{SearchCode}` | Provider definition's search code, URL-encoded. Required only when referenced. |
+
+Tokens cannot form a URL scheme or host. Unsupported/unresolved placeholders
+and unsafe URLs are rejected. Existing literal and absolute/local patterns
+remain usable without a PAC base. A blank PAC base disables only patterns that
+reference it. Preview uses the same server resolution/substitution code with
+synthetic IDs and the current selected settings scope/drafts; it never queries
+Polaris or saves settings. An inherited system pattern using `{pacOrgId}` can
+only render in a library context with that explicit mapping.
+
+Read-only inspection of the supplied public catalog on November 13, 2026 found
+`/polaris/themes/shared/formats/formatid01.gif` and `formatid50.gif`. The
+[Polaris material-type documentation](https://documentation.iii.com/polaris/7.6/PolarisStaffHelp/Public_Access_Admin/PDOpower/Type%20of%20Material%20Filters.htm)
+describes `themes/shared/formats/formatidNN.gif`; a suitable pattern is
+`{pacBaseUrl}/themes/shared/formats/formatid{id2}.gif`. These shared icons do not
+consume PAC context. The
+[PAC customization guide](https://documentation.iii.com/polaris/PolarisPDFGuides/PolarisPACCustomizationGuide_7.3.pdf)
+(page 29) identifies `ctx` as organization, language, then three unused legacy
+components: in `27.1033.0.0.12`, 27 is PAC organization and 1033 is English.
+Operators must confirm any library-specific mapping; ASAP supplies no guessed
+context values. Context-specific paths may use `{pacOrgId}` with literal
+language/legacy components as required by that catalog's configured convention.
+
+Runtime resolves presentation per lookup using the already authorized request
+library or specific servicing library, including exact-BIB lookup and ownership
+enrichment. An All libraries queue does not supply catalog scope. Missing
+configuration, required mappings/identifiers, unavailable definitions and failed
+images preserve useful labels and a decorative generic icon. No image-sync job
+or server image cache is used; browsers cache artwork. The existing host/library
+material-definition cache stores provider reference data only; URLs are rebuilt
+from current SQL configuration on each lookup, preventing stale cross-library
+presentation after edits.
 
 ## Holdings and action preview
 
@@ -78,9 +134,9 @@ return 502. Existing scope/identity errors retain their 400/401/403/404 response
 Unresolved holdings owners are unavailable rather than inferred consortium
 ownership. Caller cancellation remains cancellation.
 
-P2 should coordinate up to ten independent lookups with a small concurrency
-limit (for example three), deduplicate by request/library/BIB, and cancel and
-discard responses when search, request, version, library, or session changes.
+The UI coordinates up to ten independent lookups with a concurrency limit of
+three, deduplicates by request/library/BIB, and cancels and discards responses
+when search, request, version, library, or session changes.
 The backend does not fan out catalog calls. Suppressing optional patron-hold
 enrichment avoids repeating that read for every result; the hold processor
 performs its own authoritative patron checks.
@@ -90,7 +146,7 @@ performs its own authoritative patron checks.
 `useBib` and `additionalCopy`. Each supplies `action`, `allowed`,
 `blockingReason`, `enablesAutomaticHold`, and `targetStatus`. These are previews;
 the mutation repeats authorization, version, workflow and provider checks.
-P2 can render eligibility reasons without implementing a second workflow policy.
+The UI renders eligibility reasons without implementing a second workflow policy.
 An existing open copy for the source request blocks another combined copy.
 Other open tasks for the library/BIB remain informational, preserving ordinary
 additional-copy semantics.
@@ -132,7 +188,7 @@ closes the request with `purchased_no_hold`. It creates no copy task.
 
 `additionalCopy` creates exactly one open task for the same source request,
 library and selected BIB, **persists `AutoHold = true` even when initially
-false**, and commits the normal Pending hold transition. P2's confirmation must
+false**, and commits the normal Pending hold transition. The confirmation must
 explain task creation, queueing, and the automatic-hold override explicitly.
 An omitted/null reminder choice uses the current actor's additional-copy
 reminder default; true and false explicitly select or opt out. The recipient is
@@ -199,11 +255,11 @@ executed-write rollback, commit acknowledgement loss through service and HTTP,
 hold adoption, search modes/counts/materials/icons, holdings and cancellation.
 They do not claim live Polaris/Postmark validation.
 
-The P2 dialog, badges, icons, confirmation copy, asynchronous result ownership,
-draft integration, focus/announcements and new browser journeys remain future
-frontend work. P1 requires the ordinary Web deployment only; no host activation,
-production work, or migration package/schema change is introduced. Issue #389
-remains open for P2 and integrated scenario acceptance.
+Browser journeys cover dialog layout, badges/icons, confirmation copy,
+asynchronous result ownership, draft integration, keyboard focus and native
+200% browser zoom. Automated checks do not complete human visual or
+screen-reader acceptance. No live deployment or provider mutation is part of
+these checks.
 
 ## Validation results — 2026-10-27
 
@@ -216,7 +272,7 @@ remains open for P2 and integrated scenario acceptance.
 | Release build | Zero warnings/errors. |
 | Publishing | Web/DACPAC and separate self-contained win-x64 migration passed; all 73 frontend assets passed source identity verification. |
 
-Discovery totals 1,542 current .NET cases: 1,525 non-browser and 17 browser,
+The October 27 discovery snapshot contained 1,542 .NET cases: 1,525 non-browser and 17 browser,
 including 86 new P1 cases. SQL validation used local SQL Server 2022 Developer
 Edition `16.0.1210.3`, with deterministic provider boundaries and controlled PAPI
 HTTP responses. An initial run of the unchanged grid-sort browser journey

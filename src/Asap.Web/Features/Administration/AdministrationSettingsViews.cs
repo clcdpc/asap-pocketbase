@@ -102,7 +102,11 @@ public sealed record SettingsScopeView(
     [property: JsonPropertyName("providers")] IReadOnlyList<SettingsProviderView> Providers,
     [property: JsonPropertyName("formats")] IReadOnlyList<SettingsFormatView> Formats,
     [property: JsonPropertyName("templates")] IReadOnlyList<EmailTemplateSettingsView> Templates,
-    [property: JsonPropertyName("branding")] BrandingSettingsView Branding);
+    [property: JsonPropertyName("branding")] BrandingSettingsView Branding)
+{
+    [JsonPropertyName("catalog")]
+    public Staff.CatalogPresentationValues? Catalog { get; init; }
+}
 
 public sealed record SystemSettingsView
 {

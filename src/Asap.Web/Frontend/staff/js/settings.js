@@ -13,6 +13,7 @@ import { byDisplayLabel } from './display-order.js';
 import { inheritanceStatus } from './settings-inheritance.js';
 import { clean, object, property, meaningful } from './settings-values.js';
 import { isLibraryOrganization, validateOrganizationCatalog } from './settings-organization-catalog.js';
+import { safeMaterialIconUrl } from './research.js';
 
 const WORKFLOW_FIELDS = [
   ['suggestionLimit', 'suggestion-limit', 'number'],
@@ -72,9 +73,13 @@ const SYSTEM_FIELDS = [
   ['staffUrl', 'system-staff-url'],
   ['leapBibUrlPattern', 'leap-bib-url-pattern'],
   ['leapPatronUrlPattern', 'leap-patron-url-pattern'],
-  ['formatIconUrlPattern', 'format-icon-url-pattern'],
   ['systemNotEnabledMessage', 'ui-system-not-enabled-msg'],
   ['misconfiguredMessage', 'ui-misconfigured-msg']
+];
+
+const CATALOG_FIELDS = [
+  ['pacBaseUrl', 'pac-base-url', 'catalog'],
+  ['formatIconUrlPattern', 'format-icon-url-pattern', 'catalog']
 ];
 
 const POLARIS_FIELDS = [
@@ -86,7 +91,7 @@ const POLARIS_FIELDS = [
   ['systemPolarisUserId', 'polaris-system-user-id']
 ];
 
-const SETTINGS_OPERATION_SLOTS = ['administration-settings', 'administration-staff-access', 'administration-polaris-test', 'administration-scope', 'administration-patron-codes'];
+const SETTINGS_OPERATION_SLOTS = ['administration-settings', 'administration-staff-access', 'administration-polaris-test', 'administration-scope', 'administration-patron-codes', 'administration-catalog-preview'];
 
 const TEMPLATE_FIELDS = [
   ['suggestion_submitted', 'submit', 'email-submit-subject', 'email-submit-body'],
@@ -152,6 +157,7 @@ function mergeConfigured(system, override, fallback = {}) {
 
 function readControl(control, kind = 'text') {
   if (!control) return null;
+  if (kind === 'catalog') return control.value.trim();
   if (kind === 'message') return control.value.trim() ? control.value : null;
   if (kind === 'boolean' || control.type === 'checkbox') return control.checked;
   if (kind === 'id') {
@@ -871,6 +877,7 @@ export function createSettingsController({
   }
 
   function cancelSettingsOperations() {
+    clearCatalogPreview();
     clearBlockedDraftNotice();
     emailTest.invalidate();
     state.loading = false;
@@ -1133,6 +1140,8 @@ export function createSettingsController({
   }
 
   function draftChanged(event) {
+    if (event?.target?.closest('#settings-catalog-links')) clearCatalogPreview();
+    if (event?.target?.closest('#settings-catalog-links [data-settings-ignore="true"]')) return;
     if (event?.target === dom.staffShowInactive) return;
     drafts.touch(event?.target); updateDirtyState();
     if (event?.resetLabel) {
@@ -1150,6 +1159,7 @@ export function createSettingsController({
     if (section === 'patron') return isSystem() ? system?.patron : library?.patron;
     if (section === 'email') return isSystem() ? system?.email : library?.email;
     if (section === 'branding') return isSystem() ? system?.branding : library?.branding;
+    if (section === 'catalog') return isSystem() ? system?.catalog : library?.catalog;
     return null;
   }
 
@@ -1217,10 +1227,11 @@ export function createSettingsController({
       const comparisonOpen = field.querySelector('.settings-system-comparison')?.open;
       field.querySelector('.settings-inheritance')?.remove();
       const input = fieldInput(field);
-      const fields = section === 'workflow' ? WORKFLOW_FIELDS : section === 'patron' ? PATRON_FIELDS : EMAIL_FIELDS;
+      const fields = section === 'workflow' ? WORKFLOW_FIELDS : section === 'patron' ? PATRON_FIELDS : section === 'catalog' ? CATALOG_FIELDS : EMAIL_FIELDS;
       const kind = fields.find(item => item[0] === key)?.[2];
       const inherited = inheritedScalar(section, key);
       const normalize = value => kind === 'boolean' ? Boolean(value) : kind === 'number' ? value === null || value === undefined ? null : Number(value)
+        : kind === 'catalog' ? String(value ?? '').trim()
         : kind === 'message' ? (String(value ?? '').trim() ? String(value) : null)
         : typeof value === 'string' ? clean(value) : value ?? null;
       const inheritedTemplate = kind === 'id' ? templateRows(state.data).find(row => String(row.id) === String(inherited)) : null;
@@ -1240,6 +1251,7 @@ export function createSettingsController({
             state.scalarDisplays.set(control.id, control.type === 'checkbox' ? control.checked : control.value);
           }
           refreshScalarStatus(section, key);
+          if (section === 'catalog') clearCatalogPreview();
           applyTimeoutDependencies();
           syncCommonAuthorsOptions();
           patronPlaceholders.refresh(); suggestionLimitPlaceholders.refresh(); placeholders.refresh();
@@ -1283,7 +1295,7 @@ export function createSettingsController({
         field.querySelector('.settings-inheritance')?.remove();
         continue;
       }
-      if (!['workflow', 'patron', 'email', 'branding'].includes(section)) continue;
+      if (!['workflow', 'patron', 'email', 'branding', 'catalog'].includes(section)) continue;
       if (system) {
         if (input) input.disabled = false;
         field.querySelector('.settings-inheritance')?.remove();
@@ -1291,6 +1303,7 @@ export function createSettingsController({
         configureScalar(field, section, key);
       }
     }
+    root.querySelector('#pac-organization-id').disabled = system;
     for (const fieldset of root.querySelectorAll('fieldset[data-system-only="true"]')) {
       fieldset.disabled = !system;
       const legend = fieldset.querySelector('legend');
@@ -1837,6 +1850,7 @@ export function createSettingsController({
   }
 
   function populate(data) {
+    clearCatalogPreview();
     pendingInheritanceNotice?.(); pendingInheritanceNotice = null;
     const commonAuthorsOptionsHadFocus = dom.commonAuthorsOptions?.contains(document.activeElement) === true;
     pendingCommonAuthorsFocus = false;
@@ -1870,6 +1884,12 @@ export function createSettingsController({
 
     dom.version.value = data.version || '';
     setSystemFields(systemSettings);
+    const systemCatalog = configuredSystem.catalog || { formatIconUrlPattern: systemSettings.formatIconUrlPattern };
+    const catalogOverride = object(libraryOverride.catalog);
+    const catalog = Object.fromEntries(CATALOG_FIELDS.map(([key]) => [key,
+      !isSystem() && catalogOverride[key] !== null && catalogOverride[key] !== undefined ? catalogOverride[key] : systemCatalog[key]]));
+    setScopedFields(catalog, CATALOG_FIELDS);
+    writeControl(root.querySelector('#pac-organization-id'), libraryOverride.catalog?.pacOrganizationId);
     setPolarisFields(configuredSystem.polaris || stored.polaris);
     for (const [key, id, kind] of WORKFLOW_FIELDS) writeControl(document.getElementById(id), property(workflow, key));
     setScopedFields(patron, PATRON_FIELDS);
@@ -2358,6 +2378,7 @@ export function createSettingsController({
     payload.workflow = workflow;
     payload.patron = patron;
     payload.email = email;
+    payload.catalog = collectCatalog();
     const domainValues = domainData.values;
     if (domainData.domainsChanged.publication) {
       payload.patron.publicationOptions = isSystem() || !domainValues.publicationUseSystem
@@ -2400,6 +2421,49 @@ export function createSettingsController({
       delete payload.polaris;
     }
     return payload;
+  }
+
+  function collectCatalog() {
+    const catalog = collectScoped('catalog', CATALOG_FIELDS);
+    const mapping = root.querySelector('#pac-organization-id');
+    if (!isSystem() && mapping.value !== state.baselineSnapshot.find(item => item[0] === mapping.id)?.[1]) {
+      catalog.pacOrganizationId = readControl(mapping, 'number');
+    }
+    return catalog;
+  }
+
+  function clearCatalogPreview() {
+    reads.begin('administration-catalog-preview').abort();
+    root.querySelector('#catalog-preview')?.replaceChildren();
+  }
+
+  async function previewCatalog() {
+    if (!state.data || state.loading || state.awaitingReload || dom.form.inert) return;
+    clearCatalogPreview();
+    const load = reads.begin('administration-catalog-preview'), generation = contextGeneration;
+    const output = root.querySelector('#catalog-preview');
+    output.textContent = 'Resolving example icon…';
+    try {
+      const result = await authorizedJson('/api/asap/staff/settings/catalog-preview', { method: 'POST', signal: load.signal,
+        body: { orgId: state.scope, catalog: collectCatalog(),
+          materialTypeId: Number(root.querySelector('#catalog-preview-type-id').value),
+          materialTypeSearchCode: root.querySelector('#catalog-preview-search-code').value } });
+      if (!load.isCurrent() || generation !== contextGeneration || disposed) return;
+      const url = safeMaterialIconUrl(result.formatIconUrl);
+      output.replaceChildren(node('p', { text: `Effective PAC base URL: ${result.effective?.pacBaseUrl || '(disabled or unconfigured)'}` }),
+        node('p', { text: `Resolved example icon URL: ${url || '(unavailable; results use a generic icon)'}` }));
+      if (url) {
+        const image = node('img', { src: url, alt: 'Synthetic material-type icon preview', width: '64', height: '64' });
+        image.addEventListener('error', () => {
+          if (image.isConnected) image.replaceWith(node('p', { text: 'Image unavailable; results use a generic icon.' }));
+        }, { once: true });
+        output.append(image);
+      }
+    } catch (error) {
+      if (load.isCurrent() && generation === contextGeneration && !isAbortError(error)) output.textContent = error.message || 'Icon preview could not be resolved.';
+    } finally {
+      reads.finish('administration-catalog-preview', load.token);
+    }
   }
 
   async function saveSettings(event) {
@@ -3007,6 +3071,7 @@ export function createSettingsController({
       refreshScalarStatus(section, key);
     };
     listen(dom.form, 'input', trackInheritanceEdit, true);
+    listen(root.querySelector('#catalog-preview-button'), 'click', previewCatalog);
     listen(dom.form, 'change', trackInheritanceEdit, true);
     listen(dom.form, 'input', draftChanged);
     listen(dom.form, 'change', draftChanged);

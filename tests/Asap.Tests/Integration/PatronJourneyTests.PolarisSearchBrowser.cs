@@ -26,8 +26,10 @@ public sealed partial class PatronJourneyTests
         var provider = copyOff.Provider;
         provider.SetHolds(stale.Source.Barcode, 2, []);
         var rows = Enumerable.Range(0, 12).Select(index => new StaffBibSearchRow(9001 + index,
-            $"Catalog result {index + 1}: a readable title that wraps at narrow widths", "Catalog author", "2026", "Book", $"CATALOG-{index}")
-            { FormatIconUrl = "/jpl.png" }).ToArray();
+            $"Catalog result {index + 1}: a readable title that wraps at narrow widths", "Catalog author", "2026",
+            index % 3 == 0 ? "Audio CD" : index % 3 == 1 ? "Large print with full provider description" : "Book",
+            index == 1 ? new string('9', 180) : $"CATALOG-{index}")
+            { FormatIconUrl = index == 1 ? "/fixtures/material-missing.gif" : index == 2 ? null : "/jpl.png" }).ToArray();
         foreach (var row in rows)
         {
             provider.SetBib(row.BibId, 2, new(true, row.Title, row.Author, row.Publication, row.Format, row.Identifier)

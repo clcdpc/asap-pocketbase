@@ -48,12 +48,30 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
         overflow: [...dialog.querySelectorAll('.polaris-result, .polaris-result-actions, .polaris-confirmation')]
           .filter(node => node.getClientRects().length).some(node => node.scrollWidth > node.clientWidth + 1),
         images: [...document.images].filter(node => node.getClientRects().length).every(node => node.complete && node.naturalWidth > 0),
+        resultWidth: document.getElementById('polaris-results').clientWidth,
+        results: [...dialog.querySelectorAll('.polaris-result')].map(row => ({
+          rail: row.querySelector('.polaris-format-rail').getBoundingClientRect().toJSON(),
+          details: row.querySelector('.polaris-result-details').getBoundingClientRect().toJSON(),
+          actions: row.querySelector('.polaris-result-actions').getBoundingClientRect().toJSON(),
+          label: row.querySelector('.polaris-format-label').textContent,
+          metadata: row.querySelector('.polaris-metadata').textContent
+        })),
         focused: document.activeElement?.textContent, devicePixelRatio, htmlZoom: getComputedStyle(document.documentElement).zoom };
     });
     assert.deepEqual(state.violations, [], `${name}: serious/critical axe findings`);
     assert.ok(state.documentWidth <= state.width, `${name}: document horizontal overflow`);
     assert.equal(state.overflow, false, `${name}: result/action overflow`);
     assert.equal(state.images, true, `${name}: unexpected missing image`);
+    for (const row of state.results) {
+      assert.ok(row.label.trim(), `${name}: format remains readable`);
+      assert.doesNotMatch(row.metadata, /Format:/, `${name}: format is represented by its own rail`);
+      if (state.resultWidth > 650) {
+        assert.ok(Math.abs(row.actions.left - state.results[0].actions.left) < 1, `${name}: action columns align regardless of badges/metadata`);
+        assert.ok(row.actions.left >= row.details.right && row.details.left >= row.rail.right, `${name}: three dedicated columns`);
+      } else {
+        assert.ok(row.actions.top >= Math.max(row.rail.bottom, row.details.bottom) - 1, `${name}: all actions stack below the result`);
+      }
+    }
     assert.ok(state.frame.left >= 0 && state.frame.right <= state.width + 1 && state.frame.bottom <= state.height + 1 && state.frame.top >= 0,
       `${name}: modal remains within viewport`);
     if (nativeZoom) {
@@ -79,6 +97,10 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
     for (const index of [2, 3, 4]) assert.equal(await cards.nth(index).locator('.polaris-queue-button').isDisabled(), true);
     assert.equal(await first().locator('img').getAttribute('alt'), '');
     assert.equal(new URL(await first().locator('img').getAttribute('src'), baseURL).origin, new URL(baseURL).origin);
+    await cards.nth(1).locator('img').waitFor({ state: 'detached' });
+    assert.equal(await cards.nth(1).locator('.polaris-format-fallback').isVisible(), true);
+    assert.equal(await cards.nth(2).locator('.polaris-format-fallback').isVisible(), true);
+    assert.equal(await cards.nth(1).locator('.polaris-format-label').textContent(), 'Large print with full provider description');
     await lookup.locator('#polaris-ownership-status').filter({ hasText: 'Ownership checks complete.' }).waitFor();
     const posts = [];
     page.on('request', request => { if (request.url().endsWith('/staff/bib-lookup')) posts.push(request.postDataJSON()); });
@@ -120,6 +142,12 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
       await zoomPage.waitForFunction(before => Math.abs(devicePixelRatio / before - 2) < 0.01, ratio);
       await openSearch(copyOff, 'suggestion', zoomPage); await scan('polaris-native-zoom-results', zoomPage, true);
       await zoomPage.locator('.polaris-copy-button').first().click(); await scan('polaris-native-zoom-confirmation', zoomPage, true);
+      await zoomPage.keyboard.press('Escape'); await zoomPage.keyboard.press('Escape');
+      await zoomPage.locator(`#request-grid a[data-request-id="${copyOff}"]`).click();
+      await zoomPage.locator('#request-dialog').getByRole('button', { name: 'Search Polaris catalog', exact: true }).click();
+      await zoomPage.locator('#polaris-query').press('Enter');
+      await zoomPage.locator('#polaris-ownership-status').filter({ hasText: 'Ownership checks complete.' }).waitFor();
+      await scan('polaris-native-zoom-use-bib', zoomPage, true);
       await zoomPage.keyboard.press('Escape'); await zoomPage.keyboard.press('Escape');
     } finally { await zoomContext.close(); }
 
@@ -183,6 +211,39 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
     await editor.getByLabel('Author', { exact: true }).fill('Unsaved staff author');
     await editor.getByRole('button', { name: 'Search Polaris catalog', exact: true }).click();
     await page.locator('#polaris-query').press('Enter');
+    await lookup.locator('#polaris-ownership-status').filter({ hasText: 'Ownership checks complete.' }).waitFor();
+    await scan('polaris-use-bib-aligned');
+    await page.setViewportSize({ width: 390, height: 844 }); await scan('polaris-use-bib-mobile');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    // A successful response from a closed dialog must not repaint its replacement.
+    let releasePrior, priorStarted, priorDelivered;
+    const priorReady = new Promise(resolve => { priorStarted = resolve; });
+    const priorHold = new Promise(resolve => { releasePrior = resolve; });
+    const priorDone = new Promise(resolve => { priorDelivered = resolve; });
+    let heldPrior = false;
+    const delayedPrior = async route => {
+      if (heldPrior || route.request().postDataJSON().mode !== 'title') return route.continue();
+      heldPrior = true;
+      const response = await route.fetch(); assert.equal(response.status(), 200); priorStarted(); await priorHold;
+      await route.fulfill({ response }).catch(() => {}); priorDelivered();
+    };
+    await page.route('**/api/asap/staff/bib-lookup', delayedPrior);
+    await page.locator('#polaris-query').press('Enter'); await priorReady;
+    await page.locator('#close-polaris').click();
+    await editor.getByRole('button', { name: 'Search Polaris catalog', exact: true }).click();
+    // Exact BIB uses the same rail/details/action layout and readable format.
+    await page.locator('#polaris-mode').selectOption('bib');
+    await page.locator('#polaris-query').fill('9001');
+    await page.locator('#polaris-query').press('Enter');
+    await lookup.locator('#polaris-status').filter({ hasText: '1 catalog result shown' }).waitFor();
+    releasePrior(); await priorDone; await page.unroute('**/api/asap/staff/bib-lookup', delayedPrior);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await cards.count(), 1, 'Late successful research cannot replace a closed/reopened dialog context.');
+    await scan('polaris-exact-bib');
+    await first().getByRole('button', { name: 'Use BIB 9001 in form', exact: true }).focus();
+    assert.equal(await first().getByRole('button', { name: 'Use BIB 9001 in form', exact: true }).evaluate(node => {
+      const style = getComputedStyle(node); return node === document.activeElement && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
+    }), true, 'Keyboard selection retains visible focus.');
     await first().getByRole('button', { name: 'Use BIB 9001 in form', exact: true }).click();
     await lookup.waitFor({ state: 'hidden' });
     assert.equal(await editor.getByLabel('Author', { exact: true }).inputValue(), 'Unsaved staff author');

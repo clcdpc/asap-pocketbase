@@ -7,6 +7,7 @@ const { chromium } = require('playwright');
 const { providerGeometry } = require('../acceptance/helpers/workflow-settings.cjs');
 const { runSourceComponents } = require('./settings-accessibility.cjs');
 const settingsSpacingRecorder = require('./settings-spacing.cjs');
+const materialFormatsLayout = require('./material-formats-layout.cjs');
 const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
 
 async function verifyPolarisSettings(page, width, scope, scan, report) {
@@ -713,6 +714,7 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
                     }
                   }
                   const rule = page.locator('#format-rules-editor [data-rule-toggle]').first();
+                  await materialFormatsLayout(page);
                   if (await rule.count()) { await rule.click(); await auditSpacing(`${state}-format-expanded`); await rule.click(); }
                   if (scope !== 'system' && ['desktop', '390', 'css-200'].includes(config.name)) {
                     assert.equal(await page.locator('#add-publication-option').isEnabled(), true);
@@ -721,6 +723,28 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
                     }
                     await auditSpacing(`${state}-rows-added`);
                     const publications = page.locator('#publication-options-editor [data-domain-row]');
+                    const formats = page.locator('#material-formats-editor > [data-domain-row]');
+                    const customCode = await formats.last().getAttribute('data-format-code');
+                    const customLabel = formats.last().locator('[data-material-field="label"]');
+                    await customLabel.focus(); await customLabel.press('Control+A');
+                    await page.keyboard.type('Custom format with a long readable material label');
+                    await page.keyboard.press('Tab'); await page.keyboard.press('Space');
+                    assert.equal(await formats.last().locator('[data-material-field="enabled"]').isChecked(), false);
+                    await page.keyboard.press('Tab');
+                    assert.equal(await formats.last().locator('[data-row-action="up"]').evaluate(node => node === document.activeElement &&
+                      getComputedStyle(node).outlineStyle !== 'none' && parseFloat(getComputedStyle(node).outlineWidth) >= 2), true);
+                    await page.keyboard.press('Enter');
+                    assert.equal(await formats.nth(await formats.count() - 2).getAttribute('data-format-code'), customCode);
+                    assert.equal(await formats.first().locator('[data-row-action="up"]').isDisabled(), true);
+                    assert.equal(await formats.last().locator('[data-row-action="down"]').isDisabled(), true);
+                    await materialFormatsLayout(page);
+                    const custom = page.locator(`#material-formats-editor > [data-format-code="${customCode}"]`);
+                    assert.equal(await custom.locator('[data-row-action="up"]').evaluate(node => node === document.activeElement), true,
+                      'Keyboard reordering retains focus on the moved format action.');
+                    await custom.locator('[data-row-action="delete"]').focus(); await page.keyboard.press('Enter');
+                    assert.equal(await custom.count(), 0);
+                    assert.equal(await page.locator('#material-formats-editor [data-material-field="label"]:focus').count(), 1,
+                      'Deleting a custom format restores focus to a remaining label.');
                     const order = await publications.evaluateAll(rows => rows.map(row => row.dataset.optionId));
                     const move = publications.last().locator('[data-row-action="up"]');
                     assert.match(await move.getAttribute('aria-label'), /^Move .+ up$/, 'Publication moves retain row-specific names.');

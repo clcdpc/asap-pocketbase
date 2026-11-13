@@ -28,7 +28,10 @@ public sealed partial class PatronJourneyTests
             systemScope ? LibraryScope.System : LibraryScope.ForLibrary(2), CancellationToken.None);
         Assert.AreEqual("ok", result.Code);
         var versionReads = probe.Commands.Where(sql => sql.Contains("-- Settings version", StringComparison.Ordinal)).ToArray();
-        Assert.AreEqual(17, versionReads.Length);
+        Assert.AreEqual(18, versionReads.Length);
+        var catalogVersionRead = versionReads.Single(sql => sql.Contains("FROM [asap].[LibraryCatalogSettings]", StringComparison.Ordinal));
+        StringAssert.Matches(catalogVersionRead, new Regex(@"WHERE \[\w+\]\.\[OrganizationId\] = @\w+"),
+            "Catalog override versions must be projected only for the selected library scope.");
         foreach (var sql in versionReads)
         {
             StringAssert.Matches(sql, new Regex(@"SELECT \[\w+\]\.\[RowVersion\]\s+FROM"));

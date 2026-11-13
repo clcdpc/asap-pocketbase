@@ -47,7 +47,7 @@ const owners = new Set(['analytics', 'bulk-delete', 'copy-creation', 'copy-detai
   'suggestion-controller', 'title-detail', 'queues', 'research'].map(name => `${name}.js`));
 const visited = new Set(), visiting = new Set();
 const statelessResearchHelpers = new Set(['positivePolarisId', 'applyPolarisResultToControls',
-  'researchRecordUrl', 'researchRecordValue']);
+  'researchRecordUrl', 'researchRecordValue', 'safeMaterialIconUrl']);
 function inspectImports(file) {
   assert.ok(!visiting.has(file), `ES module import cycle at ${file}`);
   if (visited.has(file)) return;

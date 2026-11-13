@@ -686,6 +686,7 @@ public sealed partial class AdministrationService
                 item.ParentOrganizationId, item.IsActive })
             .ToListAsync(cancellationToken)));
         await AddVersionsAsync(context.SystemSettings.AsNoTracking().OrderBy(item => item.OrganizationId).Select(item => item.RowVersion));
+        await AddVersionsAsync(context.LibraryCatalogSettings.AsNoTracking().Where(item => item.OrganizationId == organizationId).Select(item => item.RowVersion));
         await AddVersionsAsync(context.PolarisSettings.AsNoTracking().OrderBy(item => item.OrganizationId).Select(item => item.RowVersion));
         await AddVersionsAsync(context.WorkflowSettings.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId).Select(item => item.RowVersion));
         await AddVersionsAsync(context.PatronSettings.AsNoTracking().Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId || item.OrganizationId == organizationId).OrderBy(item => item.OrganizationId).Select(item => item.RowVersion));

@@ -96,6 +96,12 @@ public sealed partial class AdministrationService(
             ? null
             : await context.EmailSettings.AsNoTracking().SingleOrDefaultAsync(
                 item => item.OrganizationId == organizationId, cancellationToken);
+        var libraryCatalog = organizationId == LibraryScope.SystemOrganizationId
+            ? null
+            : await context.LibraryCatalogSettings.AsNoTracking().SingleOrDefaultAsync(
+                item => item.OrganizationId == organizationId, cancellationToken);
+        var systemCatalog = CatalogPresentation.Resolve(systemSettings, null);
+        var effectiveCatalog = CatalogPresentation.Resolve(systemSettings, libraryCatalog);
         var effective = await patronConfiguration.GetAsync(context,
             new PatronConfigurationScalars(organization, systemSettings, systemWorkflow, libraryWorkflow,
                 systemPatron, libraryPatron, systemEmail, libraryEmail), cancellationToken);
@@ -160,7 +166,8 @@ public sealed partial class AdministrationService(
             await LoadPatronCodeSnapshotAsync(context, 1, cancellationToken),
             await LoadRawProviderOverridesAsync(context, 1, cancellationToken),
             await LoadRawFormatsAsync(context, 1, cancellationToken),
-            templates.Where(item => item.OrganizationId == "1").ToArray(), ToBranding(systemBranding));
+            templates.Where(item => item.OrganizationId == "1").ToArray(), ToBranding(systemBranding))
+            { Catalog = systemCatalog };
         var libraryOverride = organizationId == LibraryScope.SystemOrganizationId
             ? null
             : new SettingsScopeView(
@@ -170,9 +177,12 @@ public sealed partial class AdministrationService(
                 await LoadPatronCodeSnapshotAsync(context, organizationId, cancellationToken),
                 await LoadRawProviderOverridesAsync(context, organizationId, cancellationToken),
                 await LoadRawFormatsAsync(context, organizationId, cancellationToken),
-                templates.Where(item => item.OrganizationId == organizationId.ToString()).ToArray(), ToBranding(branding));
+                templates.Where(item => item.OrganizationId == organizationId.ToString()).ToArray(), ToBranding(branding))
+                { Catalog = libraryCatalog is null ? null : new(libraryCatalog.PacBaseUrl,
+                    libraryCatalog.MaterialTypeIconUrlPattern, libraryCatalog.PacOrganizationId) };
         var hasOverrides = libraryOverride is not null &&
             (libraryWorkflow is not null || libraryPatron is not null || libraryEmail is not null || branding is not null ||
+             libraryCatalog?.PacBaseUrl is not null || libraryCatalog?.MaterialTypeIconUrlPattern is not null ||
              libraryOverride.PublicationOptions.Exists || libraryOverride.CommonCreators.Exists || libraryOverride.AllowedPatronCodeIds.Exists ||
              overriddenProviderIds.Count > 0 || formatMetadata.Values.Any(item => item.Overridden) ||
              formatRules.Count > 0 || autoClaimRules.Count > 0 || customFields.Count > 0 || libraryOverride.Templates.Count > 0);
@@ -222,6 +232,7 @@ public sealed partial class AdministrationService(
                 hasOverrides,
                 version,
                 stored,
+                catalog = effectiveCatalog,
                 effective = effectiveDto,
                 // Safe inherited values include runtime defaults when raw System columns are null.
                 // Credentials and other System-only configuration are deliberately excluded.
@@ -231,7 +242,8 @@ public sealed partial class AdministrationService(
                     workflowDefaults = ToWorkflow(inherited, system: true),
                     patron = ToEffectivePatronText(inherited),
                     email = new { inherited.Email.FromAddress, inherited.Email.FromName },
-                    branding = new { altText = inherited.LogoAltText }
+                    branding = new { altText = inherited.LogoAltText },
+                    catalog = systemCatalog
                 },
                 // These aliases preserve the shape used by the existing vanilla settings workflow.
                 workflow = ToWorkflow(effective, system: libraryWorkflow is null || organizationId == LibraryScope.SystemOrganizationId),
@@ -358,6 +370,7 @@ public sealed partial class AdministrationService(
                     await ApplySystemSettingsAsync(context, command, cancellationToken);
                 }
                 await ApplyScopedSettingsAsync(context, organizationId, command, cancellationToken);
+                await ApplyCatalogSettingsAsync(context, organizationId, command.Catalog, cancellationToken);
             }
             catch (DbUpdateConcurrencyException)
             {
