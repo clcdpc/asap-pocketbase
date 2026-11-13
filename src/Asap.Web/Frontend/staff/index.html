@@ -212,6 +212,7 @@
             <input id="weekly-email" type="email" autocomplete="email" aria-labelledby="weekly-email-label" aria-describedby="weekly-email-help">
             <small id="weekly-email-help">When enabled and eligible, weekly summaries go to your primary notification email. A distinct additional address receives a copy; leave blank for primary only. Turning off weekly summaries prevents both copies.</small>
           </label>
+          <label class="check-field"><input id="new-patron-request-email-enabled" type="checkbox"> <span>Email me when a new patron purchase request is submitted.</span></label>
           <label class="check-field"><input id="weekly-enabled" type="checkbox"> <span>Receive weekly action summary</span></label>
           <label class="check-field"><input id="purchase-default" type="checkbox"> <span>Send purchase reminder by default</span></label>
           <label class="check-field"><input id="additional-copy-default" type="checkbox"> <span>Send additional-copy reminder by default</span></label>
@@ -795,13 +796,18 @@
                 </section>
                 <section class="settings-template-audience" aria-labelledby="staff-email-templates-title">
                   <h3 id="staff-email-templates-title">Staff email templates</h3>
-                  <p>Business notifications for assignments, purchase reminders, additional-copy tasks, and weekly summaries. The diagnostic test email remains a fixed transport check.</p>
+                  <p>Business notifications for new patron requests, assignments, purchase reminders, additional-copy tasks, and weekly summaries. The diagnostic test email remains a fixed transport check.</p>
                   <p>Patron name ({{name}}), first name ({{firstName}}), last name ({{lastName}}), and barcode ({{barcode}}) do not apply to staff templates. Use {{recipientName}} for the staff recipient.</p>
                   <div class="settings-template-list">
                     <fieldset class="settings-fieldset settings-template" data-template-key="staff_title_assignment" data-template-prefix="staff-title-assignment" data-template-audience="staff">
                       <legend>Title request assigned</legend>
                       <label class="settings-field"><span>Subject</span><input id="email-staff-title-assignment-subject" type="text" data-template-field="subject"></label>
                       <label class="settings-field wide"><span>Body</span><textarea id="email-staff-title-assignment-body" rows="7" data-template-field="body"></textarea></label>
+                    </fieldset>
+                    <fieldset class="settings-fieldset settings-template" data-template-key="staff_new_patron_request" data-template-prefix="staff-new-patron-request" data-template-audience="staff">
+                      <legend>New patron purchase request</legend>
+                      <label class="settings-field"><span>Subject</span><input id="email-staff-new-patron-request-subject" type="text" data-template-field="subject"></label>
+                      <label class="settings-field wide"><span>Body</span><textarea id="email-staff-new-patron-request-body" rows="7" data-template-field="body"></textarea></label>
                     </fieldset>
                     <fieldset class="settings-fieldset settings-template" data-template-key="staff_purchase_reminder" data-template-prefix="staff-purchase-reminder" data-template-audience="staff">
                       <legend>Purchase reminder</legend>

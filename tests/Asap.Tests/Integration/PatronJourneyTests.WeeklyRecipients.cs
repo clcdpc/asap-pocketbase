@@ -437,7 +437,7 @@ public sealed partial class PatronJourneyTests
             var row = await context.StaffUsers.AsNoTracking().SingleAsync(item => item.Id == id);
             var current = await ReadCorrectiveStaffAsync(row);
             var service = factory.Services.GetRequiredService<StaffProfileService>();
-            var input = new StaffProfileInput(StaffVersion.Encode(row.RowVersion), true, "invalid", false, false, false);
+            var input = new StaffProfileInput(StaffVersion.Encode(row.RowVersion), true, "invalid", false, false, false, false);
             Assert.AreEqual("invalid_weekly_email", (await service.UpdateAsync(current, input, CancellationToken.None)).Code);
             var saved = await service.UpdateAsync(current, input with { WeeklyActionSummaryEmail = " additional@example.org " }, CancellationToken.None);
             Assert.AreEqual("updated", saved.Code);

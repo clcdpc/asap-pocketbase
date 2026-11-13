@@ -33,6 +33,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(6, report.RootElement.GetProperty("states").GetArrayLength());
             var saved = await context.StaffUsers.AsNoTracking().SingleAsync(item => item.Id == id);
             Assert.AreEqual("primary@example.org", saved.NotificationEmail);
+            Assert.IsFalse(saved.NewPatronRequestEmailEnabled);
             Assert.AreEqual("additional@example.org", saved.WeeklyActionSummaryEmail);
             Assert.IsFalse(saved.WeeklyActionSummaryEnabled);
         });

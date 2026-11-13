@@ -157,8 +157,9 @@ public sealed partial class PatronJourneyTests
             var durableRequest = await ReadCommittedSuggestionAsync(title);
             Assert.IsTrue(durableRequest.Request.Id > 0);
             Assert.AreEqual("pending", await ReadSubmissionOutboxStatusAsync(durableRequest.Request.Id));
-            Assert.AreEqual(1, dispatcher.EnqueuedIds.Count,
-                "The accepted request's one durable outbox is dispatched before optional identifier processing.");
+            var confirmationOutboxId = await FindSubmissionOutboxIdAsync(durableRequest.Request.Id);
+            CollectionAssert.Contains(dispatcher.EnqueuedIds, confirmationOutboxId,
+                "The existing patron confirmation is dispatched before optional identifier processing.");
 
             provider.ReleaseIdentifierLookup();
             var accepted = await submission;
@@ -166,7 +167,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("queued", accepted.NotificationStatus);
 
             await AssertCommittedSuggestionStillDurableAsync(
-                durableRequest.Request, dispatcher.EnqueuedIds.Single(), durableRequest.EventCount);
+                durableRequest.Request, confirmationOutboxId, durableRequest.EventCount);
             await using var verify = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>()
                 .CreateDbContextAsync();
             var pending = await verify.TitleRequests.AsNoTracking()
@@ -286,7 +287,7 @@ public sealed partial class PatronJourneyTests
             .SingleOrDefaultAsync();
         if (requestId.HasValue)
         {
-            await DeleteOwnedEmailFixtureAsync(context, context.EmailOutbox.Where(item => item.BusinessKey == $"patron-submission:{requestId.Value}"));
+            await DeleteOwnedEmailFixtureAsync(context, context.EmailOutbox.Where(item => item.TitleRequestId == requestId.Value));
             await context.TitleRequestEvents.Where(item => item.TitleRequestId == requestId.Value)
                 .ExecuteDeleteAsync();
             await context.TitleRequests.Where(item => item.Id == requestId.Value).ExecuteDeleteAsync();

@@ -475,7 +475,8 @@ public sealed partial class PatronJourneyTests
             var hidden = mode.EndsWith("hidden", StringComparison.Ordinal);
             Assert.AreEqual(hidden ? "suppressed" : "pending", outbox.Status);
             Assert.AreEqual(hidden ? "template_missing" : null, outbox.SuppressionReason);
-            Assert.AreEqual(hidden ? 0 : 1, localDispatcher.EnqueuedIds.Count);
+            Assert.AreEqual(hidden ? 0 : 1, localDispatcher.EnqueuedIds.Count(item => item == outboxId),
+                "Only the submission confirmation's expected template state determines its dispatch.");
             if (!hidden)
             {
                 Assert.AreEqual($"Corrective received: {committedTitle}", outbox.Subject);

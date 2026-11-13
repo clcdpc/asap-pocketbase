@@ -654,6 +654,11 @@ public sealed partial class PatronJourneyTests
         await ExecuteNonQueryAsync("""
             DELETE FROM [asap].[PickupPreferenceOperation] WHERE [LibraryOrganizationId] = @org;
             DELETE FROM [asap].[PatronSession] WHERE [EffectiveOrganizationId] = @org;
+            DELETE FROM [asap].[EmailDeliveryEvent] WHERE [EmailOutboxId] IN
+                (SELECT [Id] FROM [asap].[EmailOutbox] WHERE [TitleRequestId] IN
+                    (SELECT [Id] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = @org));
+            DELETE FROM [asap].[EmailOutbox] WHERE [TitleRequestId] IN
+                (SELECT [Id] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = @org);
             DELETE FROM [asap].[TitleRequestEvent] WHERE [TitleRequestId] IN
                 (SELECT [Id] FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = @org);
             DELETE FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = @org;

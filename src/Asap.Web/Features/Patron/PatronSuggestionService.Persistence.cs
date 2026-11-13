@@ -15,7 +15,7 @@ namespace Asap.Web.Features.Patron;
 
 public sealed partial class PatronSuggestionService
 {
-    private async Task<(long RequestId, long? OutboxId, string EmailStatus, byte[] RowVersion, string? Identifier)> InsertStaffAsync(
+    private async Task<(long RequestId, long? OutboxId, IReadOnlyList<long> StaffOutboxIds, string EmailStatus, byte[] RowVersion, string? Identifier)> InsertStaffAsync(
         CurrentStaff actor,
         PatronSnapshot patron,
         PickupBranch selectedBranch,
@@ -24,6 +24,7 @@ public sealed partial class PatronSuggestionService
         EffectivePatronConfiguration configuration,
         AutoClaimCandidate? autoClaimCandidate,
         EmailTransportReadiness emailTransportReadiness,
+        string? emailReadinessFailureReason,
         CreationActor creationActor,
         PickupMutationReceipt? pickupReceipt,
         int verifiedPatronId,
@@ -216,6 +217,15 @@ public sealed partial class PatronSuggestionService
             currentConfiguration,
             patron,
             cancellationToken);
+        var staffOutboxIds = await InsertNewPatronRequestNotificationsAsync(
+            connection,
+            transaction,
+            requestId,
+            currentConfiguration,
+            currentSuggestion,
+            emailTransportReadiness,
+            emailReadinessFailureReason,
+            cancellationToken);
         var email = creationActor.EmailPatronConfirmation
             ? await InsertSubmissionEmailAsync(
                 connection,
@@ -240,7 +250,7 @@ public sealed partial class PatronSuggestionService
         await PickupPreferenceMutationService.CompleteAsync(connection, transaction, pickupReceipt,
             requestId, patron.PatronId, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
         await databaseTransaction.CommitAsync(cancellationToken);
-        return (requestId, email.OutboxId, email.Status, rowVersion, currentSuggestion.Identifier);
+        return (requestId, email.OutboxId, staffOutboxIds, email.Status, rowVersion, currentSuggestion.Identifier);
     }
 
     private static void RequireCurrentStaff(StaffEligibilityResult result)
@@ -256,7 +266,7 @@ public sealed partial class PatronSuggestionService
             new { code = result.Code, operationPhase = "rejected" });
     }
 
-    private async Task<(long RequestId, long? OutboxId, string EmailStatus, byte[] RowVersion)> InsertAsync(
+    private async Task<(long RequestId, long? OutboxId, IReadOnlyList<long> StaffOutboxIds, string EmailStatus, byte[] RowVersion)> InsertAsync(
         PatronSessionContext session,
         PatronSnapshot patron,
         PickupBranch selectedBranch,
@@ -419,6 +429,15 @@ public sealed partial class PatronSuggestionService
             configuration,
             patron,
             cancellationToken);
+        var staffOutboxIds = await InsertNewPatronRequestNotificationsAsync(
+            connection,
+            transaction,
+            requestId,
+            configuration,
+            suggestion,
+            emailTransportReadiness,
+            null,
+            cancellationToken);
         var email = sendSubmissionEmail
             ? await InsertSubmissionEmailAsync(
                 connection,
@@ -443,7 +462,7 @@ public sealed partial class PatronSuggestionService
         await PickupPreferenceMutationService.CompleteAsync(connection, transaction, pickupReceipt,
             requestId, patron.PatronId, timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return (requestId, email.OutboxId, email.Status, rowVersion);
+        return (requestId, email.OutboxId, staffOutboxIds, email.Status, rowVersion);
     }
 
     private async Task<EffectivePatronConfiguration> LoadCurrentPublicConfigurationAsync(
@@ -1255,6 +1274,159 @@ public sealed partial class PatronSuggestionService
         Add(command, "@message", SqlDbType.NVarChar, message, -1);
         Add(command, "@metadataJson", SqlDbType.NVarChar, metadata, -1);
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<long>> InsertNewPatronRequestNotificationsAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        long requestId,
+        EffectivePatronConfiguration configuration,
+        ValidatedSuggestion suggestion,
+        EmailTransportReadiness emailTransportReadiness,
+        string? readinessFailureReason,
+        CancellationToken cancellationToken)
+    {
+        var organizationId = configuration.OrganizationId;
+        await using var context = new AsapDbContext(
+            new DbContextOptionsBuilder<AsapDbContext>().UseSqlServer(connection).Options);
+        await context.Database.UseTransactionAsync(transaction, cancellationToken);
+
+        var candidates = await (from staff in context.StaffUsers.AsNoTracking()
+                                join owner in context.Organizations.AsNoTracking()
+                                    on staff.OrganizationId equals owner.Id
+                                where staff.IsActive && staff.NewPatronRequestEmailEnabled && owner.IsActive &&
+                                      (staff.Role == StaffRole.SuperAdmin && owner.Id == LibraryScope.SystemOrganizationId ||
+                                       (staff.Role == StaffRole.Staff || staff.Role == StaffRole.Admin) &&
+                                       owner.Id == organizationId && owner.Id > LibraryScope.SystemOrganizationId &&
+                                       owner.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId)
+                                select staff)
+            .ToListAsync(cancellationToken);
+        var recipients = candidates
+            .Where(item => StaffEligibilityService.IsAssignmentEligible(item, organizationId))
+            .ToArray();
+        if (recipients.Length == 0)
+        {
+            return [];
+        }
+
+        var template = await StaffEmailTemplateCatalog.LoadEffectiveAsync(
+            context,
+            organizationId,
+            StaffEmailTemplateCatalog.NewPatronRequest,
+            cancellationToken);
+        var systemSettings = await context.SystemSettings.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var renderedByRecipient = new Dictionary<long, RenderedEmailTemplate?>();
+        foreach (var recipient in recipients)
+        {
+            renderedByRecipient[recipient.Id] = template is null
+                ? null
+                : StaffEmailTemplateRenderer.RenderRequest(template, new StaffEmailRequestValues(
+                    organizationId,
+                    systemSettings?.StaffApplicationUrl,
+                    recipient.DisplayName,
+                    null,
+                    null,
+                    configuration.OrganizationName,
+                    requestId.ToString(CultureInfo.InvariantCulture),
+                    null,
+                    RequestStatus.Suggestion,
+                    null,
+                    suggestion.Title,
+                    suggestion.Author,
+                    suggestion.Format.Label));
+        }
+
+        var outboxIds = new List<long>(recipients.Length);
+        foreach (var recipient in recipients)
+        {
+            var rendered = renderedByRecipient[recipient.Id];
+            string? toAddress = null;
+            string? suppressionReason = null;
+            if (!StaffEmail.TryNormalize(recipient.NotificationEmail, out toAddress))
+            {
+                suppressionReason = "recipient_invalid";
+            }
+            else if (toAddress is null)
+            {
+                suppressionReason = "recipient_missing";
+            }
+            else if (!recipientDomainPolicy.IsAllowed(toAddress))
+            {
+                suppressionReason = "recipient_domain_not_allowed";
+            }
+            else if (string.IsNullOrWhiteSpace(configuration.Email.FromAddress))
+            {
+                suppressionReason = "sender_missing";
+            }
+            else if (!emailTransportReadiness.IsConfigured)
+            {
+                suppressionReason = readinessFailureReason ?? "mail_not_configured";
+            }
+            else if (template is null)
+            {
+                suppressionReason = "template_unavailable";
+            }
+            else if (template.IsHidden)
+            {
+                suppressionReason = "template_hidden";
+            }
+            else if (string.IsNullOrWhiteSpace(rendered?.Subject) || string.IsNullOrWhiteSpace(rendered.BodyText))
+            {
+                suppressionReason = "template_blank";
+            }
+
+            var now = timeProvider.GetUtcNow().UtcDateTime;
+            var status = suppressionReason is null ? "pending" : "suppressed";
+            await using var command = new SqlCommand(
+                """
+                INSERT INTO [asap].[EmailOutbox]
+                    ([OrganizationId], [BusinessKey], [DeliveryClass], [RecipientStaffUserId],
+                     [RecipientAuthenticationEmail], [AuthorizationOrganizationId], [RecipientAddressKind],
+                     [ToAddress], [FromAddress], [FromName], [Subject], [BodyText], [BodyHtml], [Status],
+                     [SuppressionReason], [NextAttemptUtc], [CreatedUtc], [SuppressedUtc], [TitleRequestId], [MessageKind])
+                OUTPUT inserted.[Id]
+                VALUES
+                    (@organizationId, @businessKey, N'staff_authorization_sensitive', @recipientStaffUserId,
+                     @recipientAuthenticationEmail, @authorizationOrganizationId, N'new_request',
+                     @toAddress, @fromAddress, @fromName, @subject, @bodyText, @bodyHtml, @status,
+                     @suppressionReason, CASE WHEN @status = N'pending' THEN @now ELSE NULL END,
+                     @now, CASE WHEN @status = N'suppressed' THEN @now ELSE NULL END, @requestId, N'new_patron_request');
+                """,
+                connection,
+                transaction);
+            Add(command, "@organizationId", SqlDbType.Int, organizationId);
+            Add(command, "@businessKey", SqlDbType.NVarChar,
+                $"new-patron-request:{requestId}:{recipient.Id}", 450);
+            Add(command, "@recipientStaffUserId", SqlDbType.BigInt, recipient.Id);
+            Add(command, "@recipientAuthenticationEmail", SqlDbType.NVarChar, recipient.NormalizedUserPrincipalName, 320);
+            Add(command, "@authorizationOrganizationId", SqlDbType.Int, organizationId);
+            Add(command, "@toAddress", SqlDbType.NVarChar, toAddress, 320);
+            Add(command, "@fromAddress", SqlDbType.NVarChar, configuration.Email.FromAddress, 320);
+            Add(command, "@fromName", SqlDbType.NVarChar, configuration.Email.FromName, 256);
+            Add(command, "@subject", SqlDbType.NVarChar, rendered?.Subject, -1);
+            Add(command, "@bodyText", SqlDbType.NVarChar, rendered?.BodyText, -1);
+            Add(command, "@bodyHtml", SqlDbType.NVarChar, rendered?.BodyHtml, -1);
+            Add(command, "@status", SqlDbType.NVarChar, status, 16);
+            Add(command, "@suppressionReason", SqlDbType.NVarChar, suppressionReason, 100);
+            Add(command, "@now", SqlDbType.DateTime2, now);
+            Add(command, "@requestId", SqlDbType.BigInt, requestId);
+            var outboxId = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken));
+            await RequestEmailEvidence.AddInitialAsync(
+                connection,
+                transaction,
+                outboxId,
+                status,
+                suppressionReason,
+                now,
+                cancellationToken);
+            if (status == "pending")
+            {
+                outboxIds.Add(outboxId);
+            }
+        }
+
+        return outboxIds;
     }
 
     private async Task<SubmissionEmailResult> InsertSubmissionEmailAsync(

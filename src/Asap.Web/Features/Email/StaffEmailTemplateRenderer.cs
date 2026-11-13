@@ -62,6 +62,7 @@ public static partial class StaffEmailTemplateCatalog
     public const string PurchaseReminder = "staff_purchase_reminder";
     public const string AdditionalCopyReminder = "staff_additional_copy_reminder";
     public const string AdditionalCopyAssignment = "staff_additional_copy_assignment";
+    public const string NewPatronRequest = "staff_new_patron_request";
     public const string WeeklySummary = "staff_weekly_summary";
 
     private static readonly StaffEmailPlaceholderDefinition[] RequestPlaceholders =
@@ -93,6 +94,10 @@ public static partial class StaffEmailTemplateCatalog
     private static readonly StaffEmailPlaceholderDefinition[] AdditionalCopyReminderPlaceholders =
         AdditionalCopyAssignmentPlaceholders.Where(item => item.Key != "assigneeName").ToArray();
 
+    private static readonly StaffEmailPlaceholderDefinition[] NewPatronRequestPlaceholders =
+        RequestPlaceholders.Where(item => item.Key is "recipientName" or "libraryName" or "requestId" or "title" or "author" or "format")
+            .Concat([RequestUrlPlaceholder("suggestion", "9007199254740993")]).ToArray();
+
     private static readonly StaffEmailPlaceholderDefinition[] WeeklyPlaceholders =
     [
         new("recipientName", "Staff recipient name", "Display name of the staff member receiving this message.", "Casey Staff"),
@@ -116,6 +121,7 @@ public static partial class StaffEmailTemplateCatalog
         new(PurchaseReminder, "Purchase reminder", "Sent when staff request a reminder while recording a purchase.", PurchaseReminderPlaceholders),
         new(AdditionalCopyReminder, "Additional-copy reminder", "Sent when staff request a reminder after creating an additional-copy task.", AdditionalCopyReminderPlaceholders),
         new(AdditionalCopyAssignment, "Additional-copy task assigned", "Sent when an additional-copy task is assigned to a staff member.", AdditionalCopyAssignmentPlaceholders),
+        new(NewPatronRequest, "New patron purchase request", "Sent to subscribed staff who can view a newly submitted patron purchase request.", NewPatronRequestPlaceholders),
         new(WeeklySummary, "Weekly action summary", "Sent weekly to subscribed staff for the summary's authorized library or all-library data scope.", WeeklyPlaceholders)
     ];
 

@@ -221,7 +221,8 @@ public sealed class StaffLifecycleService(
             NotificationEmail = email,
             Role = role,
             OrganizationId = organizationId,
-            IsActive = true
+            IsActive = true,
+            NewPatronRequestEmailEnabled = true
         };
         context.StaffUsers.Add(user);
         await context.SaveChangesAsync(cancellationToken);

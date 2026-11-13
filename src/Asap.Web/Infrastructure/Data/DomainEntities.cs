@@ -46,6 +46,7 @@ public sealed class StaffUser
     public required string Role { get; set; }
     public int OrganizationId { get; set; }
     public bool IsActive { get; set; }
+    public bool NewPatronRequestEmailEnabled { get; set; } = true;
     public bool WeeklyActionSummaryEnabled { get; set; }
     public string? WeeklyActionSummaryEmail { get; set; }
     public bool PurchaseReminderDefault { get; set; }

@@ -263,6 +263,20 @@ BEGIN
          0, 0, 60);
 END;
 
+IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_new_patron_request')
+BEGIN
+    INSERT INTO [asap].[EmailTemplate]
+        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
+    VALUES
+        (1, N'staff_new_patron_request', N'New patron purchase request',
+         N'New purchase request: {{title}}',
+         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
+         N'A new patron purchase request was submitted to {{libraryName}}.' + NCHAR(10) + NCHAR(10) +
+         N'Title request: {{requestId}}' + NCHAR(10) + N'Title: {{title}}' + NCHAR(10) + N'Author/creator: {{author}}' + NCHAR(10) + N'Format: {{format}}' + NCHAR(10) + NCHAR(10) +
+         N'View request: {{requestUrl}}',
+         0, 0, 65);
+END;
+
 IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_purchase_reminder')
 BEGIN
     INSERT INTO [asap].[EmailTemplate]

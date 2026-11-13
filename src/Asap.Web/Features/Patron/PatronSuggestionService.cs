@@ -239,6 +239,7 @@ public sealed partial class PatronSuggestionService(
             cancellationToken);
         long requestId = 0;
         long? outboxId = null;
+        IReadOnlyList<long> staffOutboxIds = [];
         var notificationStatus = "queued";
         byte[] expectedRowVersion = [];
         try
@@ -281,7 +282,7 @@ public sealed partial class PatronSuggestionService(
                     cancellationToken);
                 try
                 {
-                    (requestId, outboxId, notificationStatus, expectedRowVersion) = await InsertAsync(
+                    (requestId, outboxId, staffOutboxIds, notificationStatus, expectedRowVersion) = await InsertAsync(
                         session,
                         patron,
                         selectedBranch,
@@ -339,6 +340,8 @@ public sealed partial class PatronSuggestionService(
                 notificationStatus = "dispatch_failed";
             }
         }
+
+        EnqueueStaffNotificationsAfterCommit(staffOutboxIds, requestId, cancellationToken);
 
         if (suggestion.Identifier is not null && !cancellationToken.IsCancellationRequested)
         {
@@ -419,6 +422,7 @@ public sealed partial class PatronSuggestionService(
         PickupMutationReceipt? pickupReceipt = null;
         long requestId = 0;
         long? outboxId = null;
+        IReadOnlyList<long> staffOutboxIds = [];
         string? persistedIdentifier = null;
         var notificationStatus = input.EmailPatronConfirmation ? "suppressed" : "not_requested";
         byte[] expectedRowVersion = [];
@@ -451,18 +455,25 @@ public sealed partial class PatronSuggestionService(
             // provider mutation. Email readiness is local persistence preparation and does not
             // belong between that gate and the external call.
             EmailTransportReadiness emailReadiness;
+            string? emailReadinessFailureReason = null;
             try
             {
-                emailReadiness = input.EmailPatronConfirmation
-                    ? await emailSender.CheckReadinessAsync(organizationId, cancellationToken)
-                    : EmailTransportReadiness.NotConfigured;
+                emailReadiness = await emailSender.CheckReadinessAsync(organizationId, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
             }
-            catch (Exception exception) when (exception is System.Data.Common.DbException or EmailOperationalException ||
-            exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+            catch (Exception exception) when (input.EmailPatronConfirmation &&
+                (exception is System.Data.Common.DbException or EmailOperationalException ||
+                 exception is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {
                 throw new PatronFlowException(502, "Email readiness could not be checked. Please try again.",
                     new { code = "notification_dependency_unavailable" }, exception);
+            }
+            catch (Exception exception) when (!input.EmailPatronConfirmation && !cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning("Staff request notification readiness could not be checked ({FailureType}).",
+                    exception.GetType().Name);
+                emailReadiness = EmailTransportReadiness.NotConfigured;
+                emailReadinessFailureReason = "mail_readiness_unavailable";
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             {
@@ -485,7 +496,7 @@ public sealed partial class PatronSuggestionService(
                     cancellationToken);
                 try
                 {
-                    (requestId, outboxId, notificationStatus, expectedRowVersion, persistedIdentifier) = await InsertStaffAsync(
+                    (requestId, outboxId, staffOutboxIds, notificationStatus, expectedRowVersion, persistedIdentifier) = await InsertStaffAsync(
                         actor,
                         patron,
                         selectedBranch,
@@ -494,6 +505,7 @@ public sealed partial class PatronSuggestionService(
                         prepared.Configuration,
                         autoClaimCandidate,
                         emailReadiness,
+                        emailReadinessFailureReason,
                         creationActor,
                         pickupReceipt,
                         verifiedPatronId,
@@ -549,6 +561,8 @@ public sealed partial class PatronSuggestionService(
             }
         }
 
+        EnqueueStaffNotificationsAfterCommit(staffOutboxIds, requestId, cancellationToken);
+
         if (persistedIdentifier is not null && !cancellationToken.IsCancellationRequested)
         {
             try
@@ -603,6 +617,37 @@ public sealed partial class PatronSuggestionService(
         {
             throw new PatronFlowException(409, "A patron write is already in progress. Reload before continuing.",
                 new { exception.Code }, exception);
+        }
+    }
+
+    private void EnqueueStaffNotificationsAfterCommit(
+        IReadOnlyList<long> outboxIds,
+        long requestId,
+        CancellationToken cancellationToken)
+    {
+        foreach (var outboxId in outboxIds)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                outboxDispatcher.Enqueue(outboxId);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "New-request staff email outbox {OutboxId} for request {TitleRequestId} will be recovered by the sweeper.",
+                    outboxId,
+                    requestId);
+            }
         }
     }
 

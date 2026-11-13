@@ -95,6 +95,7 @@ const TEMPLATE_FIELDS = [
   ['hold_placed', 'hold', 'email-hold-subject', 'email-hold-body'],
   ['rejected', 'rejected', 'email-rejected-subject', 'email-rejected-body'],
   ['staff_title_assignment', 'staff-title-assignment', 'email-staff-title-assignment-subject', 'email-staff-title-assignment-body'],
+  ['staff_new_patron_request', 'staff-new-patron-request', 'email-staff-new-patron-request-subject', 'email-staff-new-patron-request-body'],
   ['staff_purchase_reminder', 'staff-purchase-reminder', 'email-staff-purchase-reminder-subject', 'email-staff-purchase-reminder-body'],
   ['staff_additional_copy_reminder', 'staff-additional-copy-reminder', 'email-staff-additional-copy-reminder-subject', 'email-staff-additional-copy-reminder-body'],
   ['staff_additional_copy_assignment', 'staff-additional-copy-assignment', 'email-staff-additional-copy-assignment-subject', 'email-staff-additional-copy-assignment-body'],

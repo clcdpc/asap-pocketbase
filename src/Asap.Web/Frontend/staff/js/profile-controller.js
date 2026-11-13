@@ -12,6 +12,7 @@ export function createProfileController({ root, sessionIdentity, announce,
     profileRefresh: root.querySelector('#profile-refresh'),
     notificationEmail: root.querySelector('#notification-email'),
     weeklyEmail: root.querySelector('#weekly-email'),
+    newPatronRequestEmailEnabled: root.querySelector('#new-patron-request-email-enabled'),
     weeklyEnabled: root.querySelector('#weekly-enabled'),
     purchaseDefault: root.querySelector('#purchase-default'),
     additionalCopyDefault: root.querySelector('#additional-copy-default'),
@@ -38,6 +39,7 @@ export function createProfileController({ root, sessionIdentity, announce,
 
   function profileValues() {
     return {
+      newPatronRequestEmailEnabled: dom.newPatronRequestEmailEnabled.checked,
       weeklyActionSummaryEmail: dom.weeklyEmail.value,
       weeklyActionSummaryEnabled: dom.weeklyEnabled.checked,
       purchaseReminderDefault: dom.purchaseDefault.checked,
@@ -54,6 +56,7 @@ export function createProfileController({ root, sessionIdentity, announce,
 
   function populateProfile(staff) {
     if (disposed) return;
+    dom.newPatronRequestEmailEnabled.checked = staff?.newPatronRequestEmailEnabled !== false;
     dom.weeklyEmail.value = staff?.weeklyActionSummaryEmail || '';
     dom.weeklyEnabled.checked = Boolean(staff?.weeklyActionSummaryEnabled);
     dom.purchaseDefault.checked = Boolean(staff?.purchaseReminderDefault);
@@ -142,6 +145,7 @@ export function createProfileController({ root, sessionIdentity, announce,
         method: 'POST',
         body: {
           version: owner.version,
+          newPatronRequestEmailEnabled: dom.newPatronRequestEmailEnabled.checked,
           weeklyActionSummaryEnabled: dom.weeklyEnabled.checked,
           weeklyActionSummaryEmail: dom.weeklyEmail.value.trim() || null,
           purchaseReminderDefault: dom.purchaseDefault.checked,

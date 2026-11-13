@@ -26,6 +26,7 @@ public sealed partial class PatronJourneyTests
         var profilePayload = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["version"] = profile.Version,
+            ["newPatronRequestEmailEnabled"] = false,
             ["weeklyActionSummaryEnabled"] = true,
             ["weeklyActionSummaryEmail"] = $"weekly.{Guid.NewGuid():N}@example.org",
             ["purchaseReminderDefault"] = true,
@@ -45,7 +46,7 @@ public sealed partial class PatronJourneyTests
         foreach (var property in new[]
                  {
                      "version", "weeklyActionSummaryEnabled", "purchaseReminderDefault",
-                     "additionalCopyReminderDefault", "defaultMineUnclaimedFilter"
+                     "additionalCopyReminderDefault", "defaultMineUnclaimedFilter", "newPatronRequestEmailEnabled"
                  })
         {
             var nullValue = new Dictionary<string, object?>(profilePayload, StringComparer.Ordinal)
@@ -58,13 +59,13 @@ public sealed partial class PatronJourneyTests
             await AssertProfileUnchangedAsync(profileTarget.Id, profile);
         }
 
-        var duplicateVersion = $$"""{"version":"{{profile.Version}}","version":"{{profile.Version}}","weeklyActionSummaryEnabled":true,"weeklyActionSummaryEmail":null,"purchaseReminderDefault":false,"additionalCopyReminderDefault":false,"defaultMineUnclaimedFilter":false}""";
+        var duplicateVersion = $$"""{"version":"{{profile.Version}}","version":"{{profile.Version}}","newPatronRequestEmailEnabled":false,"weeklyActionSummaryEnabled":true,"weeklyActionSummaryEmail":null,"purchaseReminderDefault":false,"additionalCopyReminderDefault":false,"defaultMineUnclaimedFilter":false}""";
         using (var duplicate = await PostRawJsonAsync(profileClient, "/api/asap/staff/profile", duplicateVersion))
         {
             Assert.AreEqual(HttpStatusCode.BadRequest, duplicate.StatusCode,
                 $"Duplicate profile property was accepted: {await duplicate.Content.ReadAsStringAsync()}");
         }
-        var duplicateAlias = $$"""{"version":"{{profile.Version}}","Version":"{{profile.Version}}","weeklyActionSummaryEnabled":true,"weeklyActionSummaryEmail":null,"purchaseReminderDefault":false,"additionalCopyReminderDefault":false,"defaultMineUnclaimedFilter":false}""";
+        var duplicateAlias = $$"""{"version":"{{profile.Version}}","Version":"{{profile.Version}}","newPatronRequestEmailEnabled":false,"weeklyActionSummaryEnabled":true,"weeklyActionSummaryEmail":null,"purchaseReminderDefault":false,"additionalCopyReminderDefault":false,"defaultMineUnclaimedFilter":false}""";
         using (var duplicate = await PostRawJsonAsync(profileClient, "/api/asap/staff/profile", duplicateAlias))
         {
             Assert.AreEqual(HttpStatusCode.BadRequest, duplicate.StatusCode,
@@ -76,11 +77,13 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(HttpStatusCode.OK, acceptedProfile.StatusCode, await acceptedProfile.Content.ReadAsStringAsync());
         using var acceptedProfileBody = JsonDocument.Parse(await acceptedProfile.Content.ReadAsStringAsync());
         var savedProfile = acceptedProfileBody.RootElement.GetProperty("staff");
+        Assert.IsFalse(savedProfile.GetProperty("newPatronRequestEmailEnabled").GetBoolean());
         Assert.AreEqual(profilePayload["weeklyActionSummaryEmail"], savedProfile.GetProperty("weeklyActionSummaryEmail").GetString());
 
         var clearProfilePayload = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["version"] = savedProfile.GetProperty("version").GetString(),
+            ["newPatronRequestEmailEnabled"] = false,
             ["weeklyActionSummaryEnabled"] = true,
             ["weeklyActionSummaryEmail"] = null,
             ["purchaseReminderDefault"] = true,
@@ -170,7 +173,7 @@ public sealed partial class PatronJourneyTests
             ("@id", profileTarget.Id));
     }
 
-    private sealed record ProfileSnapshot(string Version, byte[] RowVersion, bool WeeklyEnabled,
+    private sealed record ProfileSnapshot(string Version, byte[] RowVersion, bool NewPatronRequestEmailEnabled, bool WeeklyEnabled,
         string? WeeklyEmail, bool PurchaseDefault, bool AdditionalCopyDefault, bool MineDefault);
 
     private sealed record MetadataSnapshot(string Version, byte[] RowVersion, string Email,
@@ -181,19 +184,20 @@ public sealed partial class PatronJourneyTests
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT [RowVersion], [WeeklyActionSummaryEnabled], [WeeklyActionSummaryEmail], [PurchaseReminderDefault], [AdditionalCopyReminderDefault], [DefaultMineUnclaimedFilter] FROM [asap].[StaffUser] WHERE [Id] = @id;";
+        command.CommandText = "SELECT [RowVersion], [NewPatronRequestEmailEnabled], [WeeklyActionSummaryEnabled], [WeeklyActionSummaryEmail], [PurchaseReminderDefault], [AdditionalCopyReminderDefault], [DefaultMineUnclaimedFilter] FROM [asap].[StaffUser] WHERE [Id] = @id;";
         command.Parameters.AddWithValue("@id", staffId);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
         var rowVersion = reader.GetFieldValue<byte[]>(0);
-        return new ProfileSnapshot(Convert.ToBase64String(rowVersion), rowVersion, reader.GetBoolean(1),
-            reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetBoolean(3), reader.GetBoolean(4), reader.GetBoolean(5));
+        return new ProfileSnapshot(Convert.ToBase64String(rowVersion), rowVersion, reader.GetBoolean(1), reader.GetBoolean(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetBoolean(4), reader.GetBoolean(5), reader.GetBoolean(6));
     }
 
     private static async Task AssertProfileUnchangedAsync(long staffId, ProfileSnapshot expected)
     {
         var actual = await ReadProfileSnapshotAsync(staffId);
         CollectionAssert.AreEqual(expected.RowVersion, actual.RowVersion);
+        Assert.AreEqual(expected.NewPatronRequestEmailEnabled, actual.NewPatronRequestEmailEnabled);
         Assert.AreEqual(expected.WeeklyEnabled, actual.WeeklyEnabled);
         Assert.AreEqual(expected.WeeklyEmail, actual.WeeklyEmail);
         Assert.AreEqual(expected.PurchaseDefault, actual.PurchaseDefault);

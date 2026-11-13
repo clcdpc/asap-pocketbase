@@ -425,6 +425,8 @@ public sealed class EmailOutboxJobs(
                         THEN staff.[NotificationEmail]
                     WHEN @addressKind = N'weekly_summary_additional' AND staff.[WeeklyActionSummaryEnabled] = 1
                         THEN NULLIF(LTRIM(RTRIM(staff.[WeeklyActionSummaryEmail])), N'')
+                    WHEN @addressKind = N'new_request' AND staff.[NewPatronRequestEmailEnabled] = 1
+                        THEN staff.[NotificationEmail]
                     WHEN @addressKind = N'notification_email' THEN staff.[NotificationEmail]
                     ELSE NULL
                 END,
@@ -797,6 +799,8 @@ public sealed class EmailOutboxJobs(
                         THEN staff.[NotificationEmail]
                     WHEN @addressKind = N'weekly_summary_additional' AND staff.[WeeklyActionSummaryEnabled] = 1
                         THEN NULLIF(LTRIM(RTRIM(staff.[WeeklyActionSummaryEmail])), N'')
+                    WHEN @addressKind = N'new_request' AND staff.[NewPatronRequestEmailEnabled] = 1
+                        THEN staff.[NotificationEmail]
                     WHEN @addressKind = N'notification_email' THEN staff.[NotificationEmail]
                     ELSE NULL
                 END,

@@ -37,7 +37,8 @@ public sealed record CurrentStaff(
     bool AdditionalCopyReminderDefault,
     bool DefaultMineUnclaimedFilter,
     byte[] RowVersion,
-    int? OrganizationCodeId = null);
+    int? OrganizationCodeId = null,
+    bool NewPatronRequestEmailEnabled = true);
 
 public sealed record StaffEligibilityResult(
     StaffEligibilityOutcome Outcome,
@@ -236,7 +237,8 @@ public sealed class StaffEligibilityService(
             row.AdditionalCopyReminderDefault,
             row.DefaultMineUnclaimedFilter,
             row.RowVersion,
-            organization.OrganizationCodeId);
+            organization.OrganizationCodeId,
+            row.NewPatronRequestEmailEnabled);
 
         var result = await EvaluateLoadedAsync(
             context,
@@ -357,7 +359,8 @@ public sealed class StaffEligibilityService(
                 loaded.Staff.AdditionalCopyReminderDefault,
                 loaded.Staff.DefaultMineUnclaimedFilter,
                 loaded.Staff.RowVersion,
-                loaded.Organization.OrganizationCodeId)
+                loaded.Organization.OrganizationCodeId,
+                loaded.Staff.NewPatronRequestEmailEnabled)
             : null;
 
     private static bool HasValidAuthenticationEmail(StaffUser row) =>

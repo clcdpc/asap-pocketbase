@@ -138,7 +138,9 @@ public sealed partial class PatronJourneyTests
         // Read-only readiness checks must not arm the final-acceptance race.
         var requestContext = new HttpContextAccessor();
         var sender = new PolicyMutatingReadinessEmailSender(library, replaceAllowedCodes: true,
-            shouldMutate: () => requestContext.HttpContext?.Request.Path == "/api/asap/staff/suggestions");
+            shouldMutate: () => requestContext.HttpContext?.Request.Path == "/api/asap/staff/suggestions" &&
+                provider.Calls.Any(call => call.Operation == TestingPolarisOperation.Refresh && call.Key == barcode + "-late-denied"),
+            configuredWhenNotMutating: true);
         provider.AllowPickupUpdate(barcode, library, pickup);
         provider.SetIdentifierResult("BROWSER-MATCH", library, new(IdentifierLookupOutcome.DefinitiveNotFound));
         provider.SetBibSearch("title", "Table browser record 00", "", "", library,
@@ -270,16 +272,27 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(1, provider.Calls.Count(call => call.Operation == TestingPolarisOperation.PickupUpdate));
             Assert.AreEqual(1, sender.ReadinessCalls);
             Assert.IsFalse(await verify.TitleRequests.AnyAsync(item => item.LibraryOrganizationId == library && item.Barcode == barcode + "-late-denied"));
+            var quickCreateNotices = await verify.EmailOutbox.AsNoTracking()
+                .Where(item => item.TitleRequestId == created.Id && item.MessageKind == "new_patron_request")
+                .ToArrayAsync();
+            Assert.IsFalse(await verify.EmailOutbox.AsNoTracking().AnyAsync(item =>
+                item.TitleRequestId == created.Id && item.MessageKind == "confirmation"),
+                "The quick-create opt-out remains specific to patron confirmation.");
+            Assert.IsTrue(quickCreateNotices.Any(item => item.RecipientStaffUserId == claimantId &&
+                item.Status == "suppressed" && item.SuppressionReason == "recipient_missing"),
+                "The successful staff quick-create has its own missing-address suppression evidence, independent of patron confirmation.");
             var listActions = report.RootElement.GetProperty("listActions").EnumerateArray().ToArray();
             var purchaseKey = "staff-patron-action:purchase_approved:" + listActions.Single(item => item.GetProperty("status").GetString() == "outstanding_purchase").GetProperty("id").GetString() + ":";
             var rejectionKey = "rejection:" + listActions.Single(item => item.GetProperty("status").GetString() == "closed").GetProperty("id").GetString() + ":";
-            var notifications = await verify.EmailOutbox.Where(item => item.OrganizationId == library).ToArrayAsync();
+            var notifications = await verify.EmailOutbox.Where(item => item.OrganizationId == library &&
+                item.BusinessKey != null &&
+                (item.BusinessKey.StartsWith(purchaseKey) || item.BusinessKey.StartsWith(rejectionKey))).ToArrayAsync();
             Assert.IsTrue(notifications.Length is >= 1 and <= 2);
             foreach (var notification in notifications)
             {
                 Assert.IsTrue(notification.BusinessKey?.StartsWith(purchaseKey, StringComparison.Ordinal) == true ||
                     notification.BusinessKey?.StartsWith(rejectionKey, StringComparison.Ordinal) == true,
-                    "Only the explicit list actions may record email intents; quick creation requested none and rejected creation must record none.");
+                    "These workflow email intents must come only from the explicit list actions.");
                 Assert.AreEqual("suppressed", notification.Status, "The list patrons have no email address; no delivery is attempted.");
             }
             Assert.IsTrue(provider.Calls.Where(call => call.Operation == TestingPolarisOperation.Refresh).All(call => call.OrganizationId == library));

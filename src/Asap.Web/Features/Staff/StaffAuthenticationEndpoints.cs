@@ -164,6 +164,7 @@ public static class StaffAuthenticationEndpoints
         role = staff.Role,
         organizationId = staff.OrganizationId,
         organizationName = staff.OrganizationName,
+        newPatronRequestEmailEnabled = staff.NewPatronRequestEmailEnabled,
         weeklyActionSummaryEnabled = staff.WeeklyActionSummaryEnabled,
         weeklyActionSummaryEmail = staff.WeeklyActionSummaryEmail,
         purchaseReminderDefault = staff.PurchaseReminderDefault,

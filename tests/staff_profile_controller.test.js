@@ -10,7 +10,7 @@ const event = { preventDefault() {} };
     const { createProfileController } = await load('profile-controller');
     const session = createSessionIdentity();
     let current = { ...staff, notificationEmail: 'primary@example.org', weeklyActionSummaryEmail: null,
-      weeklyActionSummaryEnabled: true };
+      newPatronRequestEmailEnabled: true, weeklyActionSummaryEnabled: true };
     session.accept(current);
     const posted = [];
     const controller = createProfileController({ root: get('#profile-view'), sessionIdentity: session,
@@ -32,6 +32,10 @@ const event = { preventDefault() {} };
       assert.equal(get('#notification-email-label').textContent, 'Primary notification email');
       assert.equal(get('#profile-form input#notification-email'), null, 'primary email adds no input or tab stop');
       assert.equal(primary.closest('label'), null, 'account information is separate from editable labels');
+      const newRequest = get('#new-patron-request-email-enabled');
+      assert.equal(newRequest.checked, true, 'new request email subscription defaults on');
+      assert.equal(newRequest.closest('label').querySelector('span').textContent,
+        'Email me when a new patron purchase request is submitted.');
       assert.equal(field.closest('label').querySelector('span').textContent, 'Additional weekly summary email (optional)');
       assert.equal(field.getAttribute('aria-describedby'), 'weekly-email-help');
       const help = get('#weekly-email-help').textContent;
@@ -42,13 +46,19 @@ const event = { preventDefault() {} };
       field.value = 'not-an-email'; assert.equal(field.checkValidity(), false);
       field.value = ''; await controller.save(event);
       assert.equal(posted[0].weeklyActionSummaryEmail, null);
+      assert.equal(posted[0].newPatronRequestEmailEnabled, true);
+      newRequest.checked = false; await controller.save(event);
+      assert.equal(posted[1].newPatronRequestEmailEnabled, false);
+      assert.equal(newRequest.checked, false, 'saved opt-out survives authoritative profile reload');
       field.value = ' additional@example.org '; await controller.save(event);
-      assert.equal(posted[1].weeklyActionSummaryEmail, 'additional@example.org');
+      assert.equal(posted[2].weeklyActionSummaryEmail, 'additional@example.org');
       assert.equal(field.value, 'additional@example.org');
-      assert.equal(Object.hasOwn(posted[1], 'notificationEmail'), false);
-      get('#weekly-enabled').checked = false; await controller.save(event);
-      assert.equal(posted[2].weeklyActionSummaryEnabled, false);
+      assert.equal(posted[2].newPatronRequestEmailEnabled, false);
       assert.equal(Object.hasOwn(posted[2], 'notificationEmail'), false);
+      get('#weekly-enabled').checked = false; await controller.save(event);
+      assert.equal(posted[3].weeklyActionSummaryEnabled, false);
+      assert.equal(posted[3].newPatronRequestEmailEnabled, false);
+      assert.equal(Object.hasOwn(posted[3], 'notificationEmail'), false);
       field.value = 'discard@example.org'; controller.discardDraft();
       assert.equal(field.value, 'additional@example.org');
     } finally { controller.dispose(); }

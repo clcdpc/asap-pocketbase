@@ -36,25 +36,27 @@ public sealed partial class PatronJourneyTests
             var detail = await ReadActivityDetailAsync(actor, accepted.Id);
             Assert.IsTrue(detail.Activity.Any(item => item.Source == "request_event" && item.EventType == "created"));
             var mail = detail.Activity.Where(item => item.Email is not null).ToArray();
+            var confirmationMail = mail.Where(item => item.Email!.MessageKind == "confirmation").ToArray();
             if (scenario == "not_requested")
             {
-                Assert.AreEqual(0, mail.Length);
-                Assert.AreEqual(0, dispatch.EnqueuedIds.Count);
+                Assert.AreEqual(0, confirmationMail.Length,
+                    "The optional patron confirmation stays unrequested while staff notifications are still recorded.");
                 return;
             }
-            Assert.AreEqual(1, mail.Length);
-            var evidence = mail.Single().Email!;
+            Assert.AreEqual(1, confirmationMail.Length);
+            var evidence = confirmationMail.Single().Email!;
             Assert.AreEqual("confirmation", evidence.MessageKind);
             Assert.AreEqual(scenario == "requested" ? "queued" : "suppressed", evidence.Outcome);
             Assert.IsFalse(evidence.IsRecordedSummary);
             Assert.AreEqual(LibraryScope.ForLibrary(2).ToTransportValue(), evidence.OperationsScope);
             Assert.AreEqual(scenario == "requested" ? null : "Recipient domain not allowed", evidence.Reason);
             await using var context = await ActivityContexts().CreateDbContextAsync();
-            var outbox = await context.EmailOutbox.AsNoTracking().SingleAsync(item => item.TitleRequestId == accepted.Id);
+            var outbox = await context.EmailOutbox.AsNoTracking().SingleAsync(item =>
+                item.TitleRequestId == accepted.Id && item.MessageKind == "confirmation");
             Assert.AreEqual(outbox.Id.ToString(CultureInfo.InvariantCulture), evidence.OperationReference);
             Assert.AreEqual("confirmation", outbox.MessageKind);
             Assert.AreEqual(1, await context.EmailDeliveryEvents.CountAsync(item => item.EmailOutboxId == outbox.Id));
-            Assert.AreEqual(scenario == "requested" ? 1 : 0, dispatch.EnqueuedIds.Count);
+            Assert.AreEqual(scenario == "requested", dispatch.EnqueuedIds.Contains(outbox.Id));
             Assert.AreEqual("suggestion", detail.Status, "Suppression must not change successful request creation.");
             CollectionAssert.AreEqual(mail.Select(ActivityIdentity).ToArray(),
                 (await ReadActivityDetailAsync(actor, accepted.Id)).Activity.Where(item => item.Email is not null).Select(ActivityIdentity).ToArray());
@@ -63,6 +65,602 @@ public sealed partial class PatronJourneyTests
         {
             await DeletePostCommitSuggestionAsync(title, null);
         }
+    }
+
+    [TestMethod]
+    public async Task NewPatronRequestNotificationsUseEligibleLibraryAndSystemRecipients()
+    {
+        var super = await ReadConfiguredSuperAdminAsync();
+        var originalSuperPreference = super.NewPatronRequestEmailEnabled;
+        var foreignLibraryId = await ReserveSettingsCourseLibraryIdAsync();
+        await UpsertTestOrganizationAsync(foreignLibraryId, "New request foreign library", "NRF");
+
+        var submitter = await CreateCorrectiveStaffAsync(super, StaffRole.Admin, 2);
+        var subscribed = await CreateCorrectiveStaffAsync(super, StaffRole.Staff, 2);
+        var optedOut = await CreateCorrectiveStaffAsync(super, StaffRole.Staff, 2);
+        var inactive = await CreateCorrectiveStaffAsync(super, StaffRole.Staff, 2);
+        var foreign = await CreateCorrectiveStaffAsync(super, StaffRole.Admin, foreignLibraryId);
+        var blockedDomain = await CreateCorrectiveStaffAsync(super, StaffRole.Staff, 2);
+        var missingAddress = await CreateCorrectiveStaffAsync(super, StaffRole.Staff, 2);
+        var invalidAddress = await CreateCorrectiveStaffAsync(super, StaffRole.Staff, 2);
+        await SetNewRequestRecipientAsync(super.Id, enabled: true);
+        await SetNewRequestRecipientAsync(submitter.Id, enabled: true,
+            notificationEmail: $"new-request-submitter-{submitter.Id}@example.org", setNotificationEmail: true);
+        await SetNewRequestRecipientAsync(subscribed.Id, enabled: true,
+            notificationEmail: $"new-request-primary-{subscribed.Id}@example.org",
+            setNotificationEmail: true, weeklyEmail: $"new-request-weekly-{subscribed.Id}@example.org");
+        await SetNewRequestRecipientAsync(optedOut.Id, enabled: false);
+        await SetNewRequestRecipientAsync(inactive.Id, enabled: true, active: false);
+        await SetNewRequestRecipientAsync(foreign.Id, enabled: true);
+        await SetNewRequestRecipientAsync(blockedDomain.Id, enabled: true,
+            notificationEmail: $"new-request-{blockedDomain.Id}@blocked.invalid", setNotificationEmail: true);
+        await SetNewRequestRecipientAsync(missingAddress.Id, enabled: true, setNotificationEmail: true);
+        await SetNewRequestRecipientAsync(invalidAddress.Id, enabled: true,
+            notificationEmail: "invalid-address", setNotificationEmail: true);
+
+        var tenantId = Guid.Parse(TestConfigurationFactory.Create().Authentication.Entra.InitialSuperAdmin.TenantId!);
+        var eligibility = factory!.Services.GetRequiredService<StaffEligibilityService>();
+        var submitterIdentity = await eligibility.EvaluateAsync(
+            new StaffIdentityEvidence(submitter.Id, submitter.NormalizedUserPrincipalName!, tenantId),
+            2,
+            StaffRoleRequirement.Admin,
+            requireParticipation: true,
+            CancellationToken.None);
+        Assert.AreEqual(StaffEligibilityOutcome.Allowed, submitterIdentity.Outcome);
+        var actor = submitterIdentity.Staff!;
+        var patron = AddPostCommitCancellationPatron();
+        var title = $"Scoped new request {Guid.NewGuid():N}";
+        var dispatch = new RecordingOutboxDispatcher();
+        var service = CreatePostCommitSuggestionService(patron.Provider, dispatch);
+        try
+        {
+            var accepted = await service.CreateForStaffAsync(actor, 2,
+                ActivitySuggestion(patron.Barcode, title, confirmation: false), CancellationToken.None);
+            Assert.AreEqual("not_requested", accepted.NotificationStatus,
+                "Staff notifications do not change the optional patron-confirmation result.");
+
+            await using var context = await ActivityContexts().CreateDbContextAsync();
+            var rows = await context.EmailOutbox.AsNoTracking()
+                .Where(item => item.TitleRequestId == accepted.Id && item.MessageKind == "new_patron_request")
+                .ToDictionaryAsync(item => item.RecipientStaffUserId!.Value);
+            var persistedTitle = await context.TitleRequests.AsNoTracking()
+                .Where(item => item.Id == accepted.Id).Select(item => item.Title).SingleAsync();
+            foreach (var recipient in new[] { super.Id, submitter.Id, subscribed.Id })
+            {
+                Assert.IsTrue(rows.ContainsKey(recipient), $"Eligible recipient {recipient} must receive a request-specific row.");
+                var row = rows[recipient];
+                Assert.AreEqual("new_patron_request", row.MessageKind);
+                Assert.AreEqual("new_request", row.RecipientAddressKind);
+                Assert.AreEqual("staff_authorization_sensitive", row.DeliveryClass);
+                Assert.AreEqual(2, row.AuthorizationOrganizationId);
+                Assert.AreEqual($"new-patron-request:{accepted.Id}:{recipient}", row.BusinessKey);
+                Assert.AreEqual("pending", row.Status);
+                Assert.AreEqual(1, await context.EmailDeliveryEvents.CountAsync(item => item.EmailOutboxId == row.Id));
+                Assert.IsTrue(dispatch.EnqueuedIds.Contains(row.Id));
+                StringAssert.Contains(row.BodyText!, persistedTitle);
+                StringAssert.Contains(row.BodyText!, "Activity Author");
+                StringAssert.Contains(row.BodyText!, "Test Library");
+                Assert.IsFalse(row.BodyText!.Contains("Post Commit", StringComparison.Ordinal));
+                Assert.IsFalse(row.BodyText.Contains(patron.Barcode, StringComparison.Ordinal));
+                Assert.IsFalse(row.BodyText.Contains("patron@example.org", StringComparison.Ordinal));
+            }
+
+            Assert.AreEqual($"new-request-primary-{subscribed.Id}@example.org", rows[subscribed.Id].ToAddress,
+                "New-request mail uses the primary address even when a weekly address exists.");
+            Assert.IsFalse(rows.ContainsKey(optedOut.Id));
+            Assert.IsFalse(rows.ContainsKey(inactive.Id));
+            Assert.IsFalse(rows.ContainsKey(foreign.Id));
+
+            foreach (var suppressedRecipient in new[] { blockedDomain.Id, missingAddress.Id, invalidAddress.Id })
+            {
+                Assert.IsTrue(rows.ContainsKey(suppressedRecipient), "Eligible but undeliverable recipients keep suppression evidence.");
+                Assert.AreEqual("suppressed", rows[suppressedRecipient].Status);
+                Assert.IsFalse(dispatch.EnqueuedIds.Contains(rows[suppressedRecipient].Id));
+                Assert.AreEqual(1, await context.EmailDeliveryEvents.CountAsync(item => item.EmailOutboxId == rows[suppressedRecipient].Id));
+            }
+            Assert.AreEqual("recipient_domain_not_allowed", rows[blockedDomain.Id].SuppressionReason);
+            Assert.AreEqual("recipient_missing", rows[missingAddress.Id].SuppressionReason);
+            Assert.AreEqual("recipient_invalid", rows[invalidAddress.Id].SuppressionReason);
+        }
+        finally
+        {
+            await DeletePostCommitSuggestionAsync(title, null);
+            foreach (var row in new[] { submitter, subscribed, optedOut, inactive, foreign, blockedDomain, missingAddress, invalidAddress })
+            {
+                await SetNewRequestRecipientAsync(row.Id, active: false);
+            }
+            await SetNewRequestRecipientAsync(super.Id, enabled: originalSuperPreference);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("public")]
+    [DataRow("staff")]
+    public async Task NewPatronRequestNotificationEvidenceRollsBackWithEitherSubmissionPath(string caller)
+    {
+        var patron = AddPostCommitCancellationPatron();
+        var session = caller == "public" ? await IssueTestPatronSessionAsync(patron.Barcode) : null;
+        var actor = await ReadConfiguredSuperAdminAsync();
+        var title = $"New request evidence rollback {caller} {Guid.NewGuid():N}";
+        var trigger = $"NewRequestEvidenceFailure_{Guid.NewGuid():N}";
+        var dispatch = new RecordingOutboxDispatcher();
+        var service = CreatePostCommitSuggestionService(patron.Provider, dispatch);
+        int requestCountBefore;
+        int outboxCountBefore;
+        int evidenceCountBefore;
+        await using (var context = await ActivityContexts().CreateDbContextAsync())
+        {
+            requestCountBefore = await context.TitleRequests.CountAsync();
+            outboxCountBefore = await context.EmailOutbox.CountAsync();
+            evidenceCountBefore = await context.EmailDeliveryEvents.CountAsync();
+        }
+
+        try
+        {
+            await ExecuteNonQueryAsync($"""
+                CREATE TRIGGER [asap].[{trigger}] ON [asap].[EmailDeliveryEvent] AFTER INSERT AS
+                IF EXISTS
+                (
+                    SELECT 1 FROM inserted AS event
+                    INNER JOIN [asap].[EmailOutbox] AS outbox ON outbox.[Id] = event.[EmailOutboxId]
+                    WHERE outbox.[MessageKind] = N'new_patron_request' AND event.[LocalEventKey] = N'initial'
+                )
+                    THROW 51247, 'Injected new-request outbox evidence failure.', 1;
+                """);
+
+            if (caller == "public")
+            {
+                await Assert.ThrowsAsync<SqlException>(() => service.CreateAsync(session!, Suggestion(title), CancellationToken.None));
+            }
+            else
+            {
+                await Assert.ThrowsAsync<SqlException>(() => service.CreateForStaffAsync(actor, 2,
+                    ActivitySuggestion(patron.Barcode, title, confirmation: true), CancellationToken.None));
+            }
+
+            await using var verify = await ActivityContexts().CreateDbContextAsync();
+            Assert.IsFalse(await verify.TitleRequests.AnyAsync(item => item.Title == title));
+            Assert.AreEqual(requestCountBefore, await verify.TitleRequests.CountAsync());
+            Assert.AreEqual(outboxCountBefore, await verify.EmailOutbox.CountAsync());
+            Assert.AreEqual(evidenceCountBefore, await verify.EmailDeliveryEvents.CountAsync());
+            Assert.AreEqual(0, dispatch.EnqueuedIds.Count,
+                "No provider dispatch may happen before the failed submission transaction commits.");
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync($"DROP TRIGGER IF EXISTS [asap].[{trigger}];");
+            await DeletePostCommitSuggestionAsync(title, session?.Id);
+        }
+    }
+
+    [TestMethod]
+    public async Task ConcurrentPublicSubmissionsCreateOneRequestAndOneNotificationPerRecipient()
+    {
+        var patron = AddPostCommitCancellationPatron();
+        var session = await IssueTestPatronSessionAsync(patron.Barcode);
+        var title = $"Concurrent new request {Guid.NewGuid():N}";
+        var dispatch = new RecordingOutboxDispatcher();
+        var service = CreatePostCommitSuggestionService(patron.Provider, dispatch);
+
+        async Task<(PatronSuggestionResult? Result, PatronFlowException? Failure)> SubmitAsync()
+        {
+            try
+            {
+                return (await service.CreateAsync(session, Suggestion(title), CancellationToken.None), null);
+            }
+            catch (PatronFlowException exception)
+            {
+                return (null, exception);
+            }
+        }
+
+        try
+        {
+            var attempts = await Task.WhenAll(Task.Run(SubmitAsync), Task.Run(SubmitAsync));
+            Assert.AreEqual(1, attempts.Count(item => item.Result is not null));
+            var rejected = attempts.Single(item => item.Failure is not null).Failure!;
+            Assert.AreEqual(409, rejected.StatusCode);
+
+            await using var context = await ActivityContexts().CreateDbContextAsync();
+            var requests = await context.TitleRequests.AsNoTracking().Where(item => item.Title == title).ToArrayAsync();
+            Assert.AreEqual(1, requests.Length);
+            var notifications = await context.EmailOutbox.AsNoTracking().Where(item =>
+                item.TitleRequestId == requests[0].Id && item.MessageKind == "new_patron_request").ToArrayAsync();
+            Assert.IsGreaterThanOrEqualTo(1, notifications.Length);
+            Assert.AreEqual(notifications.Length, notifications.Select(item => item.RecipientStaffUserId).Distinct().Count());
+            Assert.AreEqual(notifications.Length, notifications.Select(item => item.BusinessKey).Distinct().Count());
+            Assert.IsTrue(notifications.All(item => item.BusinessKey ==
+                $"new-patron-request:{requests[0].Id}:{item.RecipientStaffUserId}"));
+            Assert.AreEqual(1, await context.EmailOutbox.CountAsync(item =>
+                item.TitleRequestId == requests[0].Id && item.MessageKind == "confirmation"));
+        }
+        finally
+        {
+            await DeletePostCommitSuggestionAsync(title, session.Id);
+        }
+    }
+
+    [TestMethod]
+    public async Task NewPatronRequestSnapshotsLibraryTemplateAndLeavesUnavailableLinkEmpty()
+    {
+        var super = await ReadConfiguredSuperAdminAsync();
+        var originalSuperPreference = super.NewPatronRequestEmailEnabled;
+        await SetNewRequestRecipientAsync(super.Id, enabled: true);
+        super = await ReadConfiguredSuperAdminAsync();
+        var submitterRecord = await CreateCorrectiveStaffAsync(super, StaffRole.Admin, 2);
+        await using (var renameSubmitter = await ActivityContexts().CreateDbContextAsync())
+        {
+            var user = await renameSubmitter.StaffUsers.SingleAsync(item => item.Id == submitterRecord.Id);
+            user.DisplayName = "Request Recipient";
+            await renameSubmitter.SaveChangesAsync();
+        }
+        var submitter = await ReadCorrectiveStaffAsync(submitterRecord);
+        var patron = AddPostCommitCancellationPatron();
+        var templateKey = StaffEmailTemplateCatalog.NewPatronRequest;
+        const string testSubject = "Request {{title}} for {{recipientName}}";
+        const string testBody = "{{recipientName}}: {{title}} by {{author}} in {{format}} at {{libraryName}} #{{requestId}} {{requestUrl}}";
+        var titles = new List<string>();
+        long? libraryTemplateId;
+        string? originalStaffUrl;
+        (string? Subject, string? Body, bool Hidden, bool Custom, string? DisplayName, int SortOrder)? originalLibraryTemplate = null;
+        await using (var setup = await ActivityContexts().CreateDbContextAsync())
+        {
+            var systemTemplate = await setup.EmailTemplates.SingleAsync(item =>
+                item.OrganizationId == 1 && item.TemplateKey == templateKey);
+            var libraryTemplate = await setup.EmailTemplates.SingleOrDefaultAsync(item =>
+                item.OrganizationId == 2 && item.SourceTemplateId == systemTemplate.Id);
+            if (libraryTemplate is not null)
+            {
+                originalLibraryTemplate = (libraryTemplate.SubjectTemplate, libraryTemplate.BodyTemplate,
+                    libraryTemplate.IsHidden, libraryTemplate.IsCustom, libraryTemplate.DisplayName, libraryTemplate.SortOrder);
+                libraryTemplate.SubjectTemplate = testSubject;
+                libraryTemplate.BodyTemplate = testBody;
+                libraryTemplate.IsHidden = false;
+            }
+            else
+            {
+                libraryTemplate = new EmailTemplate
+                {
+                    OrganizationId = 2,
+                    SourceTemplateId = systemTemplate.Id,
+                    TemplateKey = templateKey,
+                    SubjectTemplate = testSubject,
+                    BodyTemplate = testBody,
+                    IsHidden = false,
+                    IsCustom = false,
+                    SortOrder = systemTemplate.SortOrder
+                };
+                setup.EmailTemplates.Add(libraryTemplate);
+            }
+            await setup.SaveChangesAsync();
+            libraryTemplateId = libraryTemplate.Id;
+            originalStaffUrl = await setup.SystemSettings.Where(item => item.OrganizationId == 1)
+                .Select(item => item.StaffApplicationUrl).SingleAsync();
+        }
+
+        try
+        {
+            foreach (var (staffUrl, hasRequestLink) in new (string? StaffUrl, bool HasRequestLink)[]
+                     {
+                         (null, false),
+                         ("javascript:alert(1)", false),
+                         ("https://trusted.example.org/staff/", true)
+                     })
+            {
+                await using (var updateSettings = await ActivityContexts().CreateDbContextAsync())
+                {
+                    var settings = await updateSettings.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+                    settings.StaffApplicationUrl = staffUrl;
+                    await updateSettings.SaveChangesAsync();
+                }
+
+                var title = $"Request <b>& snapshot {Guid.NewGuid():N}";
+                titles.Add(title);
+                var dispatch = new RecordingOutboxDispatcher();
+                var accepted = await CreatePostCommitSuggestionService(patron.Provider, dispatch).CreateForStaffAsync(
+                    submitter, 2, ActivitySuggestion(patron.Barcode, title, confirmation: false), CancellationToken.None);
+                Assert.AreEqual("not_requested", accepted.NotificationStatus);
+                await using var verify = await ActivityContexts().CreateDbContextAsync();
+                var outbox = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
+                    item.TitleRequestId == accepted.Id && item.MessageKind == "new_patron_request" &&
+                    item.RecipientStaffUserId == submitter.Id);
+                var persistedTitle = await verify.TitleRequests.AsNoTracking()
+                    .Where(item => item.Id == accepted.Id).Select(item => item.Title).SingleAsync();
+                var bodyText = outbox.BodyText!;
+                var bodyHtml = outbox.BodyHtml!;
+                var requestUrl = $"https://trusted.example.org/staff/?request={accepted.Id.ToString(CultureInfo.InvariantCulture)}&stage=suggestion&scope=2";
+                Assert.AreEqual("pending", outbox.Status,
+                    "An unavailable absolute staff link cannot suppress an otherwise deliverable request message.");
+                Assert.AreEqual("new_request", outbox.RecipientAddressKind);
+                Assert.AreEqual($"new-patron-request:{accepted.Id}:{submitter.Id}", outbox.BusinessKey);
+                Assert.AreEqual($"Request {persistedTitle} for {submitter.DisplayName}", outbox.Subject);
+                StringAssert.Contains(bodyText, persistedTitle);
+                StringAssert.Contains(bodyText, "Activity Author");
+                StringAssert.Contains(bodyText, "Test Library");
+                StringAssert.Contains(bodyText, accepted.Id.ToString(CultureInfo.InvariantCulture));
+                if (hasRequestLink)
+                {
+                    StringAssert.Contains(bodyText, requestUrl);
+                    StringAssert.Contains(bodyHtml, "request=" + accepted.Id.ToString(CultureInfo.InvariantCulture));
+                    StringAssert.Contains(bodyHtml, "scope=2");
+                }
+                else
+                {
+                    Assert.IsFalse(bodyText.Contains("https://", StringComparison.OrdinalIgnoreCase));
+                }
+                Assert.IsFalse(bodyText.Contains("{{requestUrl}}", StringComparison.Ordinal));
+                StringAssert.Contains(bodyHtml, System.Text.Encodings.Web.HtmlEncoder.Default.Encode(persistedTitle));
+                Assert.IsFalse(bodyHtml.Contains(persistedTitle, StringComparison.Ordinal));
+                Assert.IsFalse(bodyHtml.Contains("<b>& snapshot", StringComparison.Ordinal));
+                Assert.IsFalse(bodyText.Contains("Post Commit", StringComparison.Ordinal));
+                Assert.IsFalse(bodyText.Contains(patron.Barcode, StringComparison.Ordinal));
+                Assert.IsTrue(dispatch.EnqueuedIds.Contains(outbox.Id));
+                var superOutbox = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
+                    item.TitleRequestId == accepted.Id && item.MessageKind == "new_patron_request" &&
+                    item.RecipientStaffUserId == super.Id);
+                Assert.AreEqual("pending", superOutbox.Status);
+                var superRecipientName = string.IsNullOrWhiteSpace(super.DisplayName) ? "Staff member" : super.DisplayName;
+                Assert.AreEqual($"Request {persistedTitle} for {superRecipientName}", superOutbox.Subject,
+                    "System super-admin notifications use the request-owning library's effective template.");
+                StringAssert.Contains(superOutbox.BodyText!, super.DisplayName!);
+
+                await using (var edit = await ActivityContexts().CreateDbContextAsync())
+                {
+                    var template = await edit.EmailTemplates.SingleAsync(item => item.Id == libraryTemplateId);
+                    template.SubjectTemplate = "Edited after request";
+                    template.BodyTemplate = "Edited after request";
+                    await edit.SaveChangesAsync();
+                }
+                var snapshot = await verify.EmailOutbox.AsNoTracking().SingleAsync(item => item.Id == outbox.Id);
+                Assert.AreEqual(outbox.Subject, snapshot.Subject);
+                Assert.AreEqual(outbox.BodyText, snapshot.BodyText);
+                Assert.AreEqual(outbox.BodyHtml, snapshot.BodyHtml,
+                    "Template edits cannot rewrite already accepted outbox content.");
+
+                await using (var restoreTestTemplate = await ActivityContexts().CreateDbContextAsync())
+                {
+                    var template = await restoreTestTemplate.EmailTemplates.SingleAsync(item => item.Id == libraryTemplateId);
+                    template.SubjectTemplate = testSubject;
+                    template.BodyTemplate = testBody;
+                    await restoreTestTemplate.SaveChangesAsync();
+                }
+            }
+        }
+        finally
+        {
+            foreach (var title in titles)
+            {
+                await DeletePostCommitSuggestionAsync(title, null);
+            }
+            await using var restore = await ActivityContexts().CreateDbContextAsync();
+            var settings = await restore.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+            settings.StaffApplicationUrl = originalStaffUrl;
+            if (originalLibraryTemplate is { } prior)
+            {
+                var template = await restore.EmailTemplates.SingleAsync(item => item.Id == libraryTemplateId);
+                template.SubjectTemplate = prior.Subject;
+                template.BodyTemplate = prior.Body;
+                template.IsHidden = prior.Hidden;
+                template.IsCustom = prior.Custom;
+                template.DisplayName = prior.DisplayName;
+                template.SortOrder = prior.SortOrder;
+            }
+            else if (libraryTemplateId.HasValue)
+            {
+                var template = await restore.EmailTemplates.SingleAsync(item => item.Id == libraryTemplateId);
+                restore.EmailTemplates.Remove(template);
+            }
+            await restore.SaveChangesAsync();
+            await DeactivateCorrectiveStaffAsync(submitterRecord.Id);
+            await SetNewRequestRecipientAsync(super.Id, enabled: originalSuperPreference);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("optout")]
+    [DataRow("identity")]
+    [DataRow("inactive")]
+    [DataRow("access")]
+    public async Task NewPatronRequestDeliveryRechecksCurrentRecipientAuthority(string change)
+    {
+        var super = await ReadConfiguredSuperAdminAsync();
+        var recipientRecord = await CreateCorrectiveStaffAsync(super, StaffRole.Staff, 2);
+        await SetNewRequestRecipientAsync(recipientRecord.Id, enabled: true,
+            notificationEmail: $"new-request-delivery-{recipientRecord.Id}@example.org", setNotificationEmail: true);
+        var recipient = await ReadCorrectiveStaffAsync(recipientRecord);
+        var foreignLibraryId = 0;
+        if (change == "access")
+        {
+            foreignLibraryId = await ReserveSettingsCourseLibraryIdAsync();
+            await UpsertTestOrganizationAsync(foreignLibraryId, "New request revoked library", "NRV");
+        }
+
+        var patron = AddPostCommitCancellationPatron();
+        var title = $"New request delivery authority {change} {Guid.NewGuid():N}";
+        var dispatch = new RecordingOutboxDispatcher();
+        var actorRecord = await CreateCorrectiveStaffAsync(super, StaffRole.Admin, 2);
+        var actor = await ReadCorrectiveStaffAsync(actorRecord);
+        SeededSensitiveOutbox? unrelatedNotification = null;
+        try
+        {
+            var accepted = await CreatePostCommitSuggestionService(patron.Provider, dispatch).CreateForStaffAsync(
+                actor, 2, ActivitySuggestion(patron.Barcode, title, confirmation: false), CancellationToken.None);
+            await using var context = await ActivityContexts().CreateDbContextAsync();
+            var outbox = await context.EmailOutbox.AsNoTracking().SingleAsync(item =>
+                item.TitleRequestId == accepted.Id && item.RecipientStaffUserId == recipient.Id &&
+                item.MessageKind == "new_patron_request");
+            switch (change)
+            {
+                case "optout":
+                    await SetNewRequestRecipientAsync(recipient.Id, enabled: false);
+                    break;
+                case "identity":
+                    var changedEmail = $"changed-{recipient.Id}@example.org";
+                    await ExecuteNonQueryAsync(
+                        "UPDATE [asap].[StaffUser] SET [UserPrincipalName] = @email, [NormalizedUserPrincipalName] = UPPER(@email) WHERE [Id] = @id;",
+                        ("@email", changedEmail), ("@id", recipient.Id));
+                    break;
+                case "inactive":
+                    await SetNewRequestRecipientAsync(recipient.Id, active: false);
+                    break;
+                case "access":
+                    await ExecuteNonQueryAsync(
+                        "UPDATE [asap].[StaffUser] SET [OrganizationId] = @organizationId WHERE [Id] = @id;",
+                        ("@organizationId", foreignLibraryId), ("@id", recipient.Id));
+                    break;
+            }
+
+            var sender = new ActivityEmailSender();
+            await CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default)
+                .DeliverAsync(outbox.Id, CancellationToken.None);
+            Assert.AreEqual(0, sender.SendCount);
+            var state = await ReadEmailOutcomeDispatchSnapshotAsync(outbox.Id);
+            Assert.AreEqual("suppressed", state.Status);
+            await using (var verify = await ActivityContexts().CreateDbContextAsync())
+            {
+                Assert.AreEqual("recipient_authorization_changed", await verify.EmailOutbox.AsNoTracking()
+                    .Where(item => item.Id == outbox.Id).Select(item => item.SuppressionReason).SingleAsync());
+            }
+            var events = await ActivityEventsAsync(outbox.Id);
+            Assert.AreEqual(1, events.Count(item => item.EventType == "suppressed"));
+            Assert.IsFalse(events.Any(item => item.EventType is "send_intent" or "provider_accepted"));
+
+            if (change == "optout")
+            {
+                unrelatedNotification = await SeedSensitiveOutboxAsync($"new-request-independent-{Guid.NewGuid():N}",
+                    addressKind: "notification_email");
+                await ExecuteNonQueryAsync(
+                    "UPDATE [asap].[StaffUser] SET [NewPatronRequestEmailEnabled] = 0 WHERE [Id] = @id;",
+                    ("@id", unrelatedNotification.StaffUserId));
+                var unrelatedSender = new ActivityEmailSender();
+                await CreateEmailOutboxJobs(unrelatedSender, EmailOutboxRuntimeOptions.Default)
+                    .DeliverAsync(unrelatedNotification.OutboxId, CancellationToken.None);
+                Assert.AreEqual(1, unrelatedSender.SendCount,
+                    "The new-request preference cannot suppress existing notification-email kinds.");
+                Assert.AreEqual("sent", (await ReadEmailOutcomeDispatchSnapshotAsync(unrelatedNotification.OutboxId)).Status);
+            }
+        }
+        finally
+        {
+            await DeletePostCommitSuggestionAsync(title, null);
+            await SetNewRequestRecipientAsync(recipient.Id, active: false);
+            await DeactivateCorrectiveStaffAsync(actorRecord.Id);
+            if (unrelatedNotification is not null)
+            {
+                await DeleteEmailOutcomeFixtureAsync(unrelatedNotification);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task StaffRequestReadinessFailureSuppressesOnlyNewNoticeAndKeepsAcceptance()
+    {
+        var super = await ReadConfiguredSuperAdminAsync();
+        var actorRecord = await CreateCorrectiveStaffAsync(super, StaffRole.Admin, 2);
+        var actor = await ReadCorrectiveStaffAsync(actorRecord);
+        var patron = AddPostCommitCancellationPatron();
+        var title = $"New request readiness failure {Guid.NewGuid():N}";
+        var sender = new ActivityEmailSender
+        {
+            OnReadiness = _ => Task.FromException<EmailTransportReadiness>(
+                new InvalidOperationException("Deterministic readiness probe failure."))
+        };
+        try
+        {
+            var result = await CreatePostCommitSuggestionService(patron.Provider, new RecordingOutboxDispatcher(), sender)
+                .CreateForStaffAsync(actor, 2, ActivitySuggestion(patron.Barcode, title, confirmation: false), CancellationToken.None);
+            Assert.AreEqual("not_requested", result.NotificationStatus,
+                "The existing staff-assisted no-confirmation result stays unchanged.");
+            await using var context = await ActivityContexts().CreateDbContextAsync();
+            var outbox = await context.EmailOutbox.AsNoTracking().SingleAsync(item =>
+                item.TitleRequestId == result.Id && item.RecipientStaffUserId == actor.Id &&
+                item.MessageKind == "new_patron_request");
+            Assert.AreEqual("suppressed", outbox.Status);
+            Assert.AreEqual("mail_readiness_unavailable", outbox.SuppressionReason);
+            Assert.AreEqual(1, await context.EmailDeliveryEvents.CountAsync(item => item.EmailOutboxId == outbox.Id));
+            Assert.AreEqual(0, sender.SendCount);
+        }
+        finally
+        {
+            await DeletePostCommitSuggestionAsync(title, null);
+            await DeactivateCorrectiveStaffAsync(actorRecord.Id);
+        }
+    }
+
+    [TestMethod]
+    public async Task NewPatronRequestOutboxRetriesReadinessFailureThroughExistingDeliveryPolicy()
+    {
+        var super = await ReadConfiguredSuperAdminAsync();
+        var originalPreference = super.NewPatronRequestEmailEnabled;
+        await SetNewRequestRecipientAsync(super.Id, enabled: true);
+        super = await ReadConfiguredSuperAdminAsync();
+        var patron = AddPostCommitCancellationPatron();
+        var title = $"New request retry {Guid.NewGuid():N}";
+        var sender = new ActivityEmailSender();
+        try
+        {
+            var accepted = await CreatePostCommitSuggestionService(patron.Provider,
+                new RecordingOutboxDispatcher(), sender).CreateForStaffAsync(
+                super, 2, ActivitySuggestion(patron.Barcode, title, confirmation: false), CancellationToken.None);
+            Assert.AreEqual("not_requested", accepted.NotificationStatus);
+            await using var context = await ActivityContexts().CreateDbContextAsync();
+            var outbox = await context.EmailOutbox.AsNoTracking().SingleAsync(item =>
+                item.TitleRequestId == accepted.Id && item.RecipientStaffUserId == super.Id &&
+                item.MessageKind == "new_patron_request");
+            var jobs = CreateEmailOutboxJobs(sender, EmailOutboxRuntimeOptions.Default);
+            sender.Readiness = EmailTransportReadiness.NotConfigured;
+            await jobs.DeliverAsync(outbox.Id, CancellationToken.None);
+            Assert.AreEqual("failed", (await ReadEmailOutcomeDispatchSnapshotAsync(outbox.Id)).Status);
+            Assert.AreEqual(0, sender.SendCount);
+
+            var failed = await ReadEmailOutcomeDispatchSnapshotAsync(outbox.Id);
+            var retry = await factory!.Services.GetRequiredService<EmailOperationsService>().RetryAsync(
+                super, outbox.Id, StaffVersion.Encode(failed.RowVersion), CancellationToken.None);
+            Assert.AreEqual("queued", retry.Code);
+            sender.Readiness = EmailTransportReadiness.Configured;
+            await jobs.DeliverAsync(outbox.Id, CancellationToken.None);
+            Assert.AreEqual(1, sender.SendCount);
+            Assert.AreEqual("sent", (await ReadEmailOutcomeDispatchSnapshotAsync(outbox.Id)).Status);
+            var events = await ActivityEventsAsync(outbox.Id);
+            Assert.AreEqual(1, events.Count(item => item.EventType == "send_intent"));
+            Assert.AreEqual(1, events.Count(item => item.EventType == "provider_accepted"));
+            Assert.AreEqual(events.Count, events.Select(item => item.LocalEventKey).Distinct().Count());
+        }
+        finally
+        {
+            await DeletePostCommitSuggestionAsync(title, null);
+            await SetNewRequestRecipientAsync(super.Id, enabled: originalPreference);
+        }
+    }
+
+    private async Task SetNewRequestRecipientAsync(
+        long staffUserId,
+        bool? enabled = null,
+        bool? active = null,
+        string? notificationEmail = null,
+        bool setNotificationEmail = false,
+        string? weeklyEmail = null)
+    {
+        await using var context = await ActivityContexts().CreateDbContextAsync();
+        var row = await context.StaffUsers.SingleAsync(item => item.Id == staffUserId);
+        if (enabled.HasValue)
+        {
+            row.NewPatronRequestEmailEnabled = enabled.Value;
+        }
+        if (active.HasValue)
+        {
+            row.IsActive = active.Value;
+        }
+        if (setNotificationEmail)
+        {
+            row.NotificationEmail = notificationEmail;
+        }
+        if (weeklyEmail is not null)
+        {
+            row.WeeklyActionSummaryEnabled = true;
+            row.WeeklyActionSummaryEmail = weeklyEmail;
+        }
+        await context.SaveChangesAsync();
     }
 
     [TestMethod]
@@ -455,7 +1053,8 @@ public sealed partial class PatronJourneyTests
         var accepted = await CreatePostCommitSuggestionService(patron.Provider, new RecordingOutboxDispatcher()).CreateForStaffAsync(
             await ReadConfiguredSuperAdminAsync(), 2, ActivitySuggestion(patron.Barcode, title, true), CancellationToken.None);
         await using var context = await ActivityContexts().CreateDbContextAsync();
-        var outbox = await context.EmailOutbox.AsNoTracking().SingleAsync(item => item.TitleRequestId == accepted.Id);
+        var outbox = await context.EmailOutbox.AsNoTracking().SingleAsync(item =>
+            item.TitleRequestId == accepted.Id && item.MessageKind == "confirmation");
         Assert.AreEqual("pending", outbox.Status);
         return (accepted.Id, outbox.Id, title);
     }

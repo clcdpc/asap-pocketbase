@@ -11,7 +11,8 @@ public sealed record StaffProfileInput(
     [property: JsonRequired] string? WeeklyActionSummaryEmail,
     [property: JsonRequired] bool PurchaseReminderDefault,
     [property: JsonRequired] bool AdditionalCopyReminderDefault,
-    [property: JsonRequired] bool DefaultMineUnclaimedFilter);
+    [property: JsonRequired] bool DefaultMineUnclaimedFilter,
+    [property: JsonRequired] bool NewPatronRequestEmailEnabled);
 
 public sealed record StaffMutationResult(string Code, CurrentStaff? Staff = null);
 
@@ -69,6 +70,7 @@ public sealed class StaffProfileService(
         row.PurchaseReminderDefault = input.PurchaseReminderDefault;
         row.AdditionalCopyReminderDefault = input.AdditionalCopyReminderDefault;
         row.DefaultMineUnclaimedFilter = input.DefaultMineUnclaimedFilter;
+        row.NewPatronRequestEmailEnabled = input.NewPatronRequestEmailEnabled;
 
         try
         {
@@ -87,6 +89,7 @@ public sealed class StaffProfileService(
             PurchaseReminderDefault = row.PurchaseReminderDefault,
             AdditionalCopyReminderDefault = row.AdditionalCopyReminderDefault,
             DefaultMineUnclaimedFilter = row.DefaultMineUnclaimedFilter,
+            NewPatronRequestEmailEnabled = row.NewPatronRequestEmailEnabled,
             RowVersion = row.RowVersion
         });
     }

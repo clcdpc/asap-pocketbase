@@ -75,6 +75,8 @@ async function flush() {
     const staffDefinitionSeeds = [
       ['staff_title_assignment', 'Title request assigned', 'Sent when a title request is assigned to a staff member.',
         ['recipientName', 'actorName', 'assigneeName', 'libraryName', 'requestId', 'bibId', 'title', 'author', 'format', 'requestUrl']],
+      ['staff_new_patron_request', 'New patron purchase request', 'Sent to subscribed staff who can view a newly submitted patron purchase request.',
+        ['recipientName', 'libraryName', 'requestId', 'title', 'author', 'format', 'requestUrl']],
       ['staff_purchase_reminder', 'Purchase reminder', 'Sent when staff request a reminder while recording a purchase.',
         ['recipientName', 'actorName', 'libraryName', 'requestId', 'bibId', 'title', 'author', 'format', 'requestUrl']],
       ['staff_additional_copy_reminder', 'Additional-copy reminder', 'Sent when staff request a reminder after creating an additional-copy task.',
@@ -99,6 +101,8 @@ async function flush() {
       body: definition.templateKey === 'staff_additional_copy_reminder' ||
         definition.templateKey === 'staff_additional_copy_assignment'
         ? 'Task {{taskId}} for {{title}}. {{requestUrl}}'
+        : definition.templateKey === 'staff_new_patron_request'
+          ? 'Hello {{recipientName}}. {{title}} at {{libraryName}}. {{requestUrl}}'
         : definition.templateKey === 'staff_weekly_summary'
           ? '{{periodStart}}–{{periodEnd}}: {{submissionCount}}. {{submissionItems}} {{submissionQueueUrl}}'
           : 'Hello {{recipientName}}. {{actorName}} — {{title}} {{requestUrl}}',

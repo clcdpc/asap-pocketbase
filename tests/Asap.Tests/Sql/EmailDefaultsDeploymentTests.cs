@@ -4,8 +4,10 @@ using Asap.Tests.Integration;
 using Asap.Web.Features.Email;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
+using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Development;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 
 namespace Asap.Tests.Sql;
 
@@ -45,10 +47,10 @@ public sealed partial class EmailDefaultsDeploymentTests
     }
 
     [TestMethod]
-    public async Task FreshDacpacSeedsFivePatronAndFiveStaffTemplatesAndRedeploymentPreservesCopies()
+    public async Task FreshDacpacSeedsFivePatronAndSixStaffTemplatesAndRedeploymentPreservesCopies()
     {
         var initial = await ReadTemplatesAsync();
-        Assert.AreEqual(10, initial.Count);
+        Assert.AreEqual(11, initial.Count);
         var patron = new PatronSnapshot(7, "20000000000007", "reader@example.org", "Ada", "Reader",
             null, null, 2, 2, "Library Two", null);
         foreach (var expected in BuiltInEmailTemplateExpectations.All)
@@ -132,6 +134,76 @@ public sealed partial class EmailDefaultsDeploymentTests
         CollectionAssert.AreEqual(initial, await ReadTemplatesAsync(), "Repeat deployment must preserve IDs, versions and all copy.");
         Deploy();
         CollectionAssert.AreEqual(initial, await ReadTemplatesAsync());
+    }
+
+    [TestMethod]
+    public async Task StaffRequestPreferenceBackfillsExistingAccountsAndRedeploymentPreservesOptOuts()
+    {
+        await using var connection = new SqlConnection(target);
+        await connection.OpenAsync();
+        await using (var prepareOldSchema = new SqlCommand("""
+                         ALTER TABLE [asap].[StaffUser] DROP CONSTRAINT [DF_StaffUser_NewPatronRequestEmailEnabled];
+                         ALTER TABLE [asap].[StaffUser] DROP COLUMN [NewPatronRequestEmailEnabled];
+                         INSERT INTO [asap].[StaffUser]
+                             ([UserPrincipalName], [NormalizedUserPrincipalName], [NotificationEmail], [Role], [OrganizationId], [IsActive])
+                         VALUES
+                             (N'existing-staff@example.org', N'EXISTING-STAFF@EXAMPLE.ORG', N'existing-staff@example.org', N'super_admin', 1, 1);
+                         """, connection))
+        {
+            await prepareOldSchema.ExecuteNonQueryAsync();
+        }
+
+        Deploy();
+        var existing = await ReadPreferenceAsync(connection, "EXISTING-STAFF@EXAMPLE.ORG");
+        Assert.IsTrue(existing, "Adding the non-null default must initialize an existing account as subscribed.");
+
+        await using (var optOut = new SqlCommand(
+                         "UPDATE [asap].[StaffUser] SET [NewPatronRequestEmailEnabled] = 0 WHERE [NormalizedUserPrincipalName] = N'EXISTING-STAFF@EXAMPLE.ORG';",
+                         connection))
+        {
+            await optOut.ExecuteNonQueryAsync();
+        }
+        Deploy();
+        Assert.IsFalse(await ReadPreferenceAsync(connection, "EXISTING-STAFF@EXAMPLE.ORG"),
+            "A later DACPAC deployment must not reset an explicit opt-out.");
+
+        using var modelContext = new AsapDbContext(new DbContextOptionsBuilder<AsapDbContext>().UseSqlServer(target).Options);
+        var property = modelContext.Model.FindEntityType(typeof(StaffUser))!
+            .FindProperty(nameof(StaffUser.NewPatronRequestEmailEnabled))!;
+        Assert.AreEqual(true, property.GetDefaultValue());
+        Assert.AreEqual(true, property.Sentinel);
+        await using (var context = new AsapDbContext(new DbContextOptionsBuilder<AsapDbContext>().UseSqlServer(target).Options))
+        {
+            var newDefault = new StaffUser
+            {
+                UserPrincipalName = "new-default@example.org",
+                NormalizedUserPrincipalName = "NEW-DEFAULT@EXAMPLE.ORG",
+                NotificationEmail = "new-default@example.org",
+                Role = StaffRole.SuperAdmin,
+                OrganizationId = 1,
+                IsActive = true
+            };
+            var newOptOut = new StaffUser
+            {
+                UserPrincipalName = "explicit-opt-out@example.org",
+                NormalizedUserPrincipalName = "EXPLICIT-OPT-OUT@EXAMPLE.ORG",
+                NotificationEmail = "explicit-opt-out@example.org",
+                Role = StaffRole.SuperAdmin,
+                OrganizationId = 1,
+                IsActive = true,
+                NewPatronRequestEmailEnabled = false
+            };
+            context.StaffUsers.AddRange(newDefault, newOptOut);
+            await context.SaveChangesAsync();
+            Assert.IsTrue(await context.StaffUsers.AsNoTracking()
+                .Where(item => item.Id == newDefault.Id)
+                .Select(item => item.NewPatronRequestEmailEnabled)
+                .SingleAsync());
+            Assert.IsFalse(await context.StaffUsers.AsNoTracking()
+                .Where(item => item.Id == newOptOut.Id)
+                .Select(item => item.NewPatronRequestEmailEnabled)
+                .SingleAsync(), "EF must send an explicit false value instead of using the database default.");
+        }
     }
 
 
@@ -296,6 +368,15 @@ public sealed partial class EmailDefaultsDeploymentTests
                 reader.GetBoolean(7), reader.GetBoolean(8), reader.GetInt32(9), Convert.ToBase64String((byte[])reader[10])));
         }
         return rows;
+    }
+
+    private static async Task<bool> ReadPreferenceAsync(SqlConnection connection, string normalizedEmail)
+    {
+        await using var command = new SqlCommand(
+            "SELECT [NewPatronRequestEmailEnabled] FROM [asap].[StaffUser] WHERE [NormalizedUserPrincipalName] = @email;",
+            connection);
+        command.Parameters.Add("@email", System.Data.SqlDbType.NVarChar, 320).Value = normalizedEmail;
+        return Convert.ToBoolean(await command.ExecuteScalarAsync());
     }
 
     private static async Task<List<string>> ReadSendersAsync(SqlConnection connection)
