@@ -73,8 +73,8 @@ for specification in control-1 baseline-1 trace-1 baseline-2 trace-2 control-2 b
   date --iso-8601=ns > "$trial/finished.txt"
   printf '%s\n' "$result" > "$trial/exit-code.txt"
   tail -n 12 "$trial/test.log"
-  if [[ "$result" -ne 0 ]]; then failed=1; fi
   cleanup
+  if [[ "$result" -ne 0 ]]; then failed=1; break; fi
 done
 printf '%s\n' "$failed" > "$root/failure.txt"
 exit "$failed"

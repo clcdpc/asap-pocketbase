@@ -101,7 +101,8 @@ public sealed partial class PatronJourneyTests
                             Assert.IsTrue(capture.Queries[0].Text.Contains("GROUP BY", StringComparison.Ordinal));
                             Assert.IsTrue(capture.Queries[1].Text.Contains("FETCH NEXT", StringComparison.Ordinal));
                             Assert.IsTrue(result.Items.Count <= 25);
-                            var expected = label switch { "all text" or "warm all text" => 12000, "multiword" or "exact barcode" or "literal match" => 1, "library text" => 6000, "no match" => 0, _ => -1 };
+                            // The numeric multiword token also matches native ID 9999, as in the original fixture.
+                            var expected = label switch { "all text" or "warm all text" => 12000, "multiword" => 2, "exact barcode" or "literal match" => 1, "library text" => 6000, "no match" => 0, _ => -1 };
                             Assert.AreEqual(expected, result.Total, label);
                             Assert.AreEqual(expected, result.FilteredTotal, label);
                             Assert.AreEqual(expected, result.Groups.Sum(group => group.Count), label);
@@ -324,14 +325,15 @@ public sealed partial class PatronJourneyTests
             """;
         await File.WriteAllTextAsync(Path.Combine(directory, "sql-state-" + label + ".json"), (string)(await command.ExecuteScalarAsync())!);
         command.CommandText = """
-            SELECT (SELECT qs.creation_time,qs.last_execution_time,qs.execution_count,qs.total_worker_time,qs.total_elapsed_time,
+            SELECT COALESCE((SELECT qs.creation_time,qs.last_execution_time,qs.execution_count,qs.total_worker_time,qs.total_elapsed_time,
                 qs.total_logical_reads,qs.total_physical_reads,qs.total_logical_writes,qs.total_rows,st.text,
                 CONVERT(nvarchar(max),qp.query_plan) query_plan
             FROM sys.dm_exec_query_stats qs CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
             OUTER APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
-            WHERE st.dbid=DB_ID() AND (st.text LIKE '%[[]asap].[[]TitleRequest]%' OR st.text LIKE '%[[]asap].[[]AdditionalCopyRequest]%')
+            WHERE EXISTS (SELECT 1 FROM sys.dm_exec_plan_attributes(qs.plan_handle) a WHERE a.attribute=N'dbid' AND CONVERT(int,a.value)=DB_ID())
+                AND (st.text LIKE '%[[]asap].[[]TitleRequest]%' OR st.text LIKE '%[[]asap].[[]AdditionalCopyRequest]%')
                 AND st.text NOT LIKE '%sys.dm_exec_query_stats%'
-            FOR JSON PATH);
+            FOR JSON PATH),N'[]');
             """;
         await File.WriteAllTextAsync(Path.Combine(directory, "cached-search-plans-" + label + ".json"), (string)(await command.ExecuteScalarAsync())!);
     }
