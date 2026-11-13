@@ -45,10 +45,10 @@ public sealed partial class EmailDefaultsDeploymentTests
     }
 
     [TestMethod]
-    public async Task FreshDacpacSeedsExactlyFiveOrderedTemplatesAndRedeploymentPreservesRenderedCopy()
+    public async Task FreshDacpacSeedsFivePatronAndFiveStaffTemplatesAndRedeploymentPreservesCopies()
     {
         var initial = await ReadTemplatesAsync();
-        Assert.AreEqual(5, initial.Count);
+        Assert.AreEqual(10, initial.Count);
         var patron = new PatronSnapshot(7, "20000000000007", "reader@example.org", "Ada", "Reader",
             null, null, 2, 2, "Library Two", null);
         foreach (var expected in BuiltInEmailTemplateExpectations.All)
@@ -86,6 +86,43 @@ public sealed partial class EmailDefaultsDeploymentTests
                 "Sample", null, "Print", patron.Barcode);
             Assert.IsFalse(missingAuthor.BodyText.Contains(" by ", StringComparison.Ordinal), row.Key);
             Assert.IsFalse(missingAuthor.BodyText.Contains("{{", StringComparison.Ordinal), row.Key);
+        }
+        foreach (var expected in BuiltInEmailTemplateExpectations.Staff)
+        {
+            var row = initial.Single(item => item.Key == expected.Key);
+            Assert.AreEqual(1, row.OrganizationId);
+            Assert.IsNull(row.SourceId);
+            Assert.AreEqual(expected.Name, row.Name);
+            Assert.AreEqual(expected.Subject, row.Subject);
+            Assert.AreEqual(expected.Body, row.Body);
+            Assert.AreEqual(expected.SortOrder, row.SortOrder);
+            Assert.IsFalse(row.Hidden);
+            Assert.IsFalse(row.Custom);
+            Assert.IsNull(StaffEmailTemplateCatalog.FindUnsupportedPlaceholder(row.Key, row.Subject));
+            Assert.IsNull(StaffEmailTemplateCatalog.FindUnsupportedPlaceholder(row.Key, row.Body));
+
+            var template = new EffectiveStaffEmailTemplate(row.Key, row.Subject!, row.Body!, row.Hidden);
+            RenderedEmailTemplate rendered;
+            if (row.Key == StaffEmailTemplateCatalog.WeeklySummary)
+            {
+                rendered = StaffEmailTemplateRenderer.RenderWeekly(template, new StaffEmailWeeklyValues(
+                    2, "https://staff.example.org/staff/", "Casey Staff", "Library Two",
+                    new DateTime(2026, 11, 5), new DateTime(2026, 11, 12), 1,
+                    [new StaffEmailSummaryItem("9007199254740993", 2, "Sample <Title>", "Writer & Editor", null, false, "suggestion")],
+                    1, [new StaffEmailSummaryItem("9007199254740994", 2, "Purchase", "Creator", null, false, "outstanding_purchase")],
+                    1, [new StaffEmailSummaryItem("9007199254740995", 2, "Copy", "Creator", "123456", true, "additional_copies")]));
+            }
+            else
+            {
+                var additionalCopy = row.Key is StaffEmailTemplateCatalog.AdditionalCopyReminder or StaffEmailTemplateCatalog.AdditionalCopyAssignment;
+                rendered = StaffEmailTemplateRenderer.RenderRequest(template, new StaffEmailRequestValues(
+                    2, "https://staff.example.org/staff/", "Casey Staff", "Morgan Staff", "Casey Staff", "Library Two",
+                    "9007199254740993", additionalCopy ? "9007199254740994" : null, "suggestion", "123456",
+                    "Sample <Title>", "Writer & Editor", "Print"));
+            }
+            Assert.IsFalse(rendered.Subject.Contains("{{", StringComparison.Ordinal), row.Key);
+            Assert.IsFalse(rendered.BodyText.Contains("{{", StringComparison.Ordinal), row.Key);
+            Assert.IsTrue(rendered.BodyText.Contains("https://staff.example.org/staff/?", StringComparison.Ordinal), row.Key);
         }
         var rejection = RejectionTemplatePolicy.Default([], 2);
         var expectedRejection = BuiltInEmailTemplateExpectations.All.Single(item => item.Key == "rejected");

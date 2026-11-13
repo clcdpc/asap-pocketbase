@@ -248,11 +248,11 @@ public sealed partial class TitleRequestMutationService(
         var outbox = await AddStaffNotificationAsync(
             context,
             assignee,
+            locked.Staff[actor.Id],
             request,
             $"title-assignment:{request.Id}:{Convert.ToHexString(expectedVersion)}:{assignee.Id}",
             "assignment",
-            "ASAP request assigned",
-            $"{request.Title} has been assigned to you.",
+            StaffEmailTemplateCatalog.TitleAssignment,
             readiness.IsConfigured,
             cancellationToken);
         await context.SaveChangesAsync(cancellationToken);
@@ -858,14 +858,15 @@ public sealed partial class TitleRequestMutationService(
     private async Task<EmailOutbox?> AddStaffNotificationAsync(
         AsapDbContext context,
         StaffUser recipient,
+        StaffUser actor,
         TitleRequest request,
         string businessKey,
         string messageKind,
-        string subject,
-        string body,
+        string templateKey,
         bool transportConfigured,
         CancellationToken cancellationToken,
-        string? readinessFailureReason = null)
+        string? readinessFailureReason = null,
+        AdditionalCopyRequest? additionalCopy = null)
     {
         var system = await context.EmailSettings.AsNoTracking()
             .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
@@ -873,6 +874,36 @@ public sealed partial class TitleRequestMutationService(
             .SingleOrDefaultAsync(item => item.OrganizationId == request.LibraryOrganizationId, cancellationToken);
         var fromAddress = Clean(library?.FromAddress) ?? Clean(system?.FromAddress);
         var fromName = Clean(library?.FromName) ?? Clean(system?.FromName);
+        var systemSettings = await context.SystemSettings.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OrganizationId == LibraryScope.SystemOrganizationId, cancellationToken);
+        var libraryName = await context.Organizations.AsNoTracking()
+            .Where(item => item.Id == request.LibraryOrganizationId)
+            .Select(item => item.DisplayName)
+            .SingleOrDefaultAsync(cancellationToken);
+        var formatId = additionalCopy?.MaterialFormatId ?? request.MaterialFormatId;
+        var format = await context.MaterialFormats.AsNoTracking()
+            .Where(item => item.Id == formatId)
+            .Select(item => item.Label)
+            .SingleOrDefaultAsync(cancellationToken);
+        var template = await StaffEmailTemplateCatalog.LoadEffectiveAsync(
+            context, request.LibraryOrganizationId, templateKey, cancellationToken);
+        var rendered = template is null ? null : StaffEmailTemplateRenderer.RenderRequest(template,
+            new StaffEmailRequestValues(
+                request.LibraryOrganizationId,
+                systemSettings?.StaffApplicationUrl,
+                recipient.DisplayName,
+                actor.DisplayName,
+                recipient.DisplayName,
+                libraryName,
+                request.Id.ToString(CultureInfo.InvariantCulture),
+                additionalCopy?.Id.ToString(CultureInfo.InvariantCulture),
+                request.Status,
+                additionalCopy is null
+                    ? request.BibId?.ToString(CultureInfo.InvariantCulture)
+                    : additionalCopy.BibId.ToString(CultureInfo.InvariantCulture),
+                additionalCopy is null ? request.Title : additionalCopy.Title,
+                additionalCopy is null ? request.Author : additionalCopy.Author,
+                additionalCopy?.FormatSnapshot ?? format));
         string? suppressionReason = null;
         if (!StaffEmail.TryNormalize(recipient.NotificationEmail, out var toAddress) || toAddress is null)
         {
@@ -890,6 +921,18 @@ public sealed partial class TitleRequestMutationService(
         {
             suppressionReason = readinessFailureReason ?? "mail_not_configured";
         }
+        else if (template is null)
+        {
+            suppressionReason = "template_unavailable";
+        }
+        else if (template.IsHidden)
+        {
+            suppressionReason = "template_hidden";
+        }
+        else if (string.IsNullOrWhiteSpace(rendered?.Subject) || string.IsNullOrWhiteSpace(rendered.BodyText))
+        {
+            suppressionReason = "template_blank";
+        }
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var outbox = new EmailOutbox
         {
@@ -905,8 +948,9 @@ public sealed partial class TitleRequestMutationService(
             ToAddress = toAddress,
             FromAddress = fromAddress,
             FromName = fromName,
-            Subject = subject,
-            BodyText = body,
+            Subject = rendered?.Subject,
+            BodyText = rendered?.BodyText,
+            BodyHtml = rendered?.BodyHtml,
             Status = suppressionReason is null ? "pending" : "suppressed",
             SuppressionReason = suppressionReason,
             NextAttemptUtc = suppressionReason is null ? now : null,

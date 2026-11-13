@@ -34,14 +34,17 @@ public sealed partial class PatronJourneyTests
         var contextFactory = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var context = await contextFactory.CreateDbContextAsync();
         var system = await context.EmailSettings.SingleAsync(item => item.OrganizationId == 1);
+        var systemSettings = await context.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
         var library = await context.EmailSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
         var oldSystemSender = system.FromAddress;
+        var oldStaffUrl = systemSettings.StaffApplicationUrl;
         var oldLibrarySender = library?.FromAddress;
         var createdLibrary = library is null;
         library ??= new EmailSettings { OrganizationId = 2 };
         if (createdLibrary) context.EmailSettings.Add(library);
         system.FromAddress = systemSender;
         library.FromAddress = librarySender;
+        systemSettings.StaffApplicationUrl = "https://staff.example.org/staff/";
         var now = timeProvider!.GetUtcNow().UtcDateTime;
         var request = new TitleRequest
         {
@@ -72,6 +75,7 @@ public sealed partial class PatronJourneyTests
         finally
         {
             system.FromAddress = oldSystemSender;
+            systemSettings.StaffApplicationUrl = oldStaffUrl;
             if (createdLibrary) context.EmailSettings.Remove(library); else library.FromAddress = oldLibrarySender;
             await context.SaveChangesAsync();
         }
@@ -85,13 +89,27 @@ public sealed partial class PatronJourneyTests
     [DataRow("admin", false)]
     [DataRow("super_admin", false)]
     public Task WorkflowEmailReadinessUsesBusinessLibraryOutsideSqlLocks(string role, bool configured) =>
-        VerifyWorkflowEmailActivityAsync(role, configured, missingStaffRecipient: false);
+        VerifyWorkflowEmailActivityAsync(role, configured, missingStaffRecipient: false, invalidStaffUrl: false);
 
     [TestMethod]
     public Task WorkflowEmailMissingStaffRecipientsPersistSuppressionWithRequestActivity() =>
-        VerifyWorkflowEmailActivityAsync("staff", configured: true, missingStaffRecipient: true);
+        VerifyWorkflowEmailActivityAsync("staff", configured: true, missingStaffRecipient: true, invalidStaffUrl: false);
 
-    private async Task VerifyWorkflowEmailActivityAsync(string role, bool configured, bool missingStaffRecipient)
+    [TestMethod]
+    [DataRow(null)]
+    [DataRow("")]
+    [DataRow("   ")]
+    [DataRow("https://attacker.example.org/staff/?untrusted=1")]
+    public Task WorkflowStaffTemplatesRemainDeliverableWithoutAValidStaffUrl(string? staffUrl) =>
+        VerifyWorkflowEmailActivityAsync("staff", configured: true, missingStaffRecipient: false,
+            invalidStaffUrl: true, staffUrl: staffUrl);
+
+    private async Task VerifyWorkflowEmailActivityAsync(
+        string role,
+        bool configured,
+        bool missingStaffRecipient,
+        bool invalidStaffUrl,
+        string? staffUrl = null)
     {
         using var startup = factory!.CreateClient();
         await startup.GetAsync("/api/asap/staff/session");
@@ -103,6 +121,7 @@ public sealed partial class PatronJourneyTests
         }
         var actor = await ReadCorrectiveStaffAsync(staff);
         var sender = new ScopedReadinessEmailSender(configured);
+        var deliverySender = new RecordingEmailSender();
         var provider = ScriptedHoldProvider.ReplyRequiredThenSuccess();
         var roleOrdinal = role switch { "staff" => 1, "admin" => 2, _ => 3 };
         provider.PatronId = 71050 + roleOrdinal * 10 + (configured ? 1 : 0);
@@ -120,6 +139,13 @@ public sealed partial class PatronJourneyTests
         }));
         var contextFactory = scoped.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var context = await contextFactory.CreateDbContextAsync();
+        var systemSettings = await context.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+        var originalStaffUrl = systemSettings.StaffApplicationUrl;
+        EmailTemplate? mutatedStaffTemplate = null;
+        string? originalStaffTemplateBody = null;
+        systemSettings.StaffApplicationUrl = invalidStaffUrl
+            ? staffUrl
+            : "https://staff.example.org/staff/";
         var email = await context.EmailSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
         var createdEmail = email is null;
         email ??= new EmailSettings { OrganizationId = 2 };
@@ -132,7 +158,8 @@ public sealed partial class PatronJourneyTests
         var barcode = $"200000000021{roleOrdinal}{(configured ? 1 : 0)}";
         TitleRequest NewRequest(string status) => new()
         {
-            LibraryOrganizationId = 2, MaterialFormatId = format.Id, Barcode = barcode, Title = $"Scoped mail {Guid.NewGuid():N}",
+            LibraryOrganizationId = 2, MaterialFormatId = format.Id, Barcode = barcode,
+            Title = status == "suggestion" ? $"Scoped mail <script> & {Guid.NewGuid():N}" : $"Scoped mail {Guid.NewGuid():N}",
             PatronIdSnapshot = provider.PatronId,
             Status = status, BibId = status == "pending_hold" ? 9001 : null,
             BibIdStaffVerified = status == "pending_hold", AutoHold = true, PreferredPickupBranchId = 101,
@@ -147,6 +174,11 @@ public sealed partial class PatronJourneyTests
         var beforeId = await context.EmailOutbox.Select(item => (long?)item.Id).MaxAsync() ?? 0;
         try
         {
+            if (!invalidStaffUrl)
+            {
+                systemSettings.StaffApplicationUrl = "https://staff.example.org/staff/";
+            }
+            await context.SaveChangesAsync();
             var titles = scoped.Services.GetRequiredService<TitleRequestMutationService>();
             var assigned = await titles.AssignAsync(actor, title.Id, new AssignTitleRequestInput(StaffVersion.Encode(title.RowVersion), staff.Id), CancellationToken.None);
             Assert.AreEqual("updated", assigned.Code);
@@ -180,8 +212,10 @@ public sealed partial class PatronJourneyTests
                 if (outbox.AuthorizationOrganizationId.HasValue) Assert.AreEqual(2, outbox.AuthorizationOrganizationId);
                 Assert.AreEqual("library.sender@example.org", outbox.FromAddress);
                 var missingRecipient = missingStaffRecipient && outbox.DeliveryClass == "staff_authorization_sensitive";
-                Assert.AreEqual(configured && !missingRecipient ? "pending" : "suppressed", outbox.Status);
-                Assert.AreEqual(missingRecipient ? "recipient_missing" : configured ? null : "mail_not_configured", outbox.SuppressionReason);
+                var suppressionReason = missingRecipient ? "recipient_missing" :
+                    configured ? null : "mail_not_configured";
+                Assert.AreEqual(suppressionReason is null ? "pending" : "suppressed", outbox.Status);
+                Assert.AreEqual(suppressionReason, outbox.SuppressionReason);
                 var kind = outbox.BusinessKey!.Split(':')[0] switch
                 {
                     "title-assignment" => "assignment",
@@ -192,10 +226,93 @@ public sealed partial class PatronJourneyTests
                     "title-hold-placed" => "hold_placed",
                     _ => throw new AssertFailedException("Unexpected request-mail producer.")
                 };
+                if (outbox.DeliveryClass == "staff_authorization_sensitive")
+                {
+                    Assert.IsFalse(string.IsNullOrWhiteSpace(outbox.Subject));
+                    Assert.IsFalse(string.IsNullOrWhiteSpace(outbox.BodyText));
+                    Assert.IsFalse(string.IsNullOrWhiteSpace(outbox.BodyHtml));
+                    Assert.IsFalse(outbox.BodyHtml!.Contains("<script>", StringComparison.OrdinalIgnoreCase));
+                    if (invalidStaffUrl)
+                    {
+                        Assert.IsFalse(outbox.BodyText!.Contains("attacker.example.org", StringComparison.Ordinal));
+                        Assert.IsFalse(outbox.BodyHtml.Contains("attacker.example.org", StringComparison.Ordinal));
+                        Assert.IsFalse(outbox.BodyHtml.Contains("<a ", StringComparison.OrdinalIgnoreCase));
+                        Assert.IsFalse(outbox.BodyText.Contains("{{requestUrl}}", StringComparison.Ordinal));
+                        Assert.IsFalse(outbox.BodyHtml.Contains("{{requestUrl}}", StringComparison.Ordinal));
+                    }
+                    switch (kind)
+                    {
+                        case "assignment":
+                            Assert.AreEqual("ASAP request assigned", outbox.Subject);
+                            StringAssert.Contains(outbox.BodyText!, "Scoped mail <script> &");
+                            StringAssert.Contains(outbox.BodyHtml, "Scoped mail &lt;script&gt; &amp;");
+                            if (invalidStaffUrl)
+                            {
+                                Assert.IsFalse(outbox.BodyText!.Contains("attacker.example.org", StringComparison.Ordinal));
+                            }
+                            else
+                            {
+                                StringAssert.Contains(outbox.BodyText!, $"request={title.Id}&stage=suggestion&scope=2");
+                            }
+                            break;
+                        case "purchase_reminder":
+                            Assert.AreEqual("ASAP purchase reminder", outbox.Subject);
+                            if (invalidStaffUrl)
+                            {
+                                Assert.IsFalse(outbox.BodyText!.Contains("attacker.example.org", StringComparison.Ordinal));
+                            }
+                            else
+                            {
+                                StringAssert.Contains(outbox.BodyText!, $"request={title.Id}&stage=outstanding_purchase&scope=2");
+                            }
+                            break;
+                        case "additional_copy_reminder":
+                        case "additional_copy_assignment":
+                            var taskId = copy.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                            Assert.AreEqual(kind == "additional_copy_reminder"
+                                ? "ASAP additional-copy reminder" : "ASAP additional-copy task assigned", outbox.Subject);
+                            StringAssert.Contains(outbox.BodyText!, $"Additional-copy task {taskId}");
+                            if (invalidStaffUrl)
+                            {
+                                Assert.IsFalse(outbox.BodyText!.Contains("attacker.example.org", StringComparison.Ordinal));
+                            }
+                            else
+                            {
+                                StringAssert.Contains(outbox.BodyText!,
+                                    $"request={taskId}&stage=additional_copies&scope=2");
+                            }
+                            break;
+                    }
+                }
                 await AssertRequestMailEvidenceAsync(outbox,
                     kind is "assignment" or "purchase_reminder" or "purchase_approved" ? title.Id : source.Id, kind);
             }
-            Assert.AreEqual(configured ? missingStaffRecipient ? 2 : 6 : 0, localDispatcher.EnqueuedIds.Count);
+            Assert.AreEqual(outboxes.Count(item => item.Status == "pending"), localDispatcher.EnqueuedIds.Count);
+            if (configured && !missingStaffRecipient && role == "staff")
+            {
+                var assignment = outboxes.Single(item => item.BusinessKey!.StartsWith("title-assignment:", StringComparison.Ordinal));
+                var acceptedSnapshot = (assignment.Subject, assignment.BodyText, assignment.BodyHtml);
+                mutatedStaffTemplate = await context.EmailTemplates.SingleAsync(item =>
+                    item.OrganizationId == LibraryScope.SystemOrganizationId &&
+                    item.TemplateKey == StaffEmailTemplateCatalog.TitleAssignment);
+                originalStaffTemplateBody = mutatedStaffTemplate.BodyTemplate;
+                mutatedStaffTemplate.BodyTemplate += "\nChanged after this notification was queued.";
+                await context.SaveChangesAsync();
+                var storedSnapshot = await context.EmailOutbox.AsNoTracking().SingleAsync(item => item.Id == assignment.Id);
+                Assert.AreEqual(acceptedSnapshot.Subject, storedSnapshot.Subject);
+                Assert.AreEqual(acceptedSnapshot.BodyText, storedSnapshot.BodyText);
+                Assert.AreEqual(acceptedSnapshot.BodyHtml, storedSnapshot.BodyHtml);
+
+                await CreateEmailOutboxJobs(deliverySender, EmailOutboxRuntimeOptions.Default)
+                    .DeliverAsync(assignment.Id, CancellationToken.None);
+                Assert.AreEqual("sent", (await ReadOutboxStateAsync(assignment.Id)).Status);
+                var envelope = deliverySender.Envelopes.Single();
+                Assert.AreEqual(acceptedSnapshot.Subject, envelope.Subject);
+                Assert.AreEqual(acceptedSnapshot.BodyText, envelope.BodyText);
+                Assert.AreEqual(acceptedSnapshot.BodyHtml, envelope.BodyHtml);
+                Assert.IsFalse(envelope.BodyText!.Contains("Changed after this notification was queued.", StringComparison.Ordinal));
+
+            }
         }
         finally
         {
@@ -217,6 +334,11 @@ public sealed partial class PatronJourneyTests
             await context.AdditionalCopyRequests.Where(item => item.SourceTitleRequestId == source.Id).ExecuteDeleteAsync();
             await DeleteRequestAsync(title.Id);
             await DeleteRequestAsync(source.Id);
+            if (mutatedStaffTemplate is not null)
+            {
+                mutatedStaffTemplate.BodyTemplate = originalStaffTemplateBody;
+            }
+            systemSettings.StaffApplicationUrl = originalStaffUrl;
             if (createdEmail) context.EmailSettings.Remove(email); else email.FromAddress = previousSender;
             await context.SaveChangesAsync();
             var current = await context.StaffUsers.AsNoTracking().SingleAsync(item => item.Id == staff.Id);

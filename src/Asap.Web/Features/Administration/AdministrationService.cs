@@ -238,6 +238,19 @@ public sealed partial class AdministrationService(
                 ui_text = ToEffectivePatronText(effective),
                 emails = ToEffectiveEmail(effective, templates),
                 templatePlaceholders = PatronEmailTemplateRenderer.SupportedPlaceholders,
+                staffTemplateDefinitions = StaffEmailTemplateCatalog.Definitions.Select(item => new
+                {
+                    templateKey = item.Key,
+                    displayName = item.DisplayName,
+                    whenSent = item.WhenSent,
+                    placeholders = item.Placeholders.Select(placeholder => new
+                    {
+                        key = placeholder.Key,
+                        name = placeholder.Name,
+                        description = placeholder.Description,
+                        example = placeholder.Example
+                    }).ToArray()
+                }).ToArray(),
                 publicPatron = PublicPatronLinkBuilder.Build(systemSettings.StaffApplicationUrl, organizationId, organization.IsActive),
                 publicPatronUnavailableReason = organizationId == LibraryScope.SystemOrganizationId
                     ? "Select an active library to get its public patron URL."

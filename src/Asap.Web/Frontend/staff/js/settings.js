@@ -93,7 +93,12 @@ const TEMPLATE_FIELDS = [
   ['purchase_approved', 'purchase-approved', 'email-purchase-approved-subject', 'email-purchase-approved-body'],
   ['already_owned', 'owned', 'email-owned-subject', 'email-owned-body'],
   ['hold_placed', 'hold', 'email-hold-subject', 'email-hold-body'],
-  ['rejected', 'rejected', 'email-rejected-subject', 'email-rejected-body']
+  ['rejected', 'rejected', 'email-rejected-subject', 'email-rejected-body'],
+  ['staff_title_assignment', 'staff-title-assignment', 'email-staff-title-assignment-subject', 'email-staff-title-assignment-body'],
+  ['staff_purchase_reminder', 'staff-purchase-reminder', 'email-staff-purchase-reminder-subject', 'email-staff-purchase-reminder-body'],
+  ['staff_additional_copy_reminder', 'staff-additional-copy-reminder', 'email-staff-additional-copy-reminder-subject', 'email-staff-additional-copy-reminder-body'],
+  ['staff_additional_copy_assignment', 'staff-additional-copy-assignment', 'email-staff-additional-copy-assignment-subject', 'email-staff-additional-copy-assignment-body'],
+  ['staff_weekly_summary', 'staff-weekly-summary', 'email-staff-weekly-summary-subject', 'email-staff-weekly-summary-body']
 ];
 
 function node(tag, attributes = {}, children = []) {
@@ -197,11 +202,16 @@ function templateEffectiveRows(data, organizationId) {
   const library = rows.filter(row => Number(row.organizationId) === organizationId);
   return system.map(row => {
     const override = library.find(item => String(item.sourceTemplateId || '') === String(row.id));
+    const staffTemplate = String(row.templateKey || '').startsWith('staff_');
     return {
       ...row,
       organizationId,
-      subject: meaningful(override?.subject) ? override.subject : row.subject,
-      body: meaningful(override?.body) ? override.body : row.body,
+      subject: staffTemplate
+        ? override?.subject !== null && override?.subject !== undefined ? override.subject : row.subject
+        : meaningful(override?.subject) ? override.subject : row.subject,
+      body: staffTemplate
+        ? override?.body !== null && override?.body !== undefined ? override.body : row.body
+        : meaningful(override?.body) ? override.body : row.body,
       enabled: override?.enabled === false ? false : row.enabled,
       sourceTemplateId: override ? String(row.id) : null,
       overridden: Boolean(override)
@@ -1869,7 +1879,7 @@ export function createSettingsController({
     renderPublicLinks(data);
     writeControl(document.getElementById('branding-alt'), property(effective, 'logoAltText'));
     setTemplates(data);
-    placeholders.populate(data.templatePlaceholders);
+    placeholders.populate(data.templatePlaceholders, data.staffTemplateDefinitions);
     setRejectionTemplateOptions(data, workflow);
 
     configureScopedFields();

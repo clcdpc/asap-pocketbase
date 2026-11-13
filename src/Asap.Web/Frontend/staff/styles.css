@@ -533,6 +533,10 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 /* The outer Settings grid already supplies its own 14px section gap. */
 .settings-fieldset > .settings-domain-block + .settings-domain-block,
 .settings-template-list + .settings-domain-block { margin-top: 16px; }
+.settings-template-audiences { display: grid; gap: 24px; min-width: 0; }
+.settings-template-audience { min-width: 0; }
+.settings-template-audience > h3 { margin: 0 0 4px; font-size: 1.1rem; }
+.settings-template-audience > p { margin: 0 0 12px; color: var(--muted); }
 .settings-fieldset > .settings-grid + .settings-grid { margin-top: 14px; }
 .settings-field { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; color: var(--ink); font-weight: 700; }
 .settings-timeouts { container-type: inline-size; }

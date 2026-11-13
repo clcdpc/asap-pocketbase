@@ -526,11 +526,12 @@ public sealed partial class TitleRequestMutationService
             notificationStatus = reminderRequested ? "suppressed" : "not_requested";
             if (reminderRequested)
             {
-                var outbox = await AddStaffNotificationAsync(context, locked.Staff[actor.Id], request,
-                    $"additional-copy-reminder:{additionalCopy.Id}", "additional_copy_reminder", "ASAP additional-copy reminder",
-                    $"Additional-copy task {additionalCopy.Id} for {request.Title} (BIB {request.BibId}) was created.",
+                var outbox = await AddStaffNotificationAsync(context, locked.Staff[actor.Id], locked.Staff[actor.Id], request,
+                    $"additional-copy-reminder:{additionalCopy.Id}", "additional_copy_reminder",
+                    StaffEmailTemplateCatalog.AdditionalCopyReminder,
                     transportConfigured, cancellationToken,
-                    purchaseTask ? preparation.NotificationReadinessFailureReason : null);
+                    purchaseTask ? preparation.NotificationReadinessFailureReason : null,
+                    additionalCopy);
                 notificationStatus = outbox?.Status == "pending" ? "queued" : "suppressed";
                 notificationReason = outbox?.SuppressionReason ?? "recipient_missing";
                 if (outbox?.Status == "pending")
@@ -545,11 +546,11 @@ public sealed partial class TitleRequestMutationService
             var outbox = await AddStaffNotificationAsync(
                 context,
                 locked.Staff[actor.Id],
+                locked.Staff[actor.Id],
                 request,
                 $"purchase-reminder:{request.Id}:{Convert.ToHexString(expectedVersion)}",
                 "purchase_reminder",
-                "ASAP purchase reminder",
-                $"Purchase requested for {request.Title}.",
+                StaffEmailTemplateCatalog.PurchaseReminder,
                 transportConfigured,
                 cancellationToken);
             notificationStatus = outbox?.Status == "pending" ? "queued" : "suppressed";

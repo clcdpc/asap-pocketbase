@@ -32,7 +32,14 @@ internal sealed record WorkflowCycleState(
     bool Inactive = false,
     bool FenceLost = false);
 
-internal sealed record WeeklySummaryItem(string Title, string? Author);
+internal sealed record WeeklySummaryItem(
+    string Id,
+    int LibraryOrganizationId,
+    string? Title,
+    string? Author,
+    string? BibId,
+    bool IsAdditionalCopy,
+    string Stage);
 
 public sealed partial class WorkflowProcessingService(
     IDbContextFactory<AsapDbContext> contextFactory,

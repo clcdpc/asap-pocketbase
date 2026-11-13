@@ -10131,6 +10131,9 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             UPDATE [asap].[EmailSettings]
             SET [FromAddress] = N'asap@example.org', [FromName] = N'ASAP Tests', [UpdatedUtc] = SYSUTCDATETIME()
             WHERE [OrganizationId] = 1;
+            UPDATE [asap].[SystemSettings]
+            SET [StaffApplicationUrl] = N'https://trusted.example.org/staff/', [UpdatedUtc] = SYSUTCDATETIME()
+            WHERE [OrganizationId] = 1;
             """;
         await command.ExecuteNonQueryAsync();
     }

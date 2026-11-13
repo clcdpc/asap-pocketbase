@@ -45,8 +45,8 @@ const { JSDOM } = require('jsdom');
     panel.addEventListener('input', () => inputCount++);
     helper.populate(keys);
     assert.equal(panel.querySelector('#template-placeholder-help'), null);
-    assert.equal(panel.querySelectorAll('[data-template-toggle][aria-expanded="false"]').length, 5);
-    assert.equal(panel.querySelectorAll('.settings-template-details[hidden]').length, 5);
+    assert.equal(panel.querySelectorAll('.settings-template[data-template-audience="patron"] [data-template-toggle][aria-expanded="false"]').length, 5);
+    assert.equal(panel.querySelectorAll('.settings-template[data-template-audience="patron"] .settings-template-details[hidden]').length, 5);
     const owner = control => control.closest('.settings-template-card');
     const open = control => {
       const toggle = owner(control).querySelector('[data-template-toggle]');

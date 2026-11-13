@@ -12,7 +12,10 @@ async function main() {
   const origin = new URL(baseURL).origin;
   assert.equal(baseURL, origin);
   const artifacts = path.resolve(artifactDirectory);
-  const expected = JSON.parse(await fs.readFile(path.join(artifacts, 'expected.json'), 'utf8'));
+  const expectedData = JSON.parse(await fs.readFile(path.join(artifacts, 'expected.json'), 'utf8'));
+  const patronExpected = Array.isArray(expectedData) ? expectedData : expectedData.patron;
+  const staffExpected = Array.isArray(expectedData) ? [] : expectedData.staff;
+  const expected = [...patronExpected, ...staffExpected];
   const axe = await fs.readFile(require.resolve('axe-core/axe.min.js'), 'utf8');
   const browser = await chromium.launch({ headless: true,
     ...(process.env.ASAP_TEST_CHROMIUM_EXECUTABLE_PATH
@@ -40,8 +43,8 @@ async function main() {
     await page.locator('#settings-form').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#settings-scope').inputValue(), scope);
     await page.locator('#settings-nav-templates').click();
-    assert.equal(await page.locator('#settings-template-editor [data-template-toggle][aria-expanded="false"]').count(), 5,
-      'All five built-in cards start collapsed on every accepted scope population.');
+    assert.equal(await page.locator('#settings-template-editor [data-template-toggle][aria-expanded="false"]').count(), expected.length,
+      'All built-in cards start collapsed on every accepted scope population.');
     for (const item of expected) await field(item.key).locator('[data-template-toggle]').click();
   }
   async function save() {
@@ -70,39 +73,112 @@ async function main() {
   }
   try {
     await open('system');
-    for (const item of expected) {
+    for (const item of patronExpected) {
       assert.equal(await field(item.key).locator('input[type=text]').inputValue(), item.subject);
       assert.equal(await field(item.key).locator('textarea').inputValue(), item.body);
       await field(item.key).locator('input[type=text]').fill(item.subject + ' {{barcode}}');
       await field(item.key).locator('textarea').fill(item.body + '\n\n{{firstName}} {{lastName}}');
     }
+    for (const item of staffExpected) {
+      assert.equal(await field(item.key).locator('input[type=text]').inputValue(), item.subject);
+      assert.equal(await field(item.key).locator('textarea').inputValue(), item.body);
+      const preview = await field(item.key).locator('.settings-template-preview-body').textContent();
+      if (item.key === 'staff_title_assignment') assert.match(preview, /request=9007199254740993&stage=suggestion&scope=2/);
+      if (item.key === 'staff_purchase_reminder') assert.match(preview, /request=9007199254740993&stage=outstanding_purchase&scope=2/);
+      if (item.key === 'staff_additional_copy_reminder' || item.key === 'staff_additional_copy_assignment') {
+        assert.match(preview, /request=9007199254740994&stage=additional_copies&scope=2/);
+      }
+    }
+    if (staffExpected.length) {
+      const assignment = field('staff_title_assignment');
+      const assignmentTemplate = staffExpected.find(item => item.key === 'staff_title_assignment');
+      assert.ok(assignmentTemplate);
+      const toggle = assignment.locator('[data-template-toggle]');
+      await toggle.focus();
+      await toggle.press('Enter');
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+      await toggle.press('Enter');
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+      assert.match(await assignment.locator('.settings-template-preview-body').textContent(), /Casey Staff/);
+      assert.match(await assignment.locator('.settings-template-preview-body').textContent(), /Example title/);
+      assert.match(await assignment.locator('.settings-template-preview-body').textContent(), /request=9007199254740993/);
+      assert.match(await assignment.locator('.settings-template-preview-note').textContent(), /No email is sent/);
+      const insertion = assignment.locator('.template-placeholder-trigger').nth(1);
+      await insertion.focus();
+      await insertion.press('Enter');
+      const picker = assignment.locator('.template-placeholder-picker');
+      const tokens = await picker.locator('[data-placeholder-key]')
+        .evaluateAll(nodes => nodes.map(node => node.dataset.placeholderKey));
+      assert.ok(tokens.includes('requestUrl'));
+      assert.ok(tokens.includes('recipientName'));
+      assert.ok(!tokens.includes('name'));
+      assert.ok(!tokens.includes('barcode'));
+      const requestUrlToken = picker.locator('[data-placeholder-key="requestUrl"]');
+      await requestUrlToken.focus();
+      await requestUrlToken.press('Enter');
+      const body = assignment.locator('textarea');
+      assert.match(await body.inputValue(), /{{requestUrl}}/);
+      await body.fill(assignmentTemplate.body);
+      await assignment.locator('input[type=text]').fill(assignmentTemplate.subject + ' — System');
+    }
     await save();
     await open('system');
-    for (const item of expected) {
+    for (const item of patronExpected) {
       assert.equal(await field(item.key).locator('input[type=text]').inputValue(), item.subject + ' {{barcode}}');
       assert.equal(await field(item.key).locator('textarea').inputValue(), item.body + '\n\n{{firstName}} {{lastName}}');
     }
+    for (const item of staffExpected) {
+      assert.equal(await field(item.key).locator('input[type=text]').inputValue(),
+        item.key === 'staff_title_assignment' ? item.subject + ' — System' : item.subject);
+      assert.equal(await field(item.key).locator('textarea').inputValue(), item.body);
+    }
     await scan('system-desktop');
     await open(library);
-    for (const item of expected) {
+    for (const item of patronExpected) {
       assert.equal(await field(item.key).locator('input[type=text]').inputValue(), item.subject + ' {{barcode}}');
       assert.equal(await field(item.key).locator('textarea').inputValue(), item.body + '\n\n{{firstName}} {{lastName}}');
       assert.equal(await field(item.key).locator('textarea').isDisabled(), false);
     }
+    for (const item of staffExpected) {
+      assert.equal(await field(item.key).locator('input[type=text]').inputValue(),
+        item.key === 'staff_title_assignment' ? item.subject + ' — System' : item.subject);
+      assert.equal(await field(item.key).locator('textarea').inputValue(), item.body);
+      assert.equal(await field(item.key).locator('textarea').isDisabled(), false);
+    }
 
     await field('suggestion_submitted').locator('textarea').fill('Library receipt {{title}} for {{name}}');
+    if (staffExpected.length) {
+      await field('staff_title_assignment').locator('input[type=text]').fill('Library staff subject for {{recipientName}}');
+    }
     await save();
     const overridden = (await snapshot(library)).stored.templates.find(row => String(row.organizationId) === library);
     assert.ok(overridden);
     assert.equal(overridden.subject, null);
     assert.equal(overridden.body, 'Library receipt {{title}} for {{name}}');
+    if (staffExpected.length) {
+      const staffOverride = (await snapshot(library)).stored.templates.find(row =>
+        String(row.organizationId) === library && row.templateKey === 'staff_title_assignment');
+      assert.ok(staffOverride);
+      assert.equal(staffOverride.subject, 'Library staff subject for {{recipientName}}');
+      assert.equal(staffOverride.body, null);
+    }
     await open('system');
     await field('suggestion_submitted').locator('input[type=text]').fill(expected[0].subject + ' {{barcode}} updated');
+    if (staffExpected.length) {
+      await field('staff_title_assignment').locator('textarea')
+        .fill(staffExpected.find(item => item.key === 'staff_title_assignment').body + '\nSystem body update after library pin');
+    }
     await save();
     await open(library);
     assert.equal(await field('suggestion_submitted').locator('input[type=text]').inputValue(),
       expected[0].subject + ' {{barcode}} updated');
     assert.equal(await field('suggestion_submitted').locator('textarea').inputValue(), 'Library receipt {{title}} for {{name}}');
+    if (staffExpected.length) {
+      const assignment = field('staff_title_assignment');
+      assert.equal(await assignment.locator('input[type=text]').inputValue(), 'Library staff subject for {{recipientName}}');
+      assert.equal(await assignment.locator('textarea').inputValue(),
+        staffExpected.find(item => item.key === 'staff_title_assignment').body + '\nSystem body update after library pin');
+    }
     const inherited = (await snapshot(library)).stored.templates.find(row => String(row.organizationId) === library);
     assert.deepEqual(inherited, overridden, 'A System edit must preserve the library override identity, version and sparse content.');
     await scan('library-desktop');

@@ -22,15 +22,24 @@ const EVENTS = {
 };
 let nextCardId = 0;
 
-export function supportedPlaceholderKeys(templateKey, usage) {
+export function supportedPlaceholderKeys(templateKey, usage, staffDefinitions = []) {
+  const staffTemplate = staffDefinitions.find(item => item?.templateKey === templateKey);
+  if (usage === 'builtin' && staffTemplate) return (staffTemplate.placeholders || []).map(item => item.key);
   if (usage === 'builtin' && PATRON_CONTEXTS.has(templateKey)) return PLACEHOLDERS.map(item => item.key);
   if (usage === 'additional' && /^rejection:/i.test(templateKey || '')) return ['title'];
   return [];
 }
 
-export function exampleTemplateText(text, templateKey, usage, advertised = PLACEHOLDERS.map(item => item.key)) {
-  const supported = new Set(supportedPlaceholderKeys(templateKey, usage).filter(key => advertised.includes(key)));
-  const examples = new Map(PLACEHOLDERS.map(item => [item.key, item.example]));
+export function exampleTemplateText(text, templateKey, usage, advertised = PLACEHOLDERS.map(item => item.key), staffDefinitions = []) {
+  const definition = staffDefinitions.find(item => item?.templateKey === templateKey);
+  const available = definition
+    ? new Set((definition.placeholders || []).map(item => item.key))
+    : new Set(advertised);
+  const supported = new Set(supportedPlaceholderKeys(templateKey, usage, staffDefinitions).filter(key => available.has(key)));
+  const examples = new Map([
+    ...PLACEHOLDERS.map(item => [item.key, item.example]),
+    ...(definition?.placeholders || []).map(item => [item.key, item.example])
+  ]);
   return String(text ?? '').replace(/{{(\w+)}}/g, (token, key) => supported.has(key) ? examples.get(key) : token);
 }
 
@@ -40,6 +49,7 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
   const view = document.defaultView;
   const cards = new WeakMap();
   let advertised = [];
+  let staffDefinitions = new Map();
   let opened = null;
   let validationNotice = null;
   let focusSequence = 0, restoringEditorFocus = false;
@@ -60,8 +70,16 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
     const key = owner.dataset.templateKey || '';
     const name = additional ? owner.querySelector('.template-display-name')?.value.trim() || 'New template'
       : owner.querySelector('legend')?.textContent.trim() || key;
-    return { key, name, usage: additional ? 'additional' : 'builtin', kind: owner.dataset.templateKind || '',
+    return { key, name, usage: additional ? 'additional' : 'builtin', audience: owner.dataset.templateAudience || '', kind: owner.dataset.templateKind || '',
       id: owner.dataset.templateUiId || key };
+  }
+
+  function definitionFor(card) {
+    return staffDefinitions.get(identity(card.owner).key) || null;
+  }
+
+  function placeholderItems(card) {
+    return definitionFor(card)?.placeholders || PLACEHOLDERS;
   }
 
   function editable(entry) {
@@ -78,7 +96,11 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
 
   function supported(card) {
     const target = identity(card.owner);
-    return supportedPlaceholderKeys(target.key, target.usage).filter(key => advertised.includes(key));
+    const definition = staffDefinitions.get(target.key);
+    const available = definition
+      ? new Set((definition.placeholders || []).map(item => item.key))
+      : new Set(advertised);
+    return supportedPlaceholderKeys(target.key, target.usage, [...staffDefinitions.values()]).filter(key => available.has(key));
   }
 
   function clear() {
@@ -131,7 +153,7 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
 
   function effectiveText(card, role) {
     const control = card.owner.querySelector(`[data-template-field="${role}"]`);
-    if (!control.value.trim()) {
+    if (!control.value.trim() && identity(card.owner).audience !== 'staff') {
       return card.owner.dataset[role === 'subject' ? 'templateInheritedSubject' : 'templateInheritedBody'] ?? control.value;
     }
     return control.value;
@@ -140,7 +162,8 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
   function refreshCard(card) {
     const target = identity(card.owner);
     card.title.textContent = target.name;
-    card.event.textContent = target.usage === 'builtin' ? EVENTS[target.key] || '' : 'Named template';
+    card.event.textContent = target.usage === 'builtin'
+      ? definitionFor(card)?.whenSent || EVENTS[target.key] || '' : 'Named template';
     const subject = effectiveText(card, 'subject');
     const body = effectiveText(card, 'body');
     const excerpt = value => {
@@ -149,10 +172,12 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
     };
     card.subjectExcerpt.textContent = `Subject: ${excerpt(subject)}`;
     card.bodyExcerpt.textContent = `Body: ${excerpt(body)}`;
-    card.previewSubject.textContent = exampleTemplateText(subject, target.key, target.usage, advertised);
-    card.previewBody.textContent = exampleTemplateText(body, target.key, target.usage, advertised);
+    card.previewSubject.textContent = exampleTemplateText(subject, target.key, target.usage, advertised, [...staffDefinitions.values()]);
+    card.previewBody.textContent = exampleTemplateText(body, target.key, target.usage, advertised, [...staffDefinitions.values()]);
     const keys = supported(card);
-    card.note.textContent = !keys.length
+    card.note.textContent = definitionFor(card)
+      ? 'Preview uses synthetic staff and request data. Missing optional values are empty; unsupported placeholders stay visible. No email is sent.'
+      : !keys.length
       ? 'Editing preview only. Placeholder support and a sending path are not verified for this configured template. Unresolved placeholders remain literal. No email sent.'
       : target.usage === 'additional'
         ? 'Example only. Named rejection templates, including timeouts, share support for {{title}} only. Other placeholders remain literal. No email sent.'
@@ -166,7 +191,7 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
   function renderPicker(entry) {
     const keys = supported(entry.card);
     entry.popup.replaceChildren();
-    for (const item of PLACEHOLDERS.filter(item => keys.includes(item.key))) {
+    for (const item of placeholderItems(entry.card).filter(item => keys.includes(item.key))) {
       const button = make('button');
       button.type = 'button';
       button.dataset.placeholderKey = item.key;
@@ -433,20 +458,37 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
       retireValidationNotice();
       validationNotice = { control, context: card.validationContext, clear: clearNotice };
     },
-    populate(keys) { advertised = Array.isArray(keys) ? keys : []; refreshCards(true); },
+    populate(keys, definitions = []) {
+      advertised = Array.isArray(keys) ? [...keys] : [];
+      staffDefinitions = new Map((Array.isArray(definitions) ? definitions : [])
+        .filter(item => item?.templateKey && Array.isArray(item.placeholders))
+        .map(item => [item.templateKey, item]));
+      refreshCards(true);
+    },
     validate(operations, system, editor) {
       for (const operation of operations) {
-        if (operation.reset || !system && !operation.isCustom) continue;
+        const staffTemplate = staffDefinitions.has(operation.templateKey);
+        if (operation.reset || !system && !operation.isCustom && !staffTemplate) continue;
         const owner = editor || [...panel.querySelectorAll('fieldset.settings-template, .settings-template-row')]
           .find(candidate => identity(candidate).key === operation.templateKey &&
             (Boolean(operation.isCustom) === (candidate.dataset.templateKind === 'custom')));
         if (!owner) continue;
         for (const role of ['subject', 'body']) {
           const control = owner.querySelector(`[data-template-field="${role}"]`);
-          if (control.value.trim()) continue;
-          const message = `${identity(owner).name}: ${role === 'body' ? 'Body' : 'Subject'} is required.`;
-          showError(control, message);
-          throw new Error(message);
+          if (!control.value.trim()) {
+            const message = `${identity(owner).name}: ${role === 'body' ? 'Body' : 'Subject'} is required.`;
+            showError(control, message);
+            throw new Error(message);
+          }
+          if (staffTemplate) {
+            const allowed = new Set(supportedPlaceholderKeys(operation.templateKey, 'builtin', [...staffDefinitions.values()]));
+            const unsupported = [...control.value.matchAll(/{{(\w+)}}/g)].find(match => !allowed.has(match[1]));
+            if (unsupported) {
+              const message = `${identity(owner).name}: unsupported placeholder {{${unsupported[1]}}}.`;
+              showError(control, message);
+              throw new Error(message);
+            }
+          }
         }
       }
     }

@@ -1310,6 +1310,11 @@ public sealed partial class AdministrationService
         var overridden = ReadOptionalBoolean(item, "overridden");
         var reset = resetFlag || systemDefaultFlag || overridden == false;
         var isCustom = ReadOptionalBoolean(item, "isCustom", "custom") == true;
+        if (key is not null && StaffEmailTemplateCatalog.Find(key) is not null &&
+            (isCustom || ReadOptionalBoolean(item, "libraryCustom") == true))
+        {
+            throw new AdministrationInputException("Built-in staff templates cannot be saved as library-owned custom templates.");
+        }
         if (organizationId == LibraryScope.SystemOrganizationId)
         {
             if (sourceId.HasValue || isCustom)
@@ -1342,6 +1347,7 @@ public sealed partial class AdministrationService
             }
 
             ApplyTemplateContent(template, item, requireContent: true);
+            ValidateStaffTemplateContent(template.TemplateKey, template.SubjectTemplate, template.BodyTemplate);
             return;
         }
 
@@ -1428,6 +1434,32 @@ public sealed partial class AdministrationService
         }
 
         ApplyTemplateContent(overrideRow, item, requireContent: false);
+        ValidateStaffTemplateContent(
+            source.TemplateKey,
+            overrideRow.SubjectTemplate ?? source.SubjectTemplate,
+            overrideRow.BodyTemplate ?? source.BodyTemplate);
+    }
+
+    private static void ValidateStaffTemplateContent(string templateKey, string? subject, string? body)
+    {
+        if (StaffEmailTemplateCatalog.Find(templateKey) is null)
+        {
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(subject) || string.IsNullOrWhiteSpace(body))
+        {
+            throw new AdministrationInputException(
+                $"{StaffEmailTemplateCatalog.Find(templateKey)!.DisplayName}: subject and body are required. Use Reset to inherit a system field instead of saving it blank.");
+        }
+        foreach (var content in new[] { subject, body })
+        {
+            var unsupported = StaffEmailTemplateCatalog.FindUnsupportedPlaceholder(templateKey, content);
+            if (unsupported is not null)
+            {
+                throw new AdministrationInputException(
+                    $"{StaffEmailTemplateCatalog.Find(templateKey)!.DisplayName}: unsupported placeholder {{{{{unsupported}}}}}.");
+            }
+        }
     }
 
     private static void EnsureUniqueTemplateTarget(
