@@ -275,7 +275,7 @@ public sealed partial class PatronJourneyTests
         await File.WriteAllTextAsync(Path.Combine(directory, "trace-field-metadata.json"), (string)(await command.ExecuteScalarAsync())!);
         command.CommandText = $"CREATE EVENT SESSION [{trace.Name}] ON SERVER " + string.Join(",", events.Select(name =>
             $"ADD EVENT sqlserver.{name}(ACTION(sqlserver.database_id,sqlserver.session_id) WHERE ([sqlserver].[database_id]=({databaseId})))")) +
-            $" ADD TARGET package0.event_file(SET filename=N'{trace.FilePrefix}.xel',max_file_size=(100),max_rollover_files=(2)) WITH (MAX_MEMORY=65536 KB,EVENT_RETENTION_MODE=ALLOW_SINGLE_EVENT_LOSS,MAX_DISPATCH_LATENCY=1 SECONDS,MAX_EVENT_SIZE=16384 KB,TRACK_CAUSALITY=ON); ALTER EVENT SESSION [{trace.Name}] ON SERVER STATE=START;";
+            $" ADD TARGET package0.event_file(SET filename=N'{trace.FilePrefix}.xel',max_file_size=(100),max_rollover_files=(2)) WITH (MAX_MEMORY=65536 KB,EVENT_RETENTION_MODE=ALLOW_SINGLE_EVENT_LOSS,MAX_DISPATCH_LATENCY=1 SECONDS,MAX_EVENT_SIZE=0 KB,TRACK_CAUSALITY=ON); ALTER EVENT SESSION [{trace.Name}] ON SERVER STATE=START;";
         await command.ExecuteNonQueryAsync();
         await SaveInvestigationJsonAsync(directory, "trace.json", new { trace.Name, databaseId, events, mode = "actual execution, heavyweight showplan; separate from baseline timings; no query replay" });
         return trace;
