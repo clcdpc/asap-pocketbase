@@ -182,6 +182,9 @@ public sealed partial class PatronJourneyTests
         var foreign = await SeedBibOwnershipRequestAsync($"activity-foreign-{Guid.NewGuid():N}", null, false, libraryOrganizationId: foreignLibrary);
         try
         {
+            string[] expectedEmailReferences;
+            EmailOutbox[] newRequestOutboxRows;
+            Dictionary<long, (string Role, int OrganizationId)> newRequestRecipients;
             await using (var context = await ActivityContexts().CreateDbContextAsync())
             {
                 var ids = fixtures.Select(item => item.OutboxId).ToArray();
@@ -192,15 +195,42 @@ public sealed partial class PatronJourneyTests
                     row.MessageKind = "assignment";
                 }
                 await context.SaveChangesAsync();
+                newRequestOutboxRows = await context.EmailOutbox.AsNoTracking()
+                    .Where(item => item.TitleRequestId == confirmation.RequestId && item.MessageKind == "new_patron_request")
+                    .ToArrayAsync();
+                Assert.IsGreaterThanOrEqualTo(1, newRequestOutboxRows.Length);
+                Assert.IsTrue(newRequestOutboxRows.All(item => item.RecipientStaffUserId.HasValue));
+                var newRequestStaffIds = newRequestOutboxRows.Select(item => item.RecipientStaffUserId!.Value).Distinct().ToArray();
+                var recipientRows = await context.StaffUsers.AsNoTracking()
+                    .Where(item => newRequestStaffIds.Contains(item.Id))
+                    .Select(item => new { item.Id, item.Role, item.OrganizationId })
+                    .ToArrayAsync();
+                newRequestRecipients = recipientRows.ToDictionary(item => item.Id,
+                    item => (item.Role, item.OrganizationId));
+                Assert.AreEqual(newRequestStaffIds.Length, newRequestRecipients.Count);
+                expectedEmailReferences = new[]
+                    { confirmation.OutboxId, ordinary.OutboxId, admin.OutboxId, global.OutboxId }
+                    .Concat(newRequestOutboxRows.Select(item => item.Id))
+                    .Select(item => item.ToString(CultureInfo.InvariantCulture))
+                    .ToArray();
             }
             var staffActor = await ReadCorrectiveStaffAsync(await ReadActivityStaffAsync(ordinary.StaffUserId));
             var adminActor = await ReadCorrectiveStaffAsync(await ReadActivityStaffAsync(admin.StaffUserId));
+            var systemActor = await ReadConfiguredSuperAdminAsync();
             var ordinaryDetail = await ReadActivityDetailAsync(staffActor, confirmation.RequestId);
             var adminDetail = await ReadActivityDetailAsync(adminActor, confirmation.RequestId);
-            var globalDetail = await ReadActivityDetailAsync(await ReadConfiguredSuperAdminAsync(), confirmation.RequestId);
+            var globalDetail = await ReadActivityDetailAsync(systemActor, confirmation.RequestId);
             foreach (var detail in new[] { ordinaryDetail, adminDetail, globalDetail })
             {
-                Assert.AreEqual(4, detail.Activity.Count(item => item.Email is not null), "Weekly primary and additional recipients remain excluded even with a forged typed association.");
+                var emailReferences = detail.Activity.Where(item => item.Email is not null)
+                    .Select(item => item.Email!.OperationReference).ToArray();
+                Assert.AreEqual(expectedEmailReferences.Length, emailReferences.Length);
+                CollectionAssert.AreEquivalent(expectedEmailReferences, emailReferences,
+                    "Only the confirmation, intended association fixtures, and this request's staff notifications appear.");
+                Assert.IsFalse(emailReferences.Contains(weeklyPrimary.OutboxId.ToString(CultureInfo.InvariantCulture), StringComparer.Ordinal),
+                    "Weekly primary remains excluded even with a forged typed association.");
+                Assert.IsFalse(emailReferences.Contains(weeklyAdditional.OutboxId.ToString(CultureInfo.InvariantCulture), StringComparer.Ordinal),
+                    "Weekly additional remains excluded even with a forged typed association.");
             }
             RequestEmailActivity Mail(TitleRequestDto detail, long id) => detail.Activity.Single(item => item.Email?.OperationReference == id.ToString(CultureInfo.InvariantCulture)).Email!;
             Assert.AreEqual(ordinary.ToAddress, Mail(ordinaryDetail, ordinary.OutboxId).IntendedRecipient);
@@ -210,6 +240,21 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(ordinary.ToAddress, Mail(adminDetail, ordinary.OutboxId).IntendedRecipient);
             Assert.IsNull(Mail(adminDetail, global.OutboxId).IntendedRecipient);
             Assert.AreEqual(global.ToAddress, Mail(globalDetail, global.OutboxId).IntendedRecipient);
+            foreach (var (detail, viewer) in new[]
+                     { (ordinaryDetail, staffActor), (adminDetail, adminActor), (globalDetail, systemActor) })
+            {
+                foreach (var row in newRequestOutboxRows)
+                {
+                    var recipientId = row.RecipientStaffUserId!.Value;
+                    var recipient = newRequestRecipients[recipientId];
+                    var canSeeRecipient = recipientId == viewer.Id || viewer.Role == StaffRole.SuperAdmin ||
+                        viewer.Role == StaffRole.Admin && recipient.Role != StaffRole.SuperAdmin &&
+                        recipient.OrganizationId == viewer.OrganizationId;
+                    Assert.AreEqual(canSeeRecipient ? row.ToAddress : null,
+                        Mail(detail, row.Id).IntendedRecipient,
+                        $"Recipient address visibility follows the existing policy for viewer {viewer.Id} and recipient {recipientId}.");
+                }
+            }
             Assert.AreEqual("staff_scope_forbidden", (await factory!.Services.GetRequiredService<EmailOperationsService>()
                 .ListAsync(staffActor, new EmailOperationsQuery(LibraryScope.ForLibrary(2), Reference: confirmation.OutboxId.ToString(CultureInfo.InvariantCulture)), CancellationToken.None)).Code);
             // Revocation after capturing an identity removes recipient/outcome/reference access.

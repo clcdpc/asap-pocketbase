@@ -137,12 +137,15 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     await catalog.click(); assert.equal(await page.locator('#polaris-query').inputValue(), title); await page.keyboard.press('Escape');
     assert.equal(await dialog.getByLabel('Email patron confirmation (optional)', { exact: true }).isChecked(), false);
     const accepted = page.waitForResponse(response => response.url().endsWith('/staff/suggestions') && response.request().method() === 'POST');
-    const detailLoaded = page.waitForResponse(response => /\/staff\/title-requests\/\d+$/.test(new URL(response.url()).pathname) && response.request().method() === 'GET');
+    const detailLoaded = page.waitForResponse(response => /\/staff\/title-requests\/\d+$/.test(new URL(response.url()).pathname) && response.request().method() === 'GET')
+      .then(response => ({ response }), error => ({ error }));
     await dialog.getByRole('button', { name: 'Create suggestion', exact: true }).click();
     const response = await accepted; assert.equal(response.status(), 201, await response.text());
     const created = await response.json(); assert.equal(typeof created.id, 'string');
     assert.equal(created.notificationStatus, 'not_requested');
-    const acceptedDetail = await (await detailLoaded).json();
+    const detailResult = await detailLoaded;
+    assert.ok(detailResult.response, String(detailResult.error));
+    const acceptedDetail = await detailResult.response.json();
     assert.equal(acceptedDetail.id, created.id);
     await page.locator('#request-dialog[open]').waitFor();
     assert.equal(await detail.getByRole('tab', { name: 'Details', exact: true }).getAttribute('aria-selected'), 'true');

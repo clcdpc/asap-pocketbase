@@ -190,7 +190,9 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual("staff", created.ActorType);
                 Assert.AreEqual(actor.Id, created.StaffUserId);
             }
-            var mail = await verify.EmailOutbox.Where(item => item.OrganizationId == library).OrderBy(item => item.Id).ToArrayAsync();
+            var mail = await verify.EmailOutbox.Where(item => item.OrganizationId == library &&
+                item.MessageKind == "confirmation" && item.TitleRequestId.HasValue &&
+                requestIds.Contains(item.TitleRequestId.Value)).OrderBy(item => item.Id).ToArrayAsync();
             Assert.AreEqual(2, mail.Length, "Opting out must create no submission email.");
             Assert.AreEqual("Original Original Submission 0", mail[0].Subject);
             Assert.AreEqual("Original Submission 0|Original Author|completion-card-1", mail[0].BodyText);

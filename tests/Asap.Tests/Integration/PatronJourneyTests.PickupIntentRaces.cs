@@ -463,7 +463,8 @@ public sealed partial class PatronJourneyTests
     }
 
     private sealed class PolicyMutatingReadinessEmailSender(
-        int organizationId, bool replaceAllowedCodes = false, Func<bool>? shouldMutate = null) : IEmailSender
+        int organizationId, bool replaceAllowedCodes = false, Func<bool>? shouldMutate = null,
+        bool configuredWhenNotMutating = false) : IEmailSender
     {
         public int ReadinessCalls { get; private set; }
 
@@ -474,7 +475,9 @@ public sealed partial class PatronJourneyTests
             cancellationToken.ThrowIfCancellationRequested();
             if (shouldMutate?.Invoke() == false)
             {
-                return EmailTransportReadiness.NotConfigured;
+                return configuredWhenNotMutating
+                    ? EmailTransportReadiness.Configured
+                    : EmailTransportReadiness.NotConfigured;
             }
             Assert.AreEqual(organizationId, requestedOrganizationId);
             ReadinessCalls++;

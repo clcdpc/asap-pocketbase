@@ -191,10 +191,16 @@ public sealed partial class PatronJourneyTests
                 """));
             Assert.AreEqual(0, provider.CreateCommands.Count);
             Assert.AreEqual(0, provider.ReplyCommands.Count);
-            var outboxes = await verify.EmailOutbox.AsNoTracking().Where(item => item.OrganizationId == library).ToArrayAsync();
+            var outboxes = await verify.EmailOutbox.AsNoTracking().Where(item => item.OrganizationId == library &&
+                item.MessageKind == "confirmation" && item.TitleRequestId.HasValue &&
+                requestIds.Contains(item.TitleRequestId.Value)).ToArrayAsync();
             Assert.HasCount(5, outboxes);
             Assert.IsTrue(outboxes.All(item => item.Status == "pending"));
-            Assert.AreEqual(5, dispatcher!.EnqueuedIds.Count);
+            foreach (var outbox in outboxes)
+            {
+                Assert.AreEqual(1, dispatcher!.EnqueuedIds.Count(id => id == outbox.Id),
+                    "Each requested patron confirmation is dispatched once, independently of staff notices.");
+            }
             var sender = (RecordingEmailSender)factory.Services.GetRequiredService<IEmailSender>();
             var jobs = factory.Services.GetRequiredService<EmailOutboxJobs>();
             foreach (var outbox in outboxes)
@@ -210,7 +216,9 @@ public sealed partial class PatronJourneyTests
                 StringAssert.Contains(delivered.BodyText!, request.Title);
             }
             Assert.AreEqual(5, await verify.EmailOutbox.AsNoTracking().CountAsync(item =>
-                item.OrganizationId == library && item.Status == "sent" && item.ProviderMessageId == "test-message"));
+                item.OrganizationId == library && item.MessageKind == "confirmation" &&
+                item.TitleRequestId.HasValue && requestIds.Contains(item.TitleRequestId.Value) &&
+                item.Status == "sent" && item.ProviderMessageId == "test-message"));
         }
         finally
         {

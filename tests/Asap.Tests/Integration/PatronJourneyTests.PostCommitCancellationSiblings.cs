@@ -494,6 +494,8 @@ public sealed partial class PatronJourneyTests
         string? originalStaffUrl = null;
         var originalStaffUrlCaptured = false;
         var originalWeeklyRecipientSettings = new Dictionary<long, (bool Enabled, string? Email)>();
+        var postponedPendingEmailDueTimes = new Dictionary<long, DateTime?>();
+        DateTime? postponedPendingEmailUntil = null;
         var barcode = $"weekly-cancel-{Guid.NewGuid():N}"[..35];
         var title = $"Weekly cancellation summary {Guid.NewGuid():N}";
         var businessKeyPrefix = $"weekly-summary:{staff.Id}:";
@@ -576,6 +578,30 @@ public sealed partial class PatronJourneyTests
             {
                 AssertOutboxStillPending(await ReadCommittedOutboxByIdAsync(copy.Id));
             }
+            var sweepNow = timeProvider!.GetUtcNow().UtcDateTime;
+            var postponeUntil = sweepNow.AddYears(50);
+            postponedPendingEmailUntil = postponeUntil;
+            var committedCopyIds = committedCopies.Select(item => item.Id).ToArray();
+            // Keep the global 500-row sweep focused on these two committed recipients.
+            await using (var isolateSweep = await contexts.CreateDbContextAsync())
+            {
+                var otherDueRows = await isolateSweep.EmailOutbox.AsNoTracking()
+                    .Where(item => item.Status == "pending" &&
+                                   (item.NextAttemptUtc == null || item.NextAttemptUtc <= sweepNow) &&
+                                   !committedCopyIds.Contains(item.Id))
+                    .Select(item => new { item.Id, item.NextAttemptUtc })
+                    .ToArrayAsync();
+                foreach (var row in otherDueRows)
+                {
+                    postponedPendingEmailDueTimes.Add(row.Id, row.NextAttemptUtc);
+                }
+                if (otherDueRows.Length > 0)
+                {
+                    var otherDueIds = otherDueRows.Select(item => item.Id).ToArray();
+                    await isolateSweep.EmailOutbox.Where(item => otherDueIds.Contains(item.Id))
+                        .ExecuteUpdateAsync(update => update.SetProperty(item => item.NextAttemptUtc, postponeUntil));
+                }
+            }
             var recoveredSender = new RecordingEmailSender();
             var recovery = CreateEmailOutboxJobs(recoveredSender, EmailOutboxRuntimeOptions.Default);
             await recovery.SweepAsync(CancellationToken.None);
@@ -638,6 +664,19 @@ public sealed partial class PatronJourneyTests
                     var recipient = await restore.StaffUsers.SingleAsync(item => item.Id == recipientId);
                     recipient.WeeklyActionSummaryEnabled = original.Enabled;
                     recipient.WeeklyActionSummaryEmail = original.Email;
+                }
+                if (postponedPendingEmailUntil is { } postponeUntil && postponedPendingEmailDueTimes.Count > 0)
+                {
+                    var postponedRows = await restore.EmailOutbox
+                        .Where(item => item.Status == "pending" && item.NextAttemptUtc == postponeUntil)
+                        .ToListAsync();
+                    foreach (var row in postponedRows)
+                    {
+                        if (postponedPendingEmailDueTimes.TryGetValue(row.Id, out var originalNextAttemptUtc))
+                        {
+                            row.NextAttemptUtc = originalNextAttemptUtc;
+                        }
+                    }
                 }
                 await restore.SaveChangesAsync();
             }
