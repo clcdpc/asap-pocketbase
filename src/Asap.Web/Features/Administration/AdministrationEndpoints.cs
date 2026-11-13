@@ -27,6 +27,9 @@ public static class AdministrationEndpoints
         endpoints.MapPost("/api/asap/staff/settings/reset", ResetSettingsAsync)
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapPost("/api/asap/staff/settings/catalog-preview", PreviewCatalogAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
         endpoints.MapPost("/api/asap/staff/settings/logo", SaveLogoAsync)
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
@@ -148,6 +151,40 @@ public static class AdministrationEndpoints
                 organizationId,
                 input.Version,
                 cancellationToken));
+        }
+        catch (AdministrationInputException exception)
+        {
+            return Invalid(exception);
+        }
+    }
+
+    private static async Task<IResult> PreviewCatalogAsync(
+        HttpContext context, System.Text.Json.JsonElement payload, AdministrationService service, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+            if (payload.ValueKind != System.Text.Json.JsonValueKind.Object)
+            {
+                throw new AdministrationInputException("Icon preview requires a JSON object.");
+            }
+            var id = 1;
+            if (payload.TryGetProperty("materialTypeId", out var rawId) &&
+                (rawId.ValueKind != System.Text.Json.JsonValueKind.Number || !rawId.TryGetInt32(out id)))
+            {
+                throw new AdministrationInputException("Example material-type ID must be a positive integer.");
+            }
+            string? code = null;
+            if (payload.TryGetProperty("materialTypeSearchCode", out var rawCode))
+            {
+                if (rawCode.ValueKind is not (System.Text.Json.JsonValueKind.String or System.Text.Json.JsonValueKind.Null))
+                {
+                    throw new AdministrationInputException("Example search code must be text or unset.");
+                }
+                code = rawCode.ValueKind == System.Text.Json.JsonValueKind.String ? rawCode.GetString() : null;
+            }
+            var result = await service.PreviewCatalogAsync(actor, AdministrationSettingsBinding.Bind(actor, payload), id, code, cancellationToken);
+            return result.Code == "ok" ? Results.Json(result.Data) : ToResult(result);
         }
         catch (AdministrationInputException exception)
         {

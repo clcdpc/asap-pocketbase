@@ -95,6 +95,10 @@ public abstract class PolarisProtocolTestSupport
         {
             cancellationToken.ThrowIfCancellationRequested();
             var isReference = request.RequestUri!.AbsolutePath.EndsWith("/marctypeofmaterials", StringComparison.Ordinal);
+            if (request.RequestUri.AbsolutePath.Contains("/bib/", StringComparison.Ordinal))
+            {
+                return Task.FromResult(BoundaryResponse("""{"PAPIErrorCode":0,"BibGetRows":[{"ElementID":1,"Label":"Title","Value":"Exact title"},{"ElementID":17,"Label":"Format","Value":"53"}]}"""));
+            }
             if (isReference)
             {
                 ReferenceCalls++;

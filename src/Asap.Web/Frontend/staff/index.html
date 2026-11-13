@@ -357,7 +357,7 @@
         <div class="settings-layout">
           <aside class="settings-sidebar" aria-label="Settings sections">
             <nav id="settings-nav" class="settings-nav" role="tablist" aria-label="Settings categories" aria-orientation="vertical">
-              <button id="settings-nav-start" type="button" role="tab" aria-selected="true" aria-controls="settings-start" data-settings-panel="start" data-settings-system-only="true">Getting started</button>
+              <button id="settings-nav-start" type="button" role="tab" aria-selected="true" aria-controls="settings-start" data-settings-panel="start">Getting started</button>
               <button id="settings-nav-polaris" type="button" role="tab" aria-selected="false" aria-controls="settings-polaris" data-settings-panel="polaris" data-settings-system-only="true">Polaris</button>
               <button id="settings-nav-smtp" type="button" role="tab" aria-selected="false" aria-controls="settings-smtp" data-settings-panel="smtp">Email / Postmark</button>
               <button id="settings-nav-staff" type="button" role="tab" aria-selected="false" aria-controls="settings-staff" data-settings-panel="staff">Staff access</button>
@@ -393,9 +393,6 @@
                     <label for="leap-patron-url-pattern">LEAP patron record URL pattern</label><input id="leap-patron-url-pattern" type="url" aria-describedby="leap-patron-help">
                     <small id="leap-patron-help" class="field-help">Optional HTTP(S) URL. Use {{patron-id}} for the native Polaris patron ID; {{patronId}} is also supported. Example: https://leap.example.org/LeapWebApp/staff/default#patrons/{{patron-id}}/checkout</small>
                   </div>
-                  <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="formatIconUrlPattern" data-system-only="true">
-                    <span>Format icon URL pattern</span><input id="format-icon-url-pattern" type="text">
-                  </label>
                   <label class="settings-field wide" data-setting-section="systemSettings" data-setting-key="patronEmbedAllowedOrigins" data-system-only="true">
                     <span>Allowed patron embed origins</span><textarea id="patron-embed-allowed-origins" rows="4"></textarea>
                   </label>
@@ -408,6 +405,31 @@
                     <small id="ui-misconfigured-help" class="field-help">Use {{library}} for the selected library name.</small>
                   </div>
                 </div>
+              </fieldset>
+              <fieldset id="settings-catalog-links" class="settings-fieldset">
+                <legend>Polaris catalog and material icons</legend>
+                <p class="field-help">System defaults with library overrides. Blank values disable that setting for this scope; Use system value restores inheritance. These settings use the request's owning library or the authorized servicing library during research.</p>
+                <div class="settings-grid">
+                  <div class="settings-field wide" data-setting-section="catalog" data-setting-key="pacBaseUrl">
+                    <label for="pac-base-url">PAC base URL</label><input id="pac-base-url" type="url" aria-describedby="pac-base-help">
+                    <small id="pac-base-help" class="field-help">HTTP(S) catalog application URL, without query or fragment, for example https://catalog.example.org/polaris. Used by {pacBaseUrl}; absolute and local icon patterns do not require it.</small>
+                  </div>
+                  <div class="settings-field wide" data-setting-section="catalog" data-setting-key="formatIconUrlPattern">
+                    <label for="format-icon-url-pattern">Material-type icon URL pattern</label><input id="format-icon-url-pattern" type="text" aria-describedby="format-icon-help">
+                    <small id="format-icon-help" class="field-help">HTTP(S) or a single-slash local path. Tokens: {pacBaseUrl} at the start, {pacOrgId}, {id}, {id2}, {MARCTypeOfMaterialID}, {MARCTypeOfMaterialID2}, {SearchCode}. IDs come from Polaris material types; id2 and MARCTypeOfMaterialID2 use two digits. Example: {pacBaseUrl}/themes/shared/formats/formatid{id2}.gif. Missing required substitutions show a generic icon.</small>
+                  </div>
+                  <div class="settings-field wide">
+                    <label for="pac-organization-id">Library PAC organization ID</label><input id="pac-organization-id" type="number" min="1" max="2147483647" step="1" aria-describedby="pac-organization-help">
+                    <small id="pac-organization-help" class="field-help">Library-owned mapping for {pacOrgId}: the first component of the public catalog's ctx parameter. Confirm it with your catalog administrator; it is not inferred from ASAP, requesting or pickup IDs. Unset means unavailable. Shared formatid icons do not need it. Reset inherited overrides preserves this mapping.</small>
+                  </div>
+                </div>
+                <div class="settings-grid" data-settings-ignore="true">
+                  <div class="settings-field"><label for="catalog-preview-type-id">Example Polaris material-type ID</label><input id="catalog-preview-type-id" type="number" min="1" max="2147483647" value="1"></div>
+                  <div class="settings-field"><label for="catalog-preview-search-code">Example Polaris search code</label><input id="catalog-preview-search-code" type="text" maxlength="256" value="Book"></div>
+                </div>
+                <button id="catalog-preview-button" class="secondary-button" type="button">Preview effective icon</button>
+                <div id="catalog-preview" class="catalog-preview" role="status" aria-live="polite"></div>
+                <p class="field-help">Preview uses these draft values and synthetic identifiers; it does not query Polaris or save changes. Your browser loads the resolved image URL.</p>
               </fieldset>
               <fieldset class="settings-fieldset" data-system-only="true" data-settings-ignore="true">
                 <legend>Library participation</legend>

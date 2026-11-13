@@ -29,10 +29,7 @@ public sealed partial class PolarisPatronProvider
             ? await LoadMaterialDefinitionsAsync(client, organizationId, cancellationToken)
             : new Dictionary<int, MaterialDefinition>();
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        // This existing setting is system-only, including when the search belongs to a library.
-        var iconPattern = await context.SystemSettings.AsNoTracking()
-            .Where(item => item.OrganizationId == LibraryScope.SystemOrganizationId)
-            .Select(item => item.MaterialTypeIconUrlPattern).SingleOrDefaultAsync(cancellationToken);
+        var presentation = await CatalogPresentation.LoadAsync(context, organizationId, cancellationToken);
         return rows.Select(row =>
         {
             definitions.TryGetValue(row.MaterialTypeId ?? 0, out var definition);
@@ -42,7 +39,7 @@ public sealed partial class PolarisPatronProvider
             {
                 Format = label,
                 MaterialTypeSearchCode = definition?.SearchCode,
-                FormatIconUrl = definition is null ? null : MaterialIconUrl(iconPattern, definition)
+                FormatIconUrl = definition is null ? null : CatalogPresentation.IconUrl(presentation, definition.Id, definition.SearchCode)
             };
         }).ToArray();
     }
@@ -118,28 +115,4 @@ public sealed partial class PolarisPatronProvider
         }
     }
 
-    private static string? MaterialIconUrl(string? pattern, MaterialDefinition definition)
-    {
-        var id = definition.Id.ToString(CultureInfo.InvariantCulture);
-        var padded = definition.Id.ToString("D2", CultureInfo.InvariantCulture);
-        var url = pattern?.Trim()
-            .Replace("{MARCTypeOfMaterialID}", id, StringComparison.Ordinal)
-            .Replace("{MARCTypeOfMaterialID2}", padded, StringComparison.Ordinal)
-            .Replace("{id}", id, StringComparison.Ordinal)
-            .Replace("{id2}", padded, StringComparison.Ordinal)
-            .Replace("{SearchCode}", Uri.EscapeDataString(definition.SearchCode ?? string.Empty), StringComparison.Ordinal);
-        if (string.IsNullOrEmpty(url) || url.Any(char.IsControl) || url.Contains('\\') ||
-            url.Contains('{') || url.Contains('}'))
-        {
-            return null;
-        }
-        if (url.StartsWith('/') && !url.StartsWith("//", StringComparison.Ordinal) &&
-            Uri.IsWellFormedUriString(url, UriKind.Relative))
-        {
-            return url;
-        }
-        return Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
-            uri.Scheme is "http" or "https" && uri.UserInfo.Length == 0 && uri.Host.Length > 0
-                ? uri.AbsoluteUri : null;
-    }
 }

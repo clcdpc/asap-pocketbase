@@ -300,25 +300,35 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
       : 'No Polaris matches found.';
     const cards = rows.map(row => {
       const item = node('li', { className: 'polaris-result' });
-      const heading = node('div', { className: 'polaris-result-heading' });
+      const rail = node('div', { className: 'polaris-format-rail' });
+      const artwork = node('div', { className: 'polaris-format-artwork', 'aria-hidden': 'true' });
+      const fallback = node('span', { className: 'polaris-format-fallback fa fa-file-o' });
+      artwork.append(fallback);
       const iconUrl = safeMaterialIconUrl(row.formatIconUrl);
       if (iconUrl) {
-        const image = node('img', { src: iconUrl, alt: '', 'aria-hidden': 'true', width: '24', height: '24' });
-        image.addEventListener('error', () => image.remove(), { once: true });
-        heading.append(image);
+        const image = node('img', { src: iconUrl, alt: '', width: '64', height: '64' });
+        image.hidden = true;
+        image.addEventListener('load', () => { image.hidden = false; fallback.hidden = true; }, { once: true });
+        image.addEventListener('error', () => { image.remove(); fallback.hidden = false; }, { once: true });
+        artwork.append(image);
       }
-      heading.append(node('strong', { text: row.title || '(No title returned)' })); item.append(heading);
       const material = String(row.format || '').trim();
+      rail.append(artwork, node('span', { className: 'polaris-format-label',
+        text: material && !/^\d+$/.test(material) ? material : 'Material type unavailable' }));
+      item.append(rail);
+      const details = node('div', { className: 'polaris-result-details' });
+      details.append(node('strong', { className: 'polaris-result-heading', text: row.title || '(No title returned)' }));
       const metadata = [row.author && `Author: ${row.author}`, row.publication && `Publication: ${row.publication}`,
-        row.publisher && `Publisher: ${row.publisher}`, `Format: ${material && !/^\d+$/.test(material) ? material : 'Material type unavailable'}`,
+        row.publisher && `Publisher: ${row.publisher}`,
         row.identifier && `Identifier: ${row.identifier}`,
         `BIB: ${row.bibId}`].filter(Boolean);
-      item.append(node('p', { className: 'polaris-metadata', text: metadata.join(' · ') }));
+      details.append(node('p', { className: 'polaris-metadata', text: metadata.join(' · ') }));
       const ownership = node('div', { className: 'polaris-ownership' }, [node('span', { text: 'Checking ownership…' })]);
-      item.append(ownership);
+      details.append(ownership); item.append(details);
       const actions = node('div', { className: 'polaris-result-actions' });
       if (current.readOnly !== true) {
-        const select = node('button', { type: 'button', className: 'primary-button', text: `Use BIB ${row.bibId} in form` });
+        const select = node('button', { type: 'button', className: 'primary-button polaris-use-bib' },
+          [node('span', { text: `Use BIB ${row.bibId}` }), node('span', { text: ' in form' })]);
         select.disabled = !positivePolarisId(row.bibId) || !(typeof current.canApply === 'function' ? current.canApply(row) : current.canApply);
         select.addEventListener('click', () => selectResult(current, row, exactDetail));
         actions.append(select);

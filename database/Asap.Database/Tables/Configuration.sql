@@ -5,12 +5,26 @@ CREATE TABLE [asap].[SystemSettings]
     [LeapBibUrlPattern] nvarchar(2048) NULL,
     [LeapPatronUrlPattern] nvarchar(2048) NULL,
     [MaterialTypeIconUrlPattern] nvarchar(2048) NULL,
+    [PacBaseUrl] nvarchar(2048) NULL,
     [SystemNotEnabledMessage] nvarchar(max) NULL,
     [MisconfiguredMessage] nvarchar(max) NULL,
     [UpdatedUtc] datetime2(7) NOT NULL,
     [RowVersion] rowversion NOT NULL,
     CONSTRAINT [FK_SystemSettings_Organization] FOREIGN KEY ([OrganizationId]) REFERENCES [asap].[Organization]([Id]),
     CONSTRAINT [CK_SystemSettings_SystemOnly] CHECK ([OrganizationId] = 1)
+);
+GO
+
+CREATE TABLE [asap].[LibraryCatalogSettings]
+(
+    [OrganizationId] int NOT NULL CONSTRAINT [PK_LibraryCatalogSettings] PRIMARY KEY,
+    [PacBaseUrl] nvarchar(2048) NULL,
+    [MaterialTypeIconUrlPattern] nvarchar(2048) NULL,
+    [PacOrganizationId] int NULL,
+    [RowVersion] rowversion NOT NULL,
+    CONSTRAINT [FK_LibraryCatalogSettings_Organization] FOREIGN KEY ([OrganizationId]) REFERENCES [asap].[Organization]([Id]),
+    CONSTRAINT [CK_LibraryCatalogSettings_LibraryOnly] CHECK ([OrganizationId] > 1),
+    CONSTRAINT [CK_LibraryCatalogSettings_PacOrganizationId] CHECK ([PacOrganizationId] IS NULL OR [PacOrganizationId] > 0)
 );
 GO
 

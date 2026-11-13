@@ -2883,8 +2883,9 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(report.RootElement.GetProperty("libraryCommonAuthorsRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("suggestionLimitPlaceholderRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("wildcardOriginNormalized").GetBoolean());
+                Assert.IsTrue(report.RootElement.GetProperty("catalogSettingsRoundTrip").GetBoolean());
                 var states = report.RootElement.GetProperty("states").EnumerateArray().ToArray();
-                Assert.HasCount(17, states);
+                Assert.HasCount(19, states);
                 CollectionAssert.AreEquivalent(new[]
                 {
                     "system-desktop", "system-mobile", "library-desktop", "library-mobile",
@@ -2894,7 +2895,8 @@ public sealed partial class PatronJourneyTests
                     "common-creators-library-mobile-off", "common-creators-library-mobile-on",
                     "suggestion-placeholder-mobile", "organizations-system-desktop",
                     "organizations-system-mobile", "organizations-library-mobile",
-                    "participation-summary-system-desktop", "participation-summary-library-mobile"
+                    "participation-summary-system-desktop", "participation-summary-library-mobile",
+                    "catalog-preview-desktop", "catalog-preview-mobile"
                 },
                     states.Select(item => item.GetProperty("viewport").GetString()!).ToArray());
             }

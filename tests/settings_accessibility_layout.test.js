@@ -121,7 +121,7 @@ const { JSDOM } = require('jsdom');
     }
     assert.deepStrictEqual(controls(document.getElementById('settings-system-links')), [
       'system-staff-url', 'leap-bib-url-pattern', 'leap-patron-url-pattern',
-      'format-icon-url-pattern', 'patron-embed-allowed-origins', 'ui-system-not-enabled-msg', 'ui-misconfigured-msg'
+      'patron-embed-allowed-origins', 'ui-system-not-enabled-msg', 'ui-misconfigured-msg'
     ]);
     const staffUrl = document.getElementById('system-staff-url');
     assert.strictEqual(staffUrl.closest('label').querySelector('span').textContent, 'Staff URL');

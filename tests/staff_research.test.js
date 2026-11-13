@@ -203,7 +203,8 @@ const { JSDOM } = require('jsdom');
       author: 'Search Row Author',
       publication: '2026',
       format: 'Book',
-      identifier: '9780000000001'
+      identifier: '9780000000001',
+      formatIconUrl: '/fixtures/material.gif'
     };
     const lookup = createPolarisLookup({
       authorizedJson: async (url, options) => {
@@ -236,6 +237,21 @@ const { JSDOM } = require('jsdom');
     assert.equal(typeof outgoingBodies[0].requestId, 'string');
     assert.equal(outgoingBodies[0].requestId, '9007199254740993');
     assert.equal(JSON.parse(JSON.stringify(outgoingBodies[0])).requestId, '9007199254740993');
+    const resultCard = document.querySelector('.polaris-result');
+    assert.equal(resultCard.querySelector('.polaris-format-label').textContent, 'Book');
+    assert.doesNotMatch(resultCard.querySelector('.polaris-metadata').textContent, /Format:/);
+    assert.match(resultCard.querySelector('.polaris-metadata').textContent, /Identifier: 9780000000001 · BIB: 9001/);
+    const artwork = resultCard.querySelector('.polaris-format-artwork');
+    assert.equal(artwork.getAttribute('aria-hidden'), 'true');
+    assert.equal(artwork.querySelector('img').hidden, true, 'Loading icons retain generic geometry.');
+    artwork.querySelector('img').dispatchEvent(new dom.window.Event('load'));
+    assert.equal(artwork.querySelector('img').hidden, false);
+    assert.equal(artwork.querySelector('.polaris-format-fallback').hidden, true);
+    artwork.querySelector('img').dispatchEvent(new dom.window.Event('error'));
+    assert.equal(artwork.querySelector('img'), null, 'A failed image cannot remain broken in the result.');
+    assert.equal(artwork.querySelector('.polaris-format-fallback').hidden, false);
+    assert.equal(resultCard.querySelector('.polaris-use-bib').textContent, 'Use BIB 9001 in form');
+    assert.equal(resultCard.querySelector('.polaris-use-bib').disabled, true);
     lookup.close();
 
     const editor = {

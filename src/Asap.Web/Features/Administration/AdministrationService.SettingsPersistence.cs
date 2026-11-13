@@ -27,7 +27,6 @@ public sealed partial class AdministrationService
         Apply(command.System.StaffUrl, value => system.StaffApplicationUrl = NormalizeSystemText(value));
         Apply(command.System.LeapBibUrlPattern, value => system.LeapBibUrlPattern = NormalizeSystemText(value));
         Apply(command.System.LeapPatronUrlPattern, value => system.LeapPatronUrlPattern = NormalizeSystemText(value));
-        Apply(command.System.FormatIconUrlPattern, value => system.MaterialTypeIconUrlPattern = NormalizeSystemText(value));
         Apply(command.System.SystemNotEnabledMessage, value => system.SystemNotEnabledMessage = NormalizeSystemText(value));
         Apply(command.System.MisconfiguredMessage, value => system.MisconfiguredMessage = NormalizeSystemText(value));
         var systemSection = GetObject(command.CollectionEdits, "systemSettings", "system");
@@ -368,6 +367,14 @@ public sealed partial class AdministrationService
         if (email is not null)
         {
             context.EmailSettings.Remove(email);
+        }
+
+        var catalog = await context.LibraryCatalogSettings.SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
+        if (catalog is not null)
+        {
+            catalog.PacBaseUrl = null;
+            catalog.MaterialTypeIconUrlPattern = null;
+            // PAC organization is library-owned mapping, not an inherited override.
         }
 
         var publication = await context.PublicationOptionSets.SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);

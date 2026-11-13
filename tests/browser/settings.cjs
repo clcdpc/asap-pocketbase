@@ -204,6 +204,58 @@ async function runSystemFormatRuleEditor(page, report, waitForSettingsReady) {
   report.systemFormatRuleRoundTrip = true;
 }
 
+async function runCatalogSettings(page, axeSource, args, report, saveSettings, ready) {
+  const read = async () => {
+    const response = await page.context().request.get(`${args.baseOrigin}/api/asap/staff/settings?orgId=2`);
+    assert.equal(response.status(), 200); return response.json();
+  };
+  const original = (await read()).stored.libraryOverride?.catalog || {};
+  const reload = async () => { await page.reload({ waitUntil: 'networkidle' }); await ready('2'); await page.locator('#settings-nav-start').click(); };
+  try {
+    await page.locator('#settings-nav-start').click();
+    await page.locator('#pac-base-url').fill(`${args.baseOrigin}/polaris`);
+    await page.locator('#format-icon-url-pattern').fill('/jpl.png?type={id2}');
+    await page.locator('#pac-organization-id').fill('27');
+    await page.locator('#catalog-preview-button').focus(); await page.keyboard.press('Enter');
+    await page.locator('#catalog-preview').getByText('Resolved example icon URL: /jpl.png?type=01', { exact: true }).waitFor();
+    await page.locator('#catalog-preview img').evaluate(image => image.decode());
+    assert.equal(await page.locator('#settings-save').isEnabled(), true, 'Preview preserves the unsaved draft.');
+    const assertCatalogFields = async () => {
+      const overlaps = await page.locator('#settings-catalog-links').evaluate(fieldset =>
+        [...fieldset.querySelectorAll('.settings-field')].flatMap(field => {
+          const children = [...field.children].filter(node => node.getClientRects().length);
+          return children.slice(1).filter((node, index) => node.getBoundingClientRect().top < children[index].getBoundingClientRect().bottom - 1)
+            .map(node => field.dataset.settingKey || node.id);
+        }));
+      assert.deepEqual(overlaps, [], 'Catalog labels, controls, help and inheritance each retain a readable track.');
+    };
+    await assertCatalogFields();
+    await scan(page, axeSource, args.artifactRoot, report, 'catalog-preview-desktop');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await assertCatalogFields();
+    await scan(page, axeSource, args.artifactRoot, report, 'catalog-preview-mobile');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await saveSettings(); await reload();
+    assert.equal(await page.locator('#format-icon-url-pattern').inputValue(), '/jpl.png?type={id2}');
+    assert.equal((await read()).stored.libraryOverride.catalog.pacOrganizationId, 27);
+    await page.locator('#format-icon-url-pattern').fill(''); await saveSettings(); await reload();
+    assert.equal((await read()).catalog.formatIconUrlPattern, '', 'Saved explicit blank disables the inherited pattern.');
+    await page.locator('[data-setting-section="catalog"][data-setting-key="formatIconUrlPattern"] .settings-use-system').click();
+    await saveSettings(); await reload();
+    assert.equal((await read()).stored.libraryOverride.catalog.formatIconUrlPattern, null, 'Per-field reset restores inheritance after reload.');
+    assert.equal(await page.locator('#leap-bib-url-pattern').isDisabled(), true, 'LEAP retains its system-only scope.');
+    report.catalogSettingsRoundTrip = true;
+  } finally {
+    const current = await read();
+    const session = await (await page.context().request.get(`${args.baseOrigin}/api/asap/staff/session`)).json();
+    const restored = await page.context().request.post(`${args.baseOrigin}/api/asap/staff/settings`, {
+      headers: { 'X-ASAP-Antiforgery': session.antiforgeryToken }, data: { orgId: '2', version: current.version,
+        catalog: { pacBaseUrl: original.pacBaseUrl ?? null, formatIconUrlPattern: original.formatIconUrlPattern ?? null, pacOrganizationId: original.pacOrganizationId ?? null } } });
+    assert.equal(restored.status(), 200, await restored.text());
+    await reload();
+  }
+}
+
 async function runLibraryRuleCompletenessEditor(page, axeSource, args, report) {
   await page.locator('#settings-nav-patron').click();
   const targetRule = page.locator(`#format-rules-editor [data-rule-code="${args.formatCode}"]`);
@@ -3170,6 +3222,7 @@ async function main() {
     report.libraryTimeoutDependenciesRoundTrip = true;
     await runCommonAuthorsOptions(page, axeSource, args, report, saveSettings, waitForSettingsReady);
     await runSuggestionLimitPlaceholder(page, axeSource, args, report, saveSettings, waitForSettingsReady, postedPayloads);
+    await runCatalogSettings(page, axeSource, args, report, saveSettings, waitForSettingsReady);
 
     await page.close();
     await context.close();
@@ -3205,6 +3258,7 @@ async function main() {
   assert.ok(report.commonCreatorLayouts.some(layout => layout.name === 'library-owned-desktop'));
   assert.equal(report.suggestionLimitPlaceholderRoundTrip, true);
   assert.equal(report.wildcardOriginNormalized, true);
+  assert.equal(report.catalogSettingsRoundTrip, true);
   console.log('Settings editor browser journey passed.');
 }
 

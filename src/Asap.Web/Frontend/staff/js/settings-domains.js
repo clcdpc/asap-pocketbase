@@ -2152,8 +2152,13 @@ export function createSettingsDomainEditors({ root, onChange = () => {}, onRetry
     }
     const focusedAction = document.activeElement?.getAttribute('aria-label');
     const publicationAction = name === 'publication' ? document.activeElement?.dataset.rowAction : null;
+    const formatAction = name === 'formats' ? document.activeElement?.dataset.rowAction : null;
     renderDomain(name, values);
     if (name === 'publication') focusPublicationRow(next, publicationAction);
+    if (name === 'formats') {
+      const row = dom.formats.querySelectorAll('[data-domain-row]')[next];
+      (row?.querySelector(`[data-row-action="${formatAction}"]:not(:disabled)`) || row?.querySelector('[data-material-field="label"]'))?.focus();
+    }
     if (name === 'fields') {
       renderRules(rules);
       focusFieldRow(next, focusedAction);

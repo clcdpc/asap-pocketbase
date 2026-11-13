@@ -453,6 +453,8 @@ async function setupController(settingsModule, frontendRoot, staff, fetchHandler
     let activeRow = [...document.querySelectorAll('.settings-staff-row')]
       .find(row => row.textContent.includes('Ada Admin'));
     edit(activeRow.querySelector('input[type="email"]'), 'ada.updated@example.org');
+    assert.equal(rowButton(activeRow, 'Cancel').disabled, false, 'Roster drafts update independently of ignored global settings fields.');
+    assert.equal(rowButton(activeRow, 'Save changes').disabled, false, 'A valid changed roster email enables its row save.');
     const accessRole = activeRow.querySelector('select[aria-label^="Role"]');
     edit(accessRole, 'staff');
     [...activeRow.querySelectorAll('button')].find(button => button.textContent === 'Save changes').click();

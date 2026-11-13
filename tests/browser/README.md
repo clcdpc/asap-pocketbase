@@ -66,10 +66,10 @@ journeys use the Testing Kestrel fixtures:
   sort/page/refresh/filter state, row/title/menu keyboard behavior, Purchase,
   Reject, Claim and Unclaim. An 80-event history checks the persistent footer.
   `staff-native-zoom.cjs` uses Chromium's tab zoom API through a test-only local
-  extension at physical widths 1280 and 1440. Each width checks eleven named states:
+  extension at physical widths 1280 and 1440. Each width checks thirteen named states:
   table, closed-actions, detail, confirmation, new-suggestion, workflow-picker,
-  format-rules-collapsed, format-rules-expanded, patron-placeholder,
-  email-template-preview and email-template-picker. The 22 checkpoints retain
+  catalog-preview, material-formats, format-rules-collapsed, format-rules-expanded, patron-placeholder,
+  email-template-preview and email-template-picker. The 26 checkpoints retain
   both Format-rule scans and the action menu's full offscreen focus restoration.
   The checks require zoom 2, doubled DPR, CDP zoom 2, CSS zoom 1 and
   pinch scale 1; CSS zoom is not substituted for this acceptance evidence. Its

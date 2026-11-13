@@ -639,7 +639,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.locator('#polaris-query').fill('9001');
     await page.locator('#polaris-form button[type=submit]').click();
     await page.getByText(/Publisher: Catalog publisher/).waitFor();
-    await page.getByText(/Format: Book/).waitFor();
+    await page.locator('#polaris-results .polaris-format-label').getByText('Book', { exact: true }).waitFor();
     await page.getByText(/Identifier: 9780000000001/).waitFor();
     await page.getByRole('button', { name: 'Use BIB 9001' }).click();
     await page.locator('.polaris-selection-context').filter({ hasText: 'Polaris format: Book' }).waitFor();
