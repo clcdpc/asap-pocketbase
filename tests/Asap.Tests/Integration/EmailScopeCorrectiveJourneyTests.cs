@@ -96,14 +96,20 @@ public sealed partial class PatronJourneyTests
         VerifyWorkflowEmailActivityAsync("staff", configured: true, missingStaffRecipient: true, invalidStaffUrl: false);
 
     [TestMethod]
-    public Task WorkflowStaffTemplatesSuppressWhenTheConfiguredStaffUrlIsInvalid() =>
-        VerifyWorkflowEmailActivityAsync("staff", configured: true, missingStaffRecipient: false, invalidStaffUrl: true);
+    [DataRow(null)]
+    [DataRow("")]
+    [DataRow("   ")]
+    [DataRow("https://attacker.example.org/staff/?untrusted=1")]
+    public Task WorkflowStaffTemplatesRemainDeliverableWithoutAValidStaffUrl(string? staffUrl) =>
+        VerifyWorkflowEmailActivityAsync("staff", configured: true, missingStaffRecipient: false,
+            invalidStaffUrl: true, staffUrl: staffUrl);
 
     private async Task VerifyWorkflowEmailActivityAsync(
         string role,
         bool configured,
         bool missingStaffRecipient,
-        bool invalidStaffUrl)
+        bool invalidStaffUrl,
+        string? staffUrl = null)
     {
         using var startup = factory!.CreateClient();
         await startup.GetAsync("/api/asap/staff/session");
@@ -138,7 +144,7 @@ public sealed partial class PatronJourneyTests
         EmailTemplate? mutatedStaffTemplate = null;
         string? originalStaffTemplateBody = null;
         systemSettings.StaffApplicationUrl = invalidStaffUrl
-            ? "https://attacker.example.org/staff/?untrusted=1"
+            ? staffUrl
             : "https://staff.example.org/staff/";
         var email = await context.EmailSettings.SingleOrDefaultAsync(item => item.OrganizationId == 2);
         var createdEmail = email is null;
@@ -206,12 +212,7 @@ public sealed partial class PatronJourneyTests
                 if (outbox.AuthorizationOrganizationId.HasValue) Assert.AreEqual(2, outbox.AuthorizationOrganizationId);
                 Assert.AreEqual("library.sender@example.org", outbox.FromAddress);
                 var missingRecipient = missingStaffRecipient && outbox.DeliveryClass == "staff_authorization_sensitive";
-                var templateNotice = outbox.BusinessKey!.StartsWith("title-assignment:", StringComparison.Ordinal) ||
-                    outbox.BusinessKey.StartsWith("purchase-reminder:", StringComparison.Ordinal) ||
-                    outbox.BusinessKey.StartsWith("additional-copy-reminder:", StringComparison.Ordinal) ||
-                    outbox.BusinessKey.StartsWith("additional-copy-assignment:", StringComparison.Ordinal);
                 var suppressionReason = missingRecipient ? "recipient_missing" :
-                    invalidStaffUrl && templateNotice ? "staff_url_missing" :
                     configured ? null : "mail_not_configured";
                 Assert.AreEqual(suppressionReason is null ? "pending" : "suppressed", outbox.Status);
                 Assert.AreEqual(suppressionReason, outbox.SuppressionReason);
@@ -231,6 +232,14 @@ public sealed partial class PatronJourneyTests
                     Assert.IsFalse(string.IsNullOrWhiteSpace(outbox.BodyText));
                     Assert.IsFalse(string.IsNullOrWhiteSpace(outbox.BodyHtml));
                     Assert.IsFalse(outbox.BodyHtml!.Contains("<script>", StringComparison.OrdinalIgnoreCase));
+                    if (invalidStaffUrl)
+                    {
+                        Assert.IsFalse(outbox.BodyText!.Contains("attacker.example.org", StringComparison.Ordinal));
+                        Assert.IsFalse(outbox.BodyHtml.Contains("attacker.example.org", StringComparison.Ordinal));
+                        Assert.IsFalse(outbox.BodyHtml.Contains("<a ", StringComparison.OrdinalIgnoreCase));
+                        Assert.IsFalse(outbox.BodyText.Contains("{{requestUrl}}", StringComparison.Ordinal));
+                        Assert.IsFalse(outbox.BodyHtml.Contains("{{requestUrl}}", StringComparison.Ordinal));
+                    }
                     switch (kind)
                     {
                         case "assignment":
@@ -279,7 +288,7 @@ public sealed partial class PatronJourneyTests
                     kind is "assignment" or "purchase_reminder" or "purchase_approved" ? title.Id : source.Id, kind);
             }
             Assert.AreEqual(outboxes.Count(item => item.Status == "pending"), localDispatcher.EnqueuedIds.Count);
-            if (configured && !missingStaffRecipient && !invalidStaffUrl && role == "staff")
+            if (configured && !missingStaffRecipient && role == "staff")
             {
                 var assignment = outboxes.Single(item => item.BusinessKey!.StartsWith("title-assignment:", StringComparison.Ordinal));
                 var acceptedSnapshot = (assignment.Subject, assignment.BodyText, assignment.BodyHtml);

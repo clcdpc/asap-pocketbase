@@ -855,11 +855,6 @@ public sealed class AdditionalCopyService(
         {
             suppressionReason = "template_blank";
         }
-        else if (StaffEmailTemplateRenderer.UsesRequestUrl(template) &&
-                 !StaffEmailTemplateRenderer.IsStaffUrlConfigured(systemSettings?.StaffApplicationUrl))
-        {
-            suppressionReason = "staff_url_missing";
-        }
         var now = UtcNow();
         var linkedRequestId = sourceTitleRequestId.HasValue && await context.TitleRequests.AnyAsync(item =>
             item.Id == sourceTitleRequestId.Value && item.LibraryOrganizationId == organizationId, cancellationToken)

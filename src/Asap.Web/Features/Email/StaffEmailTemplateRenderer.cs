@@ -182,10 +182,6 @@ public static partial class StaffEmailTemplateRenderer
 {
     public static bool IsStaffUrlConfigured(string? staffUrl) => StaffApplicationLinkBuilder.TryGetBase(staffUrl, out _);
 
-    public static bool UsesRequestUrl(EffectiveStaffEmailTemplate template) =>
-        template.Subject.Contains("{{requestUrl}}", StringComparison.Ordinal) ||
-        template.Body.Contains("{{requestUrl}}", StringComparison.Ordinal);
-
     public static RenderedEmailTemplate RenderRequest(
         EffectiveStaffEmailTemplate template,
         StaffEmailRequestValues request)

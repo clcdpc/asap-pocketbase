@@ -933,11 +933,6 @@ public sealed partial class TitleRequestMutationService(
         {
             suppressionReason = "template_blank";
         }
-        else if (StaffEmailTemplateRenderer.UsesRequestUrl(template) &&
-                 !StaffEmailTemplateRenderer.IsStaffUrlConfigured(systemSettings?.StaffApplicationUrl))
-        {
-            suppressionReason = "staff_url_missing";
-        }
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var outbox = new EmailOutbox
         {
