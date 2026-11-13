@@ -271,6 +271,8 @@ public sealed partial class PatronJourneyTests
         command.Parameters.Clear();
         var trace = new InvestigationTrace("asap485_" + Guid.NewGuid().ToString("N"), "/var/opt/mssql/log/asap485_" + Guid.NewGuid().ToString("N"));
         var events = new[] { "rpc_completed", "sql_statement_completed", "query_post_compilation_showplan", "query_post_execution_showplan" };
+        command.CommandText = "SELECT (SELECT object_name,name,type_name,description FROM sys.dm_xe_object_columns WHERE object_name IN ('rpc_completed','sql_statement_completed','query_post_compilation_showplan','query_post_execution_showplan') FOR JSON PATH);";
+        await File.WriteAllTextAsync(Path.Combine(directory, "trace-field-metadata.json"), (string)(await command.ExecuteScalarAsync())!);
         command.CommandText = $"CREATE EVENT SESSION [{trace.Name}] ON SERVER " + string.Join(",", events.Select(name =>
             $"ADD EVENT sqlserver.{name}(ACTION(sqlserver.database_id,sqlserver.session_id) WHERE ([sqlserver].[database_id]=({databaseId})))")) +
             $" ADD TARGET package0.event_file(SET filename=N'{trace.FilePrefix}.xel',max_file_size=(100),max_rollover_files=(2)) WITH (MAX_MEMORY=65536 KB,EVENT_RETENTION_MODE=ALLOW_SINGLE_EVENT_LOSS,MAX_DISPATCH_LATENCY=1 SECONDS,MAX_EVENT_SIZE=16384 KB,TRACK_CAUSALITY=ON); ALTER EVENT SESSION [{trace.Name}] ON SERVER STATE=START;";
