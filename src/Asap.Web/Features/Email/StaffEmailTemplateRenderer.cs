@@ -248,7 +248,7 @@ public static partial class StaffEmailTemplateRenderer
             .ToHashSet(StringComparer.Ordinal);
         var filtered = values.Where(item => supported.Contains(item.Key))
             .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
-        var subject = SanitizeSubject(ReplaceText(template.Subject, filtered));
+        var subject = EmailSubject.ToSingleLine(ReplaceText(template.Subject, filtered));
         // The editable action line supplies the plain-text label. In HTML the same words are the anchor.
         var actionLines = filtered.Where(pair => pair.Value.LinkLabel is not null)
             .ToDictionary(pair => pair.Value.LinkLabel + ": {{" + pair.Key + "}}", pair => pair.Value, StringComparer.Ordinal);
@@ -333,23 +333,6 @@ public static partial class StaffEmailTemplateRenderer
         }
         builder.Append(HtmlEncoder.Default.Encode(template[offset..]));
         return builder.ToString();
-    }
-
-    private static string SanitizeSubject(string subject)
-    {
-        var builder = new StringBuilder(subject.Length);
-        foreach (var character in subject)
-        {
-            if (character is '\r' or '\n')
-            {
-                builder.Append(' ');
-            }
-            else if (!char.IsControl(character))
-            {
-                builder.Append(character);
-            }
-        }
-        return builder.ToString().Trim();
     }
 
     private static TemplateValue Link(string? url, string label)

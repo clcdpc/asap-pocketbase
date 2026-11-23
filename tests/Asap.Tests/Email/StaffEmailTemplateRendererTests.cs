@@ -14,13 +14,14 @@ public sealed class StaffEmailTemplateRendererTests
     {
         var title = new string('X', 500) + "&" + newline + "<next>";
         var id = new string('3', 150);
-        var template = new EffectiveStaffEmailTemplate(StaffEmailTemplateCatalog.NewPatronRequest, "Subject",
+        var template = new EffectiveStaffEmailTemplate(StaffEmailTemplateCatalog.NewPatronRequest, " \tSubject:" + newline + "{{title}}\0 ",
             "<Notice>\\n" + newline + "Title: {{title}}" + newline + "Author / creator: {{author}}" + newline +
             "Format: {{format}}" + newline + newline + "View request in ASAP: {{requestUrl}}", false);
         var values = new StaffEmailRequestValues(2, "https://staff.example.org/staff/", null, null, null, null,
             id, null, "suggestion", null, title, "", null);
         var mail = StaffEmailTemplateRenderer.RenderRequest(template, values);
         var url = $"https://staff.example.org/staff/?request={id}&stage=suggestion&scope=2";
+        Assert.AreEqual("Subject: " + new string('X', 500) + "& <next>", mail.Subject);
         Assert.AreEqual("<Notice>\n\nTitle: " + title.ReplaceLineEndings("\n") + "\n\nView request in ASAP: " + url, mail.BodyText);
         Assert.AreEqual("&lt;Notice&gt;<br><br>Title: " + new string('X', 500) + "&amp;<br>&lt;next&gt;<br><br>" +
             $"<a href=\"{url.Replace("&", "&amp;")}\">View request in ASAP</a>", mail.BodyHtml);

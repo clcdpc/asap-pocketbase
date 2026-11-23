@@ -12,6 +12,7 @@ public sealed partial class PatronJourneyTests
     [DataRow(true)]
     public async Task TimeoutQueuesUseStatusSpecificAgesAndNeverExpireOutstandingPurchases(bool useTemplate)
     {
+        const string suggestionTitle = "Café\r\nand\nTea\r— A Guide";
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var scope = Slice5IsolatedLibraryId;
         await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
@@ -67,7 +68,7 @@ public sealed partial class PatronJourneyTests
                 timeoutTemplate = new EmailTemplate
                 {
                     OrganizationId = scope, TemplateKey = "rejection:timeout-copy", IsCustom = true,
-                    DisplayName = "Timeout notice", SubjectTemplate = "Review closed: {{title}}",
+                    DisplayName = "Timeout notice", SubjectTemplate = " \tReview closed:\r\n{{title}}\u001b ",
                     BodyTemplate = "The review period ended.\n\nTitle: {{title}}\nYour suggestion is now closed."
                 };
                 seed.EmailTemplates.Add(timeoutTemplate);
@@ -107,6 +108,7 @@ public sealed partial class PatronJourneyTests
 
             var format = await seed.MaterialFormats.SingleAsync(item => item.Code == "book");
             var suggestion = NewRequest(scope, "timeout-suggestion", "suggestion", old, now);
+            suggestion.Title = suggestionTitle;
             suggestion.Email = "timeout-recipient@example.org";
             var purchase = NewRequest(scope, "timeout-purchase", "outstanding_purchase", old, old);
             purchase.BibId = null;
@@ -184,9 +186,9 @@ public sealed partial class PatronJourneyTests
                 item.BusinessKey == $"timeout:OutstandingTimeout:{requests["timeout-suggestion"].Id}");
             Assert.AreEqual("pending", timeoutMail.Status);
             Assert.IsNull(timeoutMail.BodyHtml);
-            Assert.AreEqual(useTemplate ? "Review closed: timeout-suggestion" : "Suggestion update: timeout-suggestion", timeoutMail.Subject);
-            Assert.AreEqual(useTemplate ? "The review period ended.\n\nTitle: timeout-suggestion\nYour suggestion is now closed."
-                : "The review period has ended. Your suggestion was closed without being selected for purchase.\n\nTitle: timeout-suggestion", timeoutMail.BodyText);
+            Assert.AreEqual(useTemplate ? "Review closed: Café and Tea — A Guide" : "Suggestion update: Café and Tea — A Guide", timeoutMail.Subject);
+            Assert.AreEqual(useTemplate ? $"The review period ended.\n\nTitle: {suggestionTitle}\nYour suggestion is now closed."
+                : $"The review period has ended. Your suggestion was closed without being selected for purchase.\n\nTitle: {suggestionTitle}", timeoutMail.BodyText);
             await AssertRequestMailEvidenceAsync(timeoutMail, requests["timeout-suggestion"].Id, "timeout");
             Assert.AreEqual("system.sender@example.org", timeoutMail.FromAddress);
             Assert.AreEqual("Library Sender", timeoutMail.FromName);

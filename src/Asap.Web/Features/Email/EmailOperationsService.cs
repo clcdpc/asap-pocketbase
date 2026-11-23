@@ -294,7 +294,7 @@ public sealed partial class EmailOperationsService(
             ToAddress = address,
             FromAddress = settings.FromAddress,
             FromName = settings.FromName,
-            Subject = suppression is null ? $"ASAP test email - {targetOrganization.DisplayName}" : null,
+            Subject = suppression is null ? EmailSubject.ToSingleLine($"ASAP test email - {targetOrganization.DisplayName}") : null,
             BodyText = suppression is null
                 ? $"An administrator requested this synthetic ASAP email test.\nScope: {targetOrganization.DisplayName} ({targetOrganizationId}).\nRequested at: {now:O} UTC.\nReference: {operationId?.ToString("N") ?? "internal-test"}.\nNo patron information is included."
                 : null,

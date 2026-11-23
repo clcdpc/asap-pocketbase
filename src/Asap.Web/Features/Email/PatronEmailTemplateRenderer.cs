@@ -26,7 +26,7 @@ public static partial class PatronEmailTemplateRenderer
         var bodyTemplate = EmailBodyText.FromTemplate(RemoveBlankAuthorPhrase(template.BodyTemplate, values["author"]));
         var body = Replace(bodyTemplate, values).ReplaceLineEndings("\n");
         return new RenderedEmailTemplate(
-            Replace(subjectTemplate, values), body, EmailBodyText.ToHtml(body));
+            EmailSubject.ToSingleLine(Replace(subjectTemplate, values)), body, EmailBodyText.ToHtml(body));
     }
 
     private static Dictionary<string, string> BuildValues(

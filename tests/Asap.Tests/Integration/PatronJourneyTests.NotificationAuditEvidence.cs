@@ -287,6 +287,7 @@ public sealed partial class PatronJourneyTests
     public async Task HoldNotificationUsesFrozenActualPickupOrGenericWording(string flow, bool missingName)
     {
         const int actualPickupId = 99681;
+        const string requestTitle = "Café\r\n& Tea";
         var seeded = await SeedBibOwnershipRequestAsync($"pickup-body-{Guid.NewGuid():N}", 9001,
             staffVerified: true, isbnCheckStatus: "found", status: "pending_hold", autoHold: true);
         var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
@@ -306,7 +307,7 @@ public sealed partial class PatronJourneyTests
         using var cancellation = new CancellationTokenSource();
         try
         {
-            var version = await BindAuditNotificationRequestAsync(contexts, seeded.Id, 7105);
+            var version = await BindAuditNotificationRequestAsync(contexts, seeded.Id, 7105, requestTitle);
             if (!missingName)
             {
                 await using var setup = await contexts.CreateDbContextAsync();
@@ -351,10 +352,10 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("Historical pickup A", (await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == seeded.Id)).PreferredPickupBranchName);
             var outbox = await verify.EmailOutbox.AsNoTracking().SingleAsync(item => item.BusinessKey == $"title-hold-placed:{seeded.Id}:1");
             Assert.AreEqual("pending", outbox.Status);
+            Assert.AreEqual("Hold placed: Café & Tea", outbox.Subject);
             Assert.IsFalse(outbox.BodyText!.Contains("Historical pickup A", StringComparison.Ordinal));
             if (missingName)
             {
-                var requestTitle = await verify.TitleRequests.Where(item => item.Id == seeded.Id).Select(item => item.Title).SingleAsync();
                 Assert.AreEqual($"A hold has been placed for {requestTitle}.\n\nPlease wait for your pickup notice before visiting the library.", outbox.BodyText);
             }
             else
@@ -510,12 +511,16 @@ public sealed partial class PatronJourneyTests
             services.AddSingleton<IEmailOutboxDispatcher>(outboxDispatcher);
         }));
 
-    private static async Task<byte[]> BindAuditNotificationRequestAsync(IDbContextFactory<AsapDbContext> contexts, long requestId, int? nativeId)
+    private static async Task<byte[]> BindAuditNotificationRequestAsync(IDbContextFactory<AsapDbContext> contexts, long requestId, int? nativeId, string? title = null)
     {
         await using var setup = await contexts.CreateDbContextAsync();
         var request = await setup.TitleRequests.SingleAsync(item => item.Id == requestId);
         request.PatronIdSnapshot = nativeId;
         request.PreferredPickupBranchName = "Historical pickup A";
+        if (title is not null)
+        {
+            request.Title = title;
+        }
         await setup.SaveChangesAsync();
         return request.RowVersion;
     }

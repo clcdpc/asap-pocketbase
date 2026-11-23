@@ -521,7 +521,7 @@ public sealed partial class WorkflowProcessingService
             ToAddress = request.Email,
             FromAddress = fromAddress,
             FromName = fromName,
-            Subject = subject,
+            Subject = EmailSubject.ToSingleLine(subject),
             BodyText = body,
             Status = allowed ? "pending" : "suppressed",
             SuppressionReason = allowed ? null : ready ? "recipient_domain_not_allowed" : "mail_not_configured",

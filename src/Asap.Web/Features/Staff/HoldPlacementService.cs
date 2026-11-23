@@ -1961,7 +1961,7 @@ public sealed class HoldPlacementService(
             ToAddress = to,
             FromAddress = from,
             FromName = fromName,
-            Subject = $"Hold placed: {request.Title}",
+            Subject = EmailSubject.ToSingleLine($"Hold placed: {request.Title}"),
             BodyText = body,
             Status = suppression is null ? "pending" : "suppressed",
             SuppressionReason = suppression,

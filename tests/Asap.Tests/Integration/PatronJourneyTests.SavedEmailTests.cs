@@ -21,10 +21,11 @@ public sealed partial class PatronJourneyTests
     public async Task SavedEmailTestHttpRequiresContextAndDeduplicatesConcurrentClicksBeforeCooldown()
     {
         const int scope = 382930;
+        const string libraryName = "Saved Email\r\nTest Library";
         var staff = await CreateSavedEmailActorAsync();
         var actor = await ReadCorrectiveStaffAsync(staff);
         using var client = await CreateAuthenticatedStaffClientAsync(factory!, actor);
-        await SeedSavedEmailScopeAsync(scope);
+        await SeedSavedEmailScopeAsync(scope, libraryName);
         try
         {
             var saved = await ReadSavedEmailContextAsync(client, scope);
@@ -65,8 +66,9 @@ public sealed partial class PatronJourneyTests
                     Assert.AreEqual("postmark", row.IntendedDeliveryMode);
                     Assert.AreEqual(64, row.TestConfigurationVersion!.Length);
                     Assert.IsNull(row.AttemptDeliveryMode);
+                    Assert.AreEqual("ASAP test email - Saved Email Test Library", row.Subject);
                     StringAssert.Contains(row.BodyText!, operationId.ToString("N"));
-                    StringAssert.Contains(row.BodyText!, $"({scope})");
+                    StringAssert.Contains(row.BodyText!, $"Scope: {libraryName} ({scope}).");
                     StringAssert.Contains(row.BodyText!, "UTC");
                     Assert.AreEqual("primary-test@example.org", row.ToAddress);
                 }
@@ -650,9 +652,9 @@ public sealed partial class PatronJourneyTests
         return row;
     }
 
-    private async Task SeedSavedEmailScopeAsync(int scope)
+    private async Task SeedSavedEmailScopeAsync(int scope, string libraryName = "Saved Email Test Library")
     {
-        await UpsertTestOrganizationAsync(scope, "Saved Email Test Library", "SET");
+        await UpsertTestOrganizationAsync(scope, libraryName, "SET");
         await using var context = await factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync();
         context.EmailSettings.Add(new EmailSettings { OrganizationId = scope, FromName = "Saved library sender", UpdatedUtc = DateTime.UtcNow,
             ProtectedServerToken = "obsolete-library-token-must-not-be-used" });
