@@ -12,31 +12,30 @@ internal static class BuiltInEmailTemplateExpectations
     internal static readonly Template[] All =
     [
         new("suggestion_submitted", "Suggestion submitted", "Suggestion received: {{title}}",
-            "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\nThank you for helping us shape the library collection.", 10),
+            "Hello {{name}},\n\nThank you for your suggestion. We received your request for the following item.\n\nTitle: {{title}} by {{author}}\nFormat: {{format}}\n\nOur collection development team will review your suggestion.", 10),
         new("purchase_approved", "Purchase approved", "Purchase approved: {{title}}",
-            "Hello {{name}},\n\nGood news. The library has approved your suggestion for purchase: {{title}} by {{author}} in {{format}} format.\n\nThis request is now awaiting ordering and cataloging.\n\nThank you for your suggestion.", 20),
-        new("already_owned", "Already owned", "{{title}} is already available",
-            "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nThe library already owns this title or has it on order.\n\nThank you for using the library's suggestion service.", 30),
+            "Hello {{name}},\n\nThe library has approved your suggestion for purchase.\n\nTitle: {{title}} by {{author}}\nFormat: {{format}}\n\nThe item is awaiting ordering and cataloging.", 20),
+        new("already_owned", "Already owned", "Already owned or on order: {{title}}",
+            "Hello {{name}},\n\nThank you for your suggestion. The library already owns this title or has it on order.\n\nTitle: {{title}} by {{author}}\nFormat: {{format}}", 30),
         new("hold_placed", "Hold placed", "Hold placed for {{title}}",
-            "Hello {{name}},\n\n{{title}} by {{author}} in {{format}} format is now available in the catalog.\n\nWe have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.\n\nThank you for your suggestion.", 40),
+            "Hello {{name}},\n\nA hold has been placed on your card ({{barcode}}).\n\nTitle: {{title}} by {{author}}\nFormat: {{format}}\n\nPlease wait for your pickup notice before visiting the library.", 40),
         new("rejected", "Rejected", "Update on your suggestion: {{title}}",
-            "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nAfter review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.\n\nThank you for helping us build a collection that reflects our community.", 50)
+            "Hello {{name}},\n\nThank you for suggesting this item for the collection.\n\nTitle: {{title}} by {{author}}\nFormat: {{format}}\n\nAfter review, we are unable to add it at this time. We appreciate your suggestion.", 50)
     ];
 
     internal static readonly Template[] Staff =
     [
-        new("staff_title_assignment", "Title request assigned", "ASAP request assigned",
-            "Hello {{recipientName}},\n\n{{title}} has been assigned to you.\n\nAssigned by: {{actorName}}\nAssignee: {{assigneeName}}\nLibrary: {{libraryName}}\nTitle request: {{requestId}}\n\nTitle: {{title}}\nAuthor/creator: {{author}}\nFormat: {{format}}\n\nView request: {{requestUrl}}", 60),
-        new("staff_purchase_reminder", "Purchase reminder", "ASAP purchase reminder",
-            "Hello {{recipientName}},\n\nPurchase requested for {{title}}.\n\nRequested by: {{actorName}}\nLibrary: {{libraryName}}\nTitle request: {{requestId}}\n\nTitle: {{title}}\nAuthor/creator: {{author}}\nFormat: {{format}}\nBIB: {{bibId}}\n\nView request: {{requestUrl}}", 70),
-        new("staff_additional_copy_reminder", "Additional-copy reminder", "ASAP additional-copy reminder",
-            "Hello {{recipientName}},\n\nAdditional-copy task {{taskId}} for {{title}} (BIB {{bibId}}) was created.\n\nCreated by: {{actorName}}\nLibrary: {{libraryName}}\nTitle request: {{requestId}}\n\nTitle: {{title}}\nAuthor/creator: {{author}}\nFormat: {{format}}\n\nView task: {{requestUrl}}", 80),
-        new("staff_additional_copy_assignment", "Additional-copy task assigned", "ASAP additional-copy task assigned",
-            "Hello {{recipientName}},\n\nAdditional-copy task {{taskId}} for {{title}} has been assigned to you.\n\nAssigned by: {{actorName}}\nAssignee: {{assigneeName}}\nLibrary: {{libraryName}}\nTitle request: {{requestId}}\n\nTitle: {{title}}\nAuthor/creator: {{author}}\nFormat: {{format}}\nBIB: {{bibId}}\n\nView task: {{requestUrl}}", 90),
-        new("staff_new_patron_request", "New patron purchase request", "New purchase request: {{title}}",
-            "Hello {{recipientName}},\n\nA new patron purchase request was submitted to {{libraryName}}.\n\nTitle request: {{requestId}}\nTitle: {{title}}\nAuthor/creator: {{author}}\nFormat: {{format}}\n\nView request: {{requestUrl}}", 65),
-        new("staff_weekly_summary", "Weekly action summary",
-            "Weekly ASAP action summary: {{submissionCount}} new, {{purchaseCount}} awaiting bibs, {{additionalCopyCount}} additional copies",
-            "Hello {{recipientName}},\n\nWeekly ASAP action summary for {{libraryName}}.\nBusiness period: {{periodStart}} through {{periodEnd}}\n\nNew submissions\n{{submissionCount}} active requests\nFive most recent:\n{{submissionItems}}\nView new submissions: {{submissionQueueUrl}}\n\nApproved purchases without bibs\n{{purchaseCount}} active requests\nFive most recent:\n{{purchaseItems}}\nView purchases awaiting BIBs: {{purchaseQueueUrl}}\n\nAdditional copies\n{{additionalCopyCount}} open tasks\nFive most recent:\n{{additionalCopyItems}}\nView additional copies: {{additionalCopiesQueueUrl}}", 100)
+        new("staff_title_assignment", "Title request assigned", "Title request assigned: {{title}}",
+            "Hello {{recipientName}},\n\nA title request at {{libraryName}} has been assigned to you.\n\nAssigned by: {{actorName}}\nAssignee: {{assigneeName}}\n\nTitle: {{title}}\nAuthor / creator: {{author}}\nFormat: {{format}}\nRequest ID: {{requestId}}\n\nView request in ASAP: {{requestUrl}}", 60),
+        new("staff_purchase_reminder", "Purchase reminder", "Purchase reminder: {{title}}",
+            "Hello {{recipientName}},\n\nPlease follow up on this purchase for {{libraryName}}.\n\nRequested by: {{actorName}}\nTitle: {{title}}\nAuthor / creator: {{author}}\nFormat: {{format}}\nBIB: {{bibId}}\nRequest ID: {{requestId}}\n\nView request in ASAP: {{requestUrl}}", 70),
+        new("staff_additional_copy_reminder", "Additional-copy reminder", "Additional-copy reminder: {{title}}",
+            "Hello {{recipientName}},\n\nAn additional-copy task was created for {{libraryName}}. Please review the purchase details.\n\nCreated by: {{actorName}}\nTitle: {{title}}\nAuthor / creator: {{author}}\nFormat: {{format}}\nBIB: {{bibId}}\nTask ID: {{taskId}}\nRequest ID: {{requestId}}\n\nView additional-copy task in ASAP: {{requestUrl}}", 80),
+        new("staff_additional_copy_assignment", "Additional-copy task assigned", "Additional-copy task assigned: {{title}}",
+            "Hello {{recipientName}},\n\nAn additional-copy task at {{libraryName}} has been assigned to you.\n\nAssigned by: {{actorName}}\nAssignee: {{assigneeName}}\n\nTitle: {{title}}\nAuthor / creator: {{author}}\nFormat: {{format}}\nBIB: {{bibId}}\nTask ID: {{taskId}}\nRequest ID: {{requestId}}\n\nView additional-copy task in ASAP: {{requestUrl}}", 90),
+        new("staff_new_patron_request", "New patron purchase request", "New purchase request — {{title}}",
+            "Hello {{recipientName}},\n\nA patron submitted a new purchase request to {{libraryName}}.\n\nTitle: {{title}}\nAuthor / creator: {{author}}\nFormat: {{format}}\nRequest ID: {{requestId}}\n\nView request in ASAP: {{requestUrl}}", 65),
+        new("staff_weekly_summary", "Weekly action summary", "Weekly ASAP summary: {{submissionCount}} new, {{purchaseCount}} awaiting BIBs, {{additionalCopyCount}} additional copies",
+            "Hello {{recipientName}},\n\nHere is the weekly action summary for {{libraryName}}.\nBusiness period: {{periodStart}} through {{periodEnd}}\n\nNew submissions\nActive requests: {{submissionCount}}\nRecent items (up to five):\n{{submissionItems}}\nView new submissions: {{submissionQueueUrl}}\n\nPurchases awaiting BIBs\nActive requests: {{purchaseCount}}\nRecent items (up to five):\n{{purchaseItems}}\nView purchases awaiting BIBs: {{purchaseQueueUrl}}\n\nAdditional copies\nOpen tasks: {{additionalCopyCount}}\nRecent items (up to five):\n{{additionalCopyItems}}\nView Additional copies: {{additionalCopiesQueueUrl}}", 100)
     ];
 }

@@ -831,8 +831,9 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                    AND [EventType]=N'additional_copy_created'
                    AND [Message] LIKE N'%BIB 92905%'),
                 (SELECT COUNT(*) FROM [asap].[EmailOutbox]
-                 WHERE [Subject]=N'ASAP additional-copy reminder'
-                   AND [BodyText] LIKE N'%Browser additional copy source (BIB 92905)%'
+                 WHERE [Subject]=N'Additional-copy reminder: Browser additional copy source'
+                   AND [BodyText] LIKE N'%Title: Browser additional copy source%'
+                   AND [BodyText] LIKE N'%BIB: 92905%'
                    AND [DeliveryClass]=N'staff_authorization_sensitive'),
                 (SELECT COUNT(*) FROM [asap].[DeletedRequestAudit]
                  WHERE [RequestType]=N'additional_copy'
@@ -1484,8 +1485,8 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
     {
         const string expectedBody =
             "Hello {{name}},\n\n" +
-            "Thank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.\n\n" +
-            "Thank you for helping us shape the library collection.";
+            "Thank you for your suggestion. We received your request for the following item.\n\n" +
+            "Title: {{title}} by {{author}}\nFormat: {{format}}\n\nOur collection development team will review your suggestion.";
         await using var connection = new SqlConnection(databaseConnectionString);
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();

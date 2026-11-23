@@ -99,6 +99,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(item => item.TitleRequestId == seeded.Id && item.EventType == "hold_placed"));
             var outbox = await verify.EmailOutbox.AsNoTracking().SingleAsync(item => item.BusinessKey == $"title-hold-placed:{seeded.Id}:1");
             Assert.AreEqual(deliverable ? "patron-x@example.org" : null, outbox.ToAddress);
+            Assert.IsNull(outbox.BodyHtml);
             Assert.AreEqual(deliverable ? "pending" : "suppressed", outbox.Status);
             await AssertRequestMailEvidenceAsync(outbox, seeded.Id, "hold_placed");
             Assert.AreEqual(deliverable ? 1 : 0, outboxDispatcher.EnqueuedIds.Count);
@@ -177,11 +178,11 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(deliverable ? "patron-x@example.org" : null, outbox.ToAddress);
             if (missingPickupName)
             {
-                Assert.AreEqual($"A hold has been placed for {request.Title}.", outbox.BodyText);
+                Assert.AreEqual($"A hold has been placed for {request.Title}.\n\nPlease wait for your pickup notice before visiting the library.", outbox.BodyText);
             }
             else
             {
-                StringAssert.Contains(outbox.BodyText!, "Actual provider pickup");
+                StringAssert.Contains(outbox.BodyText!, "\n\nPickup location: Actual provider pickup\n\nPlease wait for your pickup notice");
             }
             Assert.IsFalse(outbox.BodyText!.Contains("Historical pickup A", StringComparison.Ordinal));
             Assert.AreEqual(1, await verify.TitleRequestEvents.CountAsync(item => item.TitleRequestId == seeded.Id && item.EventType == "hold_placed"));
@@ -354,7 +355,7 @@ public sealed partial class PatronJourneyTests
             if (missingName)
             {
                 var requestTitle = await verify.TitleRequests.Where(item => item.Id == seeded.Id).Select(item => item.Title).SingleAsync();
-                Assert.AreEqual($"A hold has been placed for {requestTitle}.", outbox.BodyText);
+                Assert.AreEqual($"A hold has been placed for {requestTitle}.\n\nPlease wait for your pickup notice before visiting the library.", outbox.BodyText);
             }
             else
             {

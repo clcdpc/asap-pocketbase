@@ -1057,7 +1057,7 @@ async function runCampaign2Editor(page, axeSource, args, report, saveSettings, r
     assert.equal(await purchase.inputValue(), `{{title}}${purchaseBefore}`, 'An unrelated field clears insertion ownership.');
     await openCard(page.locator('#email-hold-subject'));
     assert.equal(await page.locator('#email-hold-subject').locator('xpath=..').locator('.template-placeholder-trigger').isDisabled(), true);
-    assert.match(await page.locator('[data-template-key="hold_placed"] .settings-template-preview-note').textContent(), /not verified/);
+    assert.match(await page.locator('[data-template-key="hold_placed"] .settings-template-preview-note').textContent(), /own plain-text notice/);
     await purchase.fill(Array.from({ length: 50 }, (_, index) => `Line ${index} & é`).join('\n'));
     await selectRange(purchase, 0);
     const purchaseTrigger = purchase.locator('xpath=..').locator('.template-placeholder-trigger');

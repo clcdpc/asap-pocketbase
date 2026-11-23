@@ -7,6 +7,26 @@ namespace Asap.Tests.Email;
 public sealed class StaffEmailTemplateRendererTests
 {
     [TestMethod]
+    [DataRow("\n")]
+    [DataRow("\r\n")]
+    [DataRow("\r")]
+    public void CustomBodyPreservesSpacingAndEncodesMultilineValues(string newline)
+    {
+        var title = new string('X', 500) + "&" + newline + "<next>";
+        var id = new string('3', 150);
+        var template = new EffectiveStaffEmailTemplate(StaffEmailTemplateCatalog.NewPatronRequest, "Subject",
+            "<Notice>\\n" + newline + "Title: {{title}}" + newline + "Author / creator: {{author}}" + newline +
+            "Format: {{format}}" + newline + newline + "View request in ASAP: {{requestUrl}}", false);
+        var values = new StaffEmailRequestValues(2, "https://staff.example.org/staff/", null, null, null, null,
+            id, null, "suggestion", null, title, "", null);
+        var mail = StaffEmailTemplateRenderer.RenderRequest(template, values);
+        var url = $"https://staff.example.org/staff/?request={id}&stage=suggestion&scope=2";
+        Assert.AreEqual("<Notice>\n\nTitle: " + title.ReplaceLineEndings("\n") + "\n\nView request in ASAP: " + url, mail.BodyText);
+        Assert.AreEqual("&lt;Notice&gt;<br><br>Title: " + new string('X', 500) + "&amp;<br>&lt;next&gt;<br><br>" +
+            $"<a href=\"{url.Replace("&", "&amp;")}\">View request in ASAP</a>", mail.BodyHtml);
+    }
+
+    [TestMethod]
     public void RequestTemplatesUseStaffTokensTypedScopedLinksAndSafeHtml()
     {
         var template = new EffectiveStaffEmailTemplate(
@@ -41,7 +61,7 @@ public sealed class StaffEmailTemplateRendererTests
             "&lt;script&gt;alert(");
         StringAssert.Contains(rendered.BodyHtml, "&lt;/script&gt; &amp; book");
         StringAssert.Contains(rendered.BodyHtml,
-            "<a href=\"https://staff.example.org/staff/?request=9007199254740993&amp;stage=suggestion&amp;scope=2\">https://staff.example.org/staff/?request=9007199254740993&amp;stage=suggestion&amp;scope=2</a>");
+            "<a href=\"https://staff.example.org/staff/?request=9007199254740993&amp;stage=suggestion&amp;scope=2\">View request in ASAP</a>");
     }
 
     [TestMethod]
@@ -72,11 +92,13 @@ public sealed class StaffEmailTemplateRendererTests
         StringAssert.Contains(rendered.BodyText!,
             "https://staff.example.org/staff/?request=9007199254740993&stage=additional_copies&scope=2");
         Assert.IsFalse(rendered.BodyText!.Contains("stage=outstanding_purchase", StringComparison.Ordinal));
+        StringAssert.Contains(rendered.BodyHtml, "&amp;stage=additional_copies&amp;scope=2\">View additional-copy task in ASAP</a>");
 
         var invalid = StaffEmailTemplateRenderer.RenderRequest(template, values with { StaffUrl = "//attacker.example/" });
 
         Assert.AreEqual(string.Empty, invalid.BodyText);
         Assert.IsFalse(invalid.BodyText.Contains("attacker.example", StringComparison.Ordinal));
+        Assert.AreEqual(string.Empty, invalid.BodyHtml);
     }
 
     [TestMethod]
@@ -120,6 +142,19 @@ public sealed class StaffEmailTemplateRendererTests
         StringAssert.Contains(rendered.BodyHtml, "&lt;Submission &amp; title&gt;");
         StringAssert.Contains(rendered.BodyHtml,
             $"href=\"https://staff.example.org/staff/?request={overlappingId}&amp;stage=suggestion&amp;scope=2\"");
+        StringAssert.Contains(rendered.BodyHtml, $">View request {overlappingId} in ASAP</a>");
+        StringAssert.Contains(rendered.BodyHtml, $">View additional-copy task {overlappingId} in ASAP</a>");
+        StringAssert.Contains(rendered.BodyHtml, ">View new submissions</a>");
+        StringAssert.Contains(rendered.BodyHtml, ">View purchases awaiting BIBs</a>");
+        StringAssert.Contains(rendered.BodyHtml, ">View Additional copies</a>");
+
+        var empty = StaffEmailTemplateRenderer.RenderWeekly(template, summary with
+        {
+            SubmissionCount = 0, SubmissionItems = [], PurchaseCount = 0, PurchaseItems = [],
+            AdditionalCopyCount = 0, AdditionalCopyItems = []
+        });
+        StringAssert.Contains(empty.BodyText, "\nNone\nNone\nNone\n");
+        StringAssert.Contains(empty.BodyHtml, "<br>None<br>None<br>None<br>");
 
         var allLibraries = StaffEmailTemplateRenderer.RenderWeekly(template, summary with
         {

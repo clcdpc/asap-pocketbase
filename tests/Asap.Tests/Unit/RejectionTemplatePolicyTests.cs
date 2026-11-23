@@ -14,7 +14,7 @@ public sealed class RejectionTemplatePolicyTests
         var rows = new[]
         {
             Template(LargeId, 1, "rejection:standard", "System", "Subject", "Body"),
-            Template(LargeId + 1, 2, "rejection:standard", "Library", "Library subject", "Library body", LargeId),
+            Template(LargeId + 1, 2, "rejection:standard", "Library", "Library subject", "\nLibrary body\n\nNext paragraph\n", LargeId),
             Template(LargeId + 2, 2, "rejection:custom", "Custom", "Custom subject", "Custom body", custom: true),
             Template(LargeId + 3, 3, "rejection:foreign", "Foreign", "Foreign subject", "Foreign body", custom: true)
         };
@@ -25,6 +25,7 @@ public sealed class RejectionTemplatePolicyTests
         Assert.AreEqual("Library", choices[0].Name);
         Assert.AreEqual("9007199254740995", choices[1].Id);
         Assert.AreEqual("Library subject", RejectionTemplatePolicy.Resolve(rows, 2, LargeId)!.Subject);
+        Assert.AreEqual("\nLibrary body\n\nNext paragraph\n", RejectionTemplatePolicy.Resolve(rows, 2, LargeId)!.Body);
         Assert.IsNull(RejectionTemplatePolicy.Resolve(rows, 2, LargeId + 3));
     }
 

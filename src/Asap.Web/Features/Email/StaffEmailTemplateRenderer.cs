@@ -210,7 +210,7 @@ public static partial class StaffEmailTemplateRenderer
             ["title"] = Value(request.Title),
             ["author"] = Value(request.Author),
             ["format"] = Value(request.Format),
-            ["requestUrl"] = Link(requestUrl)
+            ["requestUrl"] = Link(requestUrl, request.TaskId is null ? "View request in ASAP" : "View additional-copy task in ASAP")
         };
         return Render(template, values);
     }
@@ -233,9 +233,9 @@ public static partial class StaffEmailTemplateRenderer
             ["purchaseItems"] = SummaryItems(summary.PurchaseItems, summary.StaffUrl, "View request"),
             ["additionalCopyCount"] = Value(summary.AdditionalCopyCount.ToString(CultureInfo.InvariantCulture)),
             ["additionalCopyItems"] = SummaryItems(summary.AdditionalCopyItems, summary.StaffUrl, "View task"),
-            ["submissionQueueUrl"] = Link(StaffApplicationLinkBuilder.BuildQueueUrl(summary.StaffUrl, "submitted", scope)),
-            ["purchaseQueueUrl"] = Link(StaffApplicationLinkBuilder.BuildQueueUrl(summary.StaffUrl, "purchased_waiting_for_bib", scope)),
-            ["additionalCopiesQueueUrl"] = Link(StaffApplicationLinkBuilder.BuildQueueUrl(summary.StaffUrl, "additional_copies", scope))
+            ["submissionQueueUrl"] = Link(StaffApplicationLinkBuilder.BuildQueueUrl(summary.StaffUrl, "submitted", scope), "View new submissions"),
+            ["purchaseQueueUrl"] = Link(StaffApplicationLinkBuilder.BuildQueueUrl(summary.StaffUrl, "purchased_waiting_for_bib", scope), "View purchases awaiting BIBs"),
+            ["additionalCopiesQueueUrl"] = Link(StaffApplicationLinkBuilder.BuildQueueUrl(summary.StaffUrl, "additional_copies", scope), "View Additional copies")
         };
         return Render(template, values);
     }
@@ -249,8 +249,39 @@ public static partial class StaffEmailTemplateRenderer
         var filtered = values.Where(item => supported.Contains(item.Key))
             .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
         var subject = SanitizeSubject(ReplaceText(template.Subject, filtered));
-        var bodyTemplate = template.Body.Replace("\\n", "\n", StringComparison.Ordinal);
-        return new RenderedEmailTemplate(subject, ReplaceText(bodyTemplate, filtered), ReplaceHtml(bodyTemplate, filtered));
+        // The editable action line supplies the plain-text label. In HTML the same words are the anchor.
+        var actionLines = filtered.Where(pair => pair.Value.LinkLabel is not null)
+            .ToDictionary(pair => pair.Value.LinkLabel + ": {{" + pair.Key + "}}", pair => pair.Value, StringComparer.Ordinal);
+        var textLines = new List<string>();
+        var htmlLines = new List<string>();
+        foreach (var line in EmailBodyText.FromTemplate(template.Body).Split('\n'))
+        {
+            // Only omit the built-in detail line. Leave inline uses and intentional blank lines alone.
+            var optionalKey = line switch
+            {
+                "Author / creator: {{author}}" => "author",
+                "Format: {{format}}" => "format",
+                "BIB: {{bibId}}" => "bibId",
+                "Request ID: {{requestId}}" => "requestId",
+                _ => null
+            };
+            if (optionalKey is not null && filtered.TryGetValue(optionalKey, out var detail) && string.IsNullOrWhiteSpace(detail.Text))
+            {
+                continue;
+            }
+            if (actionLines.TryGetValue(line, out var action))
+            {
+                if (action.Text.Length > 0)
+                {
+                    textLines.Add($"{action.LinkLabel}: {action.Text}");
+                    htmlLines.Add(action.Html);
+                }
+                continue;
+            }
+            textLines.Add(ReplaceText(line, filtered));
+            htmlLines.Add(ReplaceHtml(line, filtered));
+        }
+        return new RenderedEmailTemplate(subject, string.Join("\n", textLines).ReplaceLineEndings("\n"), string.Join("<br>", htmlLines));
     }
 
     private static TemplateValue SummaryItems(
@@ -273,9 +304,13 @@ public static partial class StaffEmailTemplateRenderer
             var details = $"{index + 1}. {title}{(author.Length == 0 ? string.Empty : $" — {author}")}";
             var url = StaffApplicationLinkBuilder.BuildRecordUrl(staffUrl, item.Id, item.Stage, item.LibraryOrganizationId);
             textLines.Add(url is null ? details : $"{details}\n{linkLabel}: {url}");
-            htmlLines.Add(url is null
-                ? EncodeWithBreaks(details)
-                : $"{EncodeWithBreaks(details)}<br>{HtmlEncoder.Default.Encode(linkLabel)}: {Link(url).Html}");
+            var html = EmailBodyText.ToHtml(details);
+            if (url is not null)
+            {
+                var kind = item.IsAdditionalCopy ? "additional-copy task" : "request";
+                html += "<br>" + Link(url, $"View {kind} {item.Id} in ASAP").Html;
+            }
+            htmlLines.Add(html);
         }
         return new TemplateValue(string.Join("\n", textLines), string.Join("<br>", htmlLines));
     }
@@ -291,19 +326,14 @@ public static partial class StaffEmailTemplateRenderer
         var offset = 0;
         foreach (Match match in PlaceholderRegex().Matches(template))
         {
-            builder.Append(EncodeWithBreaks(template[offset..match.Index]));
+            builder.Append(HtmlEncoder.Default.Encode(template[offset..match.Index]));
             var key = match.Groups[1].Value;
             builder.Append(values.TryGetValue(key, out var value) ? value.Html : HtmlEncoder.Default.Encode(match.Value));
             offset = match.Index + match.Length;
         }
-        builder.Append(EncodeWithBreaks(template[offset..]));
+        builder.Append(HtmlEncoder.Default.Encode(template[offset..]));
         return builder.ToString();
     }
-
-    private static string EncodeWithBreaks(string value) => HtmlEncoder.Default.Encode(value)
-        .Replace("\r\n", "<br>", StringComparison.Ordinal)
-        .Replace("\r", "<br>", StringComparison.Ordinal)
-        .Replace("\n", "<br>", StringComparison.Ordinal);
 
     private static string SanitizeSubject(string subject)
     {
@@ -322,26 +352,26 @@ public static partial class StaffEmailTemplateRenderer
         return builder.ToString().Trim();
     }
 
-    private static TemplateValue Link(string? url)
+    private static TemplateValue Link(string? url, string label)
     {
         if (url is null)
         {
-            return Value(string.Empty);
+            return new TemplateValue(string.Empty, string.Empty, label);
         }
         var encoded = HtmlEncoder.Default.Encode(url);
-        return new TemplateValue(url, $"<a href=\"{encoded}\">{encoded}</a>");
+        return new TemplateValue(url, $"<a href=\"{encoded}\">{HtmlEncoder.Default.Encode(label)}</a>", label);
     }
 
     private static TemplateValue Value(string? value)
     {
         var text = value ?? string.Empty;
-        return new TemplateValue(text, EncodeWithBreaks(text));
+        return new TemplateValue(text, EmailBodyText.ToHtml(text));
     }
 
     private static string NonEmpty(string? value, string fallback) =>
         string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
 
-    private sealed record TemplateValue(string Text, string Html);
+    private sealed record TemplateValue(string Text, string Html, string? LinkLabel = null);
 
     [GeneratedRegex(@"{{(\w+)}}", RegexOptions.CultureInvariant)]
     private static partial Regex PlaceholderRegex();

@@ -1,4 +1,3 @@
-using System.Text.Encodings.Web;
 using System.Text.RegularExpressions;
 using Asap.Web.Features.Patron;
 
@@ -24,14 +23,10 @@ public static partial class PatronEmailTemplateRenderer
         var values = BuildValues(firstName, lastName, title, author, formatLabel, barcode);
 
         var subjectTemplate = RemoveBlankAuthorPhrase(template.SubjectTemplate, values["author"]);
-        var bodyTemplate = RemoveBlankAuthorPhrase(template.BodyTemplate, values["author"])
-            .Replace("\\n", "\n", StringComparison.Ordinal);
+        var bodyTemplate = EmailBodyText.FromTemplate(RemoveBlankAuthorPhrase(template.BodyTemplate, values["author"]));
+        var body = Replace(bodyTemplate, values).ReplaceLineEndings("\n");
         return new RenderedEmailTemplate(
-            Replace(subjectTemplate, values, escape: false),
-            Replace(bodyTemplate, values, escape: false),
-            Replace(bodyTemplate, values, escape: true)
-                .Replace("\r\n", "<br>", StringComparison.Ordinal)
-                .Replace("\n", "<br>", StringComparison.Ordinal));
+            Replace(subjectTemplate, values), body, EmailBodyText.ToHtml(body));
     }
 
     private static Dictionary<string, string> BuildValues(
@@ -56,18 +51,8 @@ public static partial class PatronEmailTemplateRenderer
 
     private static string Replace(
         string template,
-        IReadOnlyDictionary<string, string> values,
-        bool escape) =>
-        PlaceholderRegex().Replace(template, match =>
-        {
-            var key = match.Groups[1].Value;
-            if (!values.TryGetValue(key, out var value))
-            {
-                return match.Value;
-            }
-
-            return escape ? HtmlEncoder.Default.Encode(value) : value;
-        });
+        IReadOnlyDictionary<string, string> values) =>
+        PlaceholderRegex().Replace(template, match => values.GetValueOrDefault(match.Groups[1].Value, match.Value));
 
     private static string RemoveBlankAuthorPhrase(string template, string author) =>
         author.Length == 0

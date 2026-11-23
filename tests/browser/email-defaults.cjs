@@ -173,6 +173,15 @@ async function main() {
     assert.equal(await field('suggestion_submitted').locator('input[type=text]').inputValue(),
       expected[0].subject + ' {{barcode}} updated');
     assert.equal(await field('suggestion_submitted').locator('textarea').inputValue(), 'Library receipt {{title}} for {{name}}');
+    const receipt = field('suggestion_submitted');
+    await receipt.getByRole('button', { name: 'Preview email formats' }).click();
+    await receipt.locator('.settings-template-delivered-text').waitFor();
+    assert.equal(await receipt.locator('.settings-template-delivered-text').textContent(), 'Library receipt Example title for Alex Reader');
+    await receipt.locator('[data-template-status="body"] .settings-use-system').click();
+    await receipt.getByRole('button', { name: 'Preview email formats' }).click();
+    await receipt.locator('.settings-template-delivered-html').waitFor();
+    assert.match(await receipt.locator('.settings-template-delivered-text').textContent(), /Title: Example title\nFormat: Video Game/);
+    assert.match(await receipt.locator('.settings-template-delivered-text').textContent(), /\n\nAlex Reader$/);
     if (staffExpected.length) {
       const assignment = field('staff_title_assignment');
       assert.equal(await assignment.locator('input[type=text]').inputValue(), 'Library staff subject for {{recipientName}}');
@@ -183,6 +192,18 @@ async function main() {
     assert.deepEqual(inherited, overridden, 'A System edit must preserve the library override identity, version and sparse content.');
     await scan('library-desktop');
     await page.setViewportSize({ width: 390, height: 844 });
+    const notice = field('staff_new_patron_request');
+    const longTitle = 'X'.repeat(400);
+    await notice.locator('textarea').fill('Hello {{recipientName}},\n\nTitle: {{title}} <' + longTitle +
+      '> & details\\nAuthor / creator: {{author}}\n\nView request in ASAP: {{requestUrl}}');
+    await notice.getByRole('button', { name: 'Preview email formats' }).click();
+    const html = notice.locator('.settings-template-delivered-html');
+    await html.waitFor();
+    assert.equal(await html.locator('br').count(), 4);
+    assert.equal(await html.locator('u').textContent(), 'View request in ASAP');
+    assert.equal(await html.textContent(), 'Hello Casey Staff,Title: Example title <' + longTitle + '> & detailsView request in ASAP');
+    assert.equal(await notice.locator('.settings-template-delivered-text').textContent(),
+      'Hello Casey Staff,\n\nTitle: Example title <' + longTitle + '> & details\n\nView request in ASAP: https://staff.example.org/staff/?request=9007199254740993&stage=suggestion&scope=2');
     await scan('library-mobile');
     assert.deepEqual(report.externalRequests, []);
     assert.deepEqual(report.pageErrors, []);

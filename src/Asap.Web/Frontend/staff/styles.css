@@ -801,9 +801,9 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .settings-template-field textarea { min-height: 156px; line-height: 1.45; }
 .settings-template-preview { box-sizing: border-box; min-width: 0; padding: 12px; background: var(--soft); border: 1px solid var(--line); border-radius: 4px; }
 .settings-template-preview h3 { margin: 0 0 12px; color: var(--muted); font-size: .8rem; font-weight: 700; }
-.settings-template-preview > strong { display: block; font-size: .8rem; }
+.settings-template-preview strong { display: block; font-size: .8rem; }
 .settings-template-preview :is(p, strong) { overflow-wrap: anywhere; }
-.settings-template-preview-subject, .settings-template-preview-body { margin: 5px 0 14px; font-size: .86rem; white-space: pre-wrap; }
+.settings-template-preview-subject, .settings-template-preview-body, .settings-template-delivered-text { margin: 5px 0 14px; font-size: .86rem; white-space: pre-wrap; }
 .settings-template-preview-note { margin-bottom: 0; font-size: .75rem; }
 .settings-template-error { margin: 12px 0 0; color: var(--danger); overflow-wrap: anywhere; }
 .settings-template-error:empty { display: none; }

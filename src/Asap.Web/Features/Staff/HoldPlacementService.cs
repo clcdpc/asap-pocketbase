@@ -1944,9 +1944,12 @@ public sealed class HoldPlacementService(
                 .Select(item => item.DisplayName)
                 .SingleOrDefaultAsync(cancellationToken));
         }
-        var body = pickupName is null
-            ? $"A hold has been placed for {request.Title}."
-            : $"A hold has been placed for {request.Title} at {pickupName}.";
+        var body = $"A hold has been placed for {request.Title}.";
+        if (pickupName is not null)
+        {
+            body += $"\n\nPickup location: {pickupName}";
+        }
+        body += "\n\nPlease wait for your pickup notice before visiting the library.";
 
         var outbox = new EmailOutbox
         {

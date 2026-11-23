@@ -17,7 +17,7 @@ const EVENTS = {
   suggestion_submitted: 'Sent when a suggestion is received',
   purchase_approved: 'Sent when a purchase is approved',
   already_owned: 'Sent when a suggested title is already owned',
-  hold_placed: 'Configured text for editing; no verified sending path',
+  hold_placed: 'Configured text for editing',
   rejected: 'Sent when a suggestion is rejected'
 };
 let nextCardId = 0;
@@ -43,7 +43,7 @@ export function exampleTemplateText(text, templateKey, usage, advertised = PLACE
   return String(text ?? '').replace(/{{(\w+)}}/g, (token, key) => supported.has(key) ? examples.get(key) : token);
 }
 
-export function createEmailTemplatePlaceholders({ root, panel, listen, captureContext, isContextCurrent, isActive,
+export function createEmailTemplatePlaceholders({ root, panel, listen, captureContext, isContextCurrent, isActive, renderEmail,
   onReveal = () => {}, onValidationError = () => {} }) {
   const document = root.ownerDocument;
   const view = document.defaultView;
@@ -173,14 +173,29 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
     card.subjectExcerpt.textContent = `Subject: ${excerpt(subject)}`;
     card.bodyExcerpt.textContent = `Body: ${excerpt(body)}`;
     card.previewSubject.textContent = exampleTemplateText(subject, target.key, target.usage, advertised, [...staffDefinitions.values()]);
-    card.previewBody.textContent = exampleTemplateText(body, target.key, target.usage, advertised, [...staffDefinitions.values()]);
+    const exampleBody = target.usage === 'builtin' && target.key !== 'hold_placed' ? body.replaceAll('\\n', '\n') : body;
+    card.previewBody.textContent = exampleTemplateText(exampleBody, target.key, target.usage, advertised, [...staffDefinitions.values()]);
+    const namedRejection = target.usage === 'additional' && /^rejection:/i.test(target.key);
+    card.renderButton.hidden = !renderEmail || !(namedRejection ||
+      target.usage === 'builtin' && (definitionFor(card) || PATRON_CONTEXTS.has(target.key)));
+    card.renderButton.textContent = namedRejection ? 'Preview rejection email formats' : 'Preview email formats';
+    if (card.renderedDraft && (card.renderedDraft.subject !== subject || card.renderedDraft.body !== body ||
+      card.renderedDraft.key !== target.key || card.details.hidden || !isContextCurrent(card.renderedDraft.context))) {
+      card.renderedDraft.controller.abort();
+      card.renderedDraft = null;
+      card.delivery.replaceChildren();
+      card.example.hidden = false;
+    }
+    card.previewHeading.textContent = card.example.hidden ? 'Email preview (example data)' : 'Editing example';
     const keys = supported(card);
     card.note.textContent = definitionFor(card)
       ? 'Preview uses synthetic staff and request data. Missing optional values are empty; unsupported placeholders stay visible. No email is sent.'
+      : target.usage === 'builtin' && target.key === 'hold_placed'
+      ? 'Editing preview only. The hold workflow composes its own plain-text notice with the pickup location when available.'
       : !keys.length
       ? 'Editing preview only. Placeholder support and a sending path are not verified for this configured template. Unresolved placeholders remain literal. No email sent.'
       : target.usage === 'additional'
-        ? 'Example only. Named rejection templates, including timeouts, share support for {{title}} only. Other placeholders remain literal. No email sent.'
+        ? 'The editing example shows {{title}}, which works for all rejections, including timeouts. A review timeout sends plain text and substitutes only the title. No email sent.'
         : 'Example only, using synthetic data. Unresolved placeholders remain literal; actual values may be blank. No email sent.';
     for (const entry of card.entries) {
       entry.trigger.disabled = !editable(entry) || !keys.length;
@@ -201,6 +216,44 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
       button.setAttribute('aria-describedby', description.id);
       button.append(make('span', '', item.name), make('code', '', `{{${item.key}}}`), description);
       entry.popup.append(button);
+    }
+  }
+
+  async function previewDelivery(card) {
+    card.renderedDraft?.controller.abort();
+    const target = identity(card.owner);
+    const draft = { key: target.key, subject: effectiveText(card, 'subject'), body: effectiveText(card, 'body'),
+      context: captureContext(), controller: new view.AbortController() };
+    card.renderedDraft = draft;
+    card.delivery.textContent = 'Rendering example…';
+    const current = () => card.renderedDraft === draft && isActive() && isContextCurrent(draft.context) &&
+      card.owner.isConnected && !card.details.hidden;
+    try {
+      const mail = await renderEmail({ templateKey: target.usage === 'additional' ? 'rejected' : target.key, subject: draft.subject, body: draft.body },
+        draft.controller.signal);
+      if (!current()) return;
+      // Copy only text, breaks and link labels. Example destinations are deliberately inert in Settings.
+      const parsed = new view.DOMParser().parseFromString(mail.bodyHtml, 'text/html');
+      const html = make('p', 'settings-template-delivered-html');
+      for (const child of parsed.body.childNodes) {
+        if (child.nodeName === 'BR') html.append(make('br'));
+        else if (child.nodeName === 'A') html.append(make('u', '', child.textContent));
+        else html.append(document.createTextNode(child.textContent));
+      }
+      card.example.hidden = true;
+      card.previewHeading.textContent = 'Email preview (example data)';
+      card.delivery.replaceChildren(make('strong', '', 'Subject'), make('p', '', mail.subject),
+        make('strong', '', 'HTML body'), html, make('strong', '', 'Plain-text body'),
+        make('p', 'settings-template-delivered-text', mail.bodyText));
+    } catch (error) {
+      if (current() && !draft.controller.signal.aborted) card.delivery.textContent = error.message || 'Email preview could not be rendered.';
+    } finally {
+      if (card.renderedDraft === draft && !current()) {
+        card.renderedDraft = null;
+        card.delivery.replaceChildren();
+        card.example.hidden = false;
+        card.previewHeading.textContent = 'Editing example';
+      }
     }
   }
 
@@ -319,14 +372,20 @@ export function createEmailTemplatePlaceholders({ root, panel, listen, captureCo
     for (const child of children) (child.querySelector('[data-template-field]') ? editor : admin).append(child);
     const preview = make('aside', 'settings-template-preview');
     preview.dataset.settingsIgnore = 'true';
-    const previewHeading = make('h3', '', 'Preview (example data)');
-    previewHeading.id = `${card.details.id}-preview`;
-    preview.setAttribute('aria-labelledby', previewHeading.id);
+    card.previewHeading = make('h3', '', 'Editing example');
+    card.previewHeading.id = `${card.details.id}-preview`;
+    preview.setAttribute('aria-labelledby', card.previewHeading.id);
     card.previewSubject = make('p', 'settings-template-preview-subject');
     card.previewBody = make('p', 'settings-template-preview-body');
     card.note = make('p', 'field-help settings-template-preview-note');
-    preview.append(previewHeading, make('strong', '', 'Subject'), card.previewSubject,
-      make('strong', '', 'Body'), card.previewBody, card.note);
+    card.renderButton = make('button', 'secondary-button', 'Preview email formats');
+    card.renderButton.type = 'button';
+    card.delivery = make('div', 'settings-template-delivery');
+    card.delivery.setAttribute('aria-live', 'polite');
+    listen(card.renderButton, 'click', () => previewDelivery(card));
+    card.example = make('div', 'settings-template-example');
+    card.example.append(make('strong', '', 'Subject'), card.previewSubject, make('strong', '', 'Body'), card.previewBody);
+    preview.append(card.previewHeading, card.example, card.delivery, card.note, card.renderButton);
     card.error = make('p', 'settings-template-error');
     card.error.id = `${card.details.id}-error`;
     card.error.setAttribute('role', 'alert');
