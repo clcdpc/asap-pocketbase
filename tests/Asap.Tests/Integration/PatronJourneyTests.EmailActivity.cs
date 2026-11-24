@@ -55,6 +55,8 @@ public sealed partial class PatronJourneyTests
                 item.TitleRequestId == accepted.Id && item.MessageKind == "confirmation");
             Assert.AreEqual(outbox.Id.ToString(CultureInfo.InvariantCulture), evidence.OperationReference);
             Assert.AreEqual("confirmation", outbox.MessageKind);
+            StringAssert.Contains(outbox.BodyHtml!, "<br><br>Title:");
+            StringAssert.Contains(outbox.BodyText!, "\n\nTitle:");
             Assert.AreEqual(1, await context.EmailDeliveryEvents.CountAsync(item => item.EmailOutboxId == outbox.Id));
             Assert.AreEqual(scenario == "requested", dispatch.EnqueuedIds.Contains(outbox.Id));
             Assert.AreEqual("suggestion", detail.Status, "Suppression must not change successful request creation.");
@@ -137,6 +139,8 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual("pending", row.Status);
                 Assert.AreEqual(1, await context.EmailDeliveryEvents.CountAsync(item => item.EmailOutboxId == row.Id));
                 Assert.IsTrue(dispatch.EnqueuedIds.Contains(row.Id));
+                StringAssert.Contains(row.BodyText!, "\n\nA patron submitted a new purchase request to Test Library.");
+                StringAssert.Contains(row.BodyHtml!, "<br><br>Title:");
                 StringAssert.Contains(row.BodyText!, persistedTitle);
                 StringAssert.Contains(row.BodyText!, "Activity Author");
                 StringAssert.Contains(row.BodyText!, "Test Library");
@@ -147,6 +151,16 @@ public sealed partial class PatronJourneyTests
 
             Assert.AreEqual($"new-request-primary-{subscribed.Id}@example.org", rows[subscribed.Id].ToAddress,
                 "New-request mail uses the primary address even when a weekly address exists.");
+            var notice = rows[subscribed.Id];
+            var capture = new FileEmailSender(TestContext.TestResultsDirectory!, TimeProvider.System);
+            var receipt = await capture.SendAsync(new EmailEnvelope(notice.Id, notice.OrganizationId, notice.BusinessKey,
+                notice.ToAddress!, notice.FromAddress!, notice.FromName, notice.Subject!, notice.BodyText, notice.BodyHtml),
+                TestContext.CancellationToken);
+            var path = Path.Combine(TestContext.TestResultsDirectory!, receipt.ProviderMessageId!["file:".Length..] + ".html");
+            var captured = await File.ReadAllTextAsync(path, TestContext.CancellationToken);
+            StringAssert.Contains(captured, notice.BodyHtml!);
+            StringAssert.Contains(captured, System.Text.Encodings.Web.HtmlEncoder.Default.Encode(notice.BodyText!));
+            TestContext.AddResultFile(path);
             Assert.IsFalse(rows.ContainsKey(optedOut.Id));
             Assert.IsFalse(rows.ContainsKey(inactive.Id));
             Assert.IsFalse(rows.ContainsKey(foreign.Id));

@@ -8,8 +8,11 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
-    public async Task TimeoutQueuesUseStatusSpecificAgesAndNeverExpireOutstandingPurchases()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task TimeoutQueuesUseStatusSpecificAgesAndNeverExpireOutstandingPurchases(bool useTemplate)
     {
+        const string suggestionTitle = "Café\r\nand\nTea\r— A Guide";
         var contextFactory = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var scope = Slice5IsolatedLibraryId;
         await EnsureSlice5IsolatedLibraryAsync(contextFactory, scope);
@@ -22,6 +25,7 @@ public sealed partial class PatronJourneyTests
         string? originalSystemEmailAddress;
         string? originalSystemEmailName;
         var createdLibraryEmail = false;
+        EmailTemplate? timeoutTemplate = null;
         await using (var seed = await contextFactory.CreateDbContextAsync())
         {
             var settings = await seed.WorkflowSettings.SingleOrDefaultAsync(item => item.OrganizationId == scope);
@@ -59,6 +63,18 @@ public sealed partial class PatronJourneyTests
             settings.OutstandingTimeoutEnabled = true;
             settings.OutstandingTimeoutDays = 30;
             settings.OutstandingTimeoutSendEmail = true;
+            if (useTemplate)
+            {
+                timeoutTemplate = new EmailTemplate
+                {
+                    OrganizationId = scope, TemplateKey = "rejection:timeout-copy", IsCustom = true,
+                    DisplayName = "Timeout notice", SubjectTemplate = " \tReview closed:\r\n{{title}}\u001b ",
+                    BodyTemplate = "The review period ended.\n\nTitle: {{title}}\nYour suggestion is now closed."
+                };
+                seed.EmailTemplates.Add(timeoutTemplate);
+                await seed.SaveChangesAsync();
+            }
+            settings.OutstandingTimeoutRejectionTemplateId = timeoutTemplate?.Id;
             settings.PendingHoldTimeoutEnabled = true;
             settings.PendingHoldTimeoutDays = 30;
             settings.HoldPickupTimeoutEnabled = true;
@@ -92,6 +108,7 @@ public sealed partial class PatronJourneyTests
 
             var format = await seed.MaterialFormats.SingleAsync(item => item.Code == "book");
             var suggestion = NewRequest(scope, "timeout-suggestion", "suggestion", old, now);
+            suggestion.Title = suggestionTitle;
             suggestion.Email = "timeout-recipient@example.org";
             var purchase = NewRequest(scope, "timeout-purchase", "outstanding_purchase", old, old);
             purchase.BibId = null;
@@ -168,6 +185,10 @@ public sealed partial class PatronJourneyTests
             var timeoutMail = await verify.EmailOutbox.AsNoTracking().SingleAsync(item =>
                 item.BusinessKey == $"timeout:OutstandingTimeout:{requests["timeout-suggestion"].Id}");
             Assert.AreEqual("pending", timeoutMail.Status);
+            Assert.IsNull(timeoutMail.BodyHtml);
+            Assert.AreEqual(useTemplate ? "Review closed: Café and Tea — A Guide" : "Suggestion update: Café and Tea — A Guide", timeoutMail.Subject);
+            Assert.AreEqual(useTemplate ? $"The review period ended.\n\nTitle: {suggestionTitle}\nYour suggestion is now closed."
+                : $"The review period has ended. Your suggestion was closed without being selected for purchase.\n\nTitle: {suggestionTitle}", timeoutMail.BodyText);
             await AssertRequestMailEvidenceAsync(timeoutMail, requests["timeout-suggestion"].Id, "timeout");
             Assert.AreEqual("system.sender@example.org", timeoutMail.FromAddress);
             Assert.AreEqual("Library Sender", timeoutMail.FromName);
@@ -188,6 +209,7 @@ public sealed partial class PatronJourneyTests
                 settings.OutstandingTimeoutEnabled = originalSettings.OutstandingTimeoutEnabled;
                 settings.OutstandingTimeoutDays = originalSettings.OutstandingTimeoutDays;
                 settings.OutstandingTimeoutSendEmail = originalSettings.OutstandingTimeoutSendEmail;
+                settings.OutstandingTimeoutRejectionTemplateId = originalSettings.OutstandingTimeoutRejectionTemplateId;
                 settings.PendingHoldTimeoutEnabled = originalSettings.PendingHoldTimeoutEnabled;
                 settings.PendingHoldTimeoutDays = originalSettings.PendingHoldTimeoutDays;
                 settings.HoldPickupTimeoutEnabled = originalSettings.HoldPickupTimeoutEnabled;
@@ -210,6 +232,10 @@ public sealed partial class PatronJourneyTests
                 libraryEmail.FromName = originalLibraryEmail.FromName;
             }
             await restore.SaveChangesAsync();
+            if (timeoutTemplate is not null)
+            {
+                await restore.EmailTemplates.Where(item => item.Id == timeoutTemplate.Id).ExecuteDeleteAsync();
+            }
         }
     }
 

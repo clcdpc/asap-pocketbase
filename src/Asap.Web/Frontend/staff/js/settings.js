@@ -487,6 +487,7 @@ export function createSettingsController({
 
   const placeholders = createEmailTemplatePlaceholders({
     root, panel: root.querySelector('#settings-templates'), listen,
+    renderEmail: (body, signal) => authorizedJson('/api/asap/staff/settings/email-preview', { method: 'POST', body, signal }),
     onReveal: () => activatePanel('templates'),
     onValidationError: (control, message) => {
       if (templateValidationTarget) templateValidationTarget = { control, message };

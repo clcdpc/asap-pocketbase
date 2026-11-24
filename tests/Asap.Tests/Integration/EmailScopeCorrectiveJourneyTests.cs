@@ -232,6 +232,12 @@ public sealed partial class PatronJourneyTests
                     Assert.IsFalse(string.IsNullOrWhiteSpace(outbox.BodyText));
                     Assert.IsFalse(string.IsNullOrWhiteSpace(outbox.BodyHtml));
                     Assert.IsFalse(outbox.BodyHtml!.Contains("<script>", StringComparison.OrdinalIgnoreCase));
+                    StringAssert.Contains(outbox.BodyHtml, "<br><br>");
+                    if (!invalidStaffUrl)
+                    {
+                        StringAssert.Contains(outbox.BodyHtml, kind.StartsWith("additional_copy", StringComparison.Ordinal)
+                            ? ">View additional-copy task in ASAP</a>" : ">View request in ASAP</a>");
+                    }
                     if (invalidStaffUrl)
                     {
                         Assert.IsFalse(outbox.BodyText!.Contains("attacker.example.org", StringComparison.Ordinal));
@@ -243,7 +249,7 @@ public sealed partial class PatronJourneyTests
                     switch (kind)
                     {
                         case "assignment":
-                            Assert.AreEqual("ASAP request assigned", outbox.Subject);
+                            Assert.AreEqual($"Title request assigned: {title.Title}", outbox.Subject);
                             StringAssert.Contains(outbox.BodyText!, "Scoped mail <script> &");
                             StringAssert.Contains(outbox.BodyHtml, "Scoped mail &lt;script&gt; &amp;");
                             if (invalidStaffUrl)
@@ -256,7 +262,7 @@ public sealed partial class PatronJourneyTests
                             }
                             break;
                         case "purchase_reminder":
-                            Assert.AreEqual("ASAP purchase reminder", outbox.Subject);
+                            Assert.AreEqual($"Purchase reminder: {title.Title}", outbox.Subject);
                             if (invalidStaffUrl)
                             {
                                 Assert.IsFalse(outbox.BodyText!.Contains("attacker.example.org", StringComparison.Ordinal));
@@ -270,8 +276,8 @@ public sealed partial class PatronJourneyTests
                         case "additional_copy_assignment":
                             var taskId = copy.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
                             Assert.AreEqual(kind == "additional_copy_reminder"
-                                ? "ASAP additional-copy reminder" : "ASAP additional-copy task assigned", outbox.Subject);
-                            StringAssert.Contains(outbox.BodyText!, $"Additional-copy task {taskId}");
+                                ? $"Additional-copy reminder: {copy.Title}" : $"Additional-copy task assigned: {copy.Title}", outbox.Subject);
+                            StringAssert.Contains(outbox.BodyText!, $"Task ID: {taskId}");
                             if (invalidStaffUrl)
                             {
                                 Assert.IsFalse(outbox.BodyText!.Contains("attacker.example.org", StringComparison.Ordinal));

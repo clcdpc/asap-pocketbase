@@ -172,9 +172,9 @@ public sealed partial class PatronJourneyTests
                     .OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).Take(5)
                     .Select(item => new WeeklyPreparationExample(item.Title, item.Author, item.Id.ToString(),
                         item.LibraryOrganizationId, "additional_copies", item.BibId.ToString())).ToArray();
-                AssertWeeklyPreparationSection(firstA.BodyText!, "New submissions", "7 active requests", librarySubmissions);
-                AssertWeeklyPreparationSection(firstA.BodyText!, "Approved purchases without bibs", "7 active requests", libraryPurchases);
-                AssertWeeklyPreparationSection(firstA.BodyText!, "Additional copies", "7 open tasks", libraryCopies);
+                AssertWeeklyPreparationSection(firstA.BodyText!, "New submissions", "Active requests: 7", librarySubmissions);
+                AssertWeeklyPreparationSection(firstA.BodyText!, "Purchases awaiting BIBs", "Active requests: 7", libraryPurchases);
+                AssertWeeklyPreparationSection(firstA.BodyText!, "Additional copies", "Open tasks: 7", libraryCopies);
                 StringAssert.Contains(firstA.BodyHtml!, "&lt;New 99442-6&gt;");
                 Assert.IsFalse(firstA.BodyHtml!.Contains("<New 99442-6>", StringComparison.Ordinal));
                 Assert.IsFalse(firstA.BodyText!.Contains($"{libraryB}-", StringComparison.Ordinal));
@@ -214,9 +214,9 @@ public sealed partial class PatronJourneyTests
                     var systemCopies = allCopies.OrderByDescending(item => item.CreatedUtc).ThenByDescending(item => item.Id).Take(5)
                         .Select(item => new WeeklyPreparationExample(item.Title, item.Author, item.Id.ToString(),
                             item.LibraryOrganizationId, "additional_copies", item.BibId.ToString())).ToArray();
-                    AssertWeeklyPreparationSection(global.BodyText!, "New submissions", $"{newTitles.Length} active requests", systemSubmissions);
-                    AssertWeeklyPreparationSection(global.BodyText!, "Approved purchases without bibs", $"{purchases.Length} active requests", systemPurchases);
-                    AssertWeeklyPreparationSection(global.BodyText!, "Additional copies", $"{allCopies.Length} open tasks", systemCopies);
+                    AssertWeeklyPreparationSection(global.BodyText!, "New submissions", $"Active requests: {newTitles.Length}", systemSubmissions);
+                    AssertWeeklyPreparationSection(global.BodyText!, "Purchases awaiting BIBs", $"Active requests: {purchases.Length}", systemPurchases);
+                    AssertWeeklyPreparationSection(global.BodyText!, "Additional copies", $"Open tasks: {allCopies.Length}", systemCopies);
                     var libraryBStaff = rows.Single(row => row.RecipientStaffUserId == staffB.Id);
                     Assert.AreEqual("System weekly: 7", libraryBStaff.Subject,
                         "A library without an override inherits the current system template.");
@@ -320,7 +320,7 @@ public sealed partial class PatronJourneyTests
             var url = $"https://staff.example.org/staff/?request={item.Id}&stage={item.Stage}&scope={item.LibraryOrganizationId}";
             return $"{detail}\nView {kind}: {url}";
         });
-        var expected = $"{heading}\n{count}\nFive most recent:\n" + string.Join("\n", expectedLines);
+        var expected = $"{heading}\n{count}\nRecent items (up to five):\n" + string.Join("\n", expectedLines);
         StringAssert.Contains(body, expected);
         var section = body[(body.IndexOf(heading, StringComparison.Ordinal) + heading.Length)..].Split("\n\n", 2)[0];
         Assert.AreEqual(5, section.Split('\n').Count(line => line.Length > 2 && char.IsDigit(line[0]) && line[1] == '.'));

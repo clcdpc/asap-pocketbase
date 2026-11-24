@@ -980,12 +980,12 @@ public sealed partial class TitleRequestMutationService(
                 item.SourceTemplateId == systemTemplate.Id, cancellationToken);
         var (defaultSubject, defaultBody) = templateKey == "purchase_approved"
             ? ("Purchase approved: {{title}}",
-                "Hello {{name}},\n\nGood news. The library has approved your suggestion for purchase: {{title}} by {{author}} in {{format}} format.\n\nThis request is now awaiting ordering and cataloging.\n\nThank you for your suggestion.")
-            : ("{{title}} is already available",
-                "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nThe library already owns this title or has it on order.\n\nThank you for using the library's suggestion service.");
+                "Hello {{name}},\n\nThe library has approved your suggestion for purchase.\n\nTitle: {{title}} by {{author}}\nFormat: {{format}}\n\nThe item is awaiting ordering and cataloging.")
+            : ("Already owned or on order: {{title}}",
+                "Hello {{name}},\n\nThank you for your suggestion. The library already owns this title or has it on order.\n\nTitle: {{title}} by {{author}}\nFormat: {{format}}");
         var template = new EffectiveEmailTemplate(templateKey,
             Clean(libraryTemplate?.SubjectTemplate) ?? Clean(systemTemplate?.SubjectTemplate) ?? defaultSubject,
-            Clean(libraryTemplate?.BodyTemplate) ?? Clean(systemTemplate?.BodyTemplate) ?? defaultBody);
+            EmailBodyText.NonBlank(libraryTemplate?.BodyTemplate) ?? EmailBodyText.NonBlank(systemTemplate?.BodyTemplate) ?? defaultBody);
         var formatLabel = await context.MaterialFormats.AsNoTracking()
             .Where(item => item.Id == request.MaterialFormatId)
             .Select(item => item.Label)

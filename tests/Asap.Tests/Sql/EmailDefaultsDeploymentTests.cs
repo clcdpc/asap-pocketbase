@@ -137,6 +137,69 @@ public sealed partial class EmailDefaultsDeploymentTests
     }
 
     [TestMethod]
+    public async Task RedeployRefreshesExactStockInPlaceAndPreservesLineageAndNearMatches()
+    {
+        const string priorSubject = "New purchase request: {{title}}";
+        const string priorBody = "Hello {{recipientName}},\n\nA new patron purchase request was submitted to {{libraryName}}.\n\n" +
+            "Title request: {{requestId}}\nTitle: {{title}}\nAuthor/creator: {{author}}\nFormat: {{format}}\n\nView request: {{requestUrl}}";
+        var fresh = await ReadTemplatesAsync();
+        var system = fresh.Single(item => item.Key == StaffEmailTemplateCatalog.NewPatronRequest);
+        await using var connection = new SqlConnection(target);
+        await connection.OpenAsync();
+        await using var seed = new SqlCommand("""
+            INSERT INTO [asap].[Organization] ([Id], [DisplayName], [OrganizationCodeId], [ParentOrganizationId], [IsActive])
+            VALUES (2, N'Template upgrade library', 2, 1, 1);
+            INSERT INTO [asap].[EmailTemplate]
+                (OrganizationId, SourceTemplateId, TemplateKey, DisplayName, SortOrder, SubjectTemplate, BodyTemplate, IsCustom, IsHidden)
+            SELECT 2, Id, TemplateKey, DisplayName, SortOrder, NULL, @body, 0, 0 FROM [asap].[EmailTemplate] WHERE Id = @id;
+            UPDATE [asap].[EmailTemplate] SET BodyTemplate = @historical WHERE TemplateKey = 'suggestion_submitted';
+            """, connection);
+        seed.Parameters.AddWithValue("@id", system.Id);
+        seed.Parameters.AddWithValue("@body", priorBody);
+        seed.Parameters.AddWithValue("@historical", BuiltInEmailTemplateExpectations.HistoricalSubmissionBody);
+        await seed.ExecuteNonQueryAsync();
+        var library = (await ReadTemplatesAsync()).Single(item => item.OrganizationId == 2);
+        foreach (var (subject, body, hidden, name) in new[]
+        {
+            (priorSubject, priorBody, false, system.Name), (priorSubject.ToUpperInvariant(), priorBody, false, system.Name),
+            (priorSubject, priorBody + " ", false, system.Name), (priorSubject, priorBody + "\0", false, system.Name),
+            (priorSubject, "", false, system.Name), (priorSubject, priorBody, true, system.Name),
+            (priorSubject, priorBody, false, "Renamed")
+        })
+        {
+            await using var update = new SqlCommand("""
+                UPDATE [asap].[EmailTemplate] SET SubjectTemplate = @subject, BodyTemplate = @body,
+                    IsHidden = @hidden, DisplayName = @name WHERE Id = @id;
+                """, connection);
+            update.Parameters.AddWithValue("@id", system.Id);
+            update.Parameters.AddWithValue("@subject", subject);
+            update.Parameters.AddWithValue("@body", body);
+            update.Parameters.AddWithValue("@hidden", hidden);
+            update.Parameters.AddWithValue("@name", name!);
+            await update.ExecuteNonQueryAsync();
+            var before = (await ReadTemplatesAsync()).Single(item => item.Id == system.Id);
+            Deploy();
+            var after = await ReadTemplatesAsync();
+            var upgraded = after.Single(item => item.Id == system.Id);
+            if (subject == priorSubject && body == priorBody && !hidden && name == system.Name)
+            {
+                Assert.AreEqual(system with { Version = upgraded.Version }, upgraded);
+                await using var context = new AsapDbContext(new DbContextOptionsBuilder<AsapDbContext>().UseSqlServer(target).Options);
+                var effective = await StaffEmailTemplateCatalog.LoadEffectiveAsync(context, 2, system.Key, CancellationToken.None);
+                Assert.AreEqual(system.Subject, effective!.Subject);
+                Assert.AreEqual(priorBody, effective.Body);
+            }
+            else
+            {
+                Assert.AreEqual(before, upgraded);
+            }
+            Assert.AreEqual(library, after.Single(item => item.Id == library.Id));
+            Assert.AreEqual(fresh.Single(item => item.Key == "suggestion_submitted").Body,
+                after.Single(item => item.Key == "suggestion_submitted").Body);
+        }
+    }
+
+    [TestMethod]
     public async Task StaffRequestPreferenceBackfillsExistingAccountsAndRedeploymentPreservesOptOuts()
     {
         await using var connection = new SqlConnection(target);

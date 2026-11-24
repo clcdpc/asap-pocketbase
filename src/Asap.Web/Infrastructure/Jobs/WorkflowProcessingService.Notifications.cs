@@ -506,8 +506,9 @@ public sealed partial class WorkflowProcessingService
         var template = settings.OutstandingTimeoutRejectionTemplateId.HasValue
             ? await context.EmailTemplates.AsNoTracking().SingleOrDefaultAsync(item => item.Id == settings.OutstandingTimeoutRejectionTemplateId.Value, cancellationToken)
             : null;
-        var subject = template?.SubjectTemplate?.Replace("{{title}}", request.Title, StringComparison.Ordinal) ?? "Suggestion update";
-        var body = template?.BodyTemplate?.Replace("{{title}}", request.Title, StringComparison.Ordinal) ?? "Your suggestion was not selected before the review timeout.";
+        var subject = template?.SubjectTemplate?.Replace("{{title}}", request.Title, StringComparison.Ordinal) ?? $"Suggestion update: {request.Title}";
+        var body = template?.BodyTemplate?.Replace("{{title}}", request.Title, StringComparison.Ordinal)
+            ?? $"The review period has ended. Your suggestion was closed without being selected for purchase.\n\nTitle: {request.Title}";
         var ready = !string.IsNullOrWhiteSpace(request.Email) && !string.IsNullOrWhiteSpace(fromAddress) && readiness.IsConfigured;
         var allowed = ready && recipientDomainPolicy.IsAllowed(request.Email!);
         var outbox = new EmailOutbox
@@ -520,7 +521,7 @@ public sealed partial class WorkflowProcessingService
             ToAddress = request.Email,
             FromAddress = fromAddress,
             FromName = fromName,
-            Subject = subject,
+            Subject = EmailSubject.ToSingleLine(subject),
             BodyText = body,
             Status = allowed ? "pending" : "suppressed",
             SuppressionReason = allowed ? null : ready ? "recipient_domain_not_allowed" : "mail_not_configured",

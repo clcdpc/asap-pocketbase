@@ -1,4 +1,5 @@
 using System.Globalization;
+using Asap.Web.Features.Email;
 using Asap.Web.Infrastructure.Data;
 
 namespace Asap.Web.Features.Staff;
@@ -24,8 +25,8 @@ internal static class RejectionTemplatePolicy
             "Default rejection email",
             Clean(overrideRow?.SubjectTemplate) ?? Clean(source?.SubjectTemplate) ??
                 "Update on your suggestion: {{title}}",
-            Clean(overrideRow?.BodyTemplate) ?? Clean(source?.BodyTemplate) ??
-                "Hello {{name}},\n\nThank you for suggesting {{title}} by {{author}} in {{format}} format.\n\nAfter review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.\n\nThank you for helping us build a collection that reflects our community.",
+            EmailBodyText.NonBlank(overrideRow?.BodyTemplate) ?? EmailBodyText.NonBlank(source?.BodyTemplate) ??
+                "Hello {{name}},\n\nThank you for suggesting this item for the collection.\n\nTitle: {{title}} by {{author}}\nFormat: {{format}}\n\nAfter review, we are unable to add it at this time. We appreciate your suggestion.",
             source?.IsHidden == true || overrideRow?.IsHidden == true);
     }
 
@@ -80,7 +81,7 @@ internal static class RejectionTemplatePolicy
         }
 
         var subject = Clean(overrideRow?.SubjectTemplate) ?? Clean(source.SubjectTemplate);
-        var body = Clean(overrideRow?.BodyTemplate) ?? Clean(source.BodyTemplate);
+        var body = EmailBodyText.NonBlank(overrideRow?.BodyTemplate) ?? EmailBodyText.NonBlank(source.BodyTemplate);
         if (!source.TemplateKey.StartsWith("rejection:", StringComparison.OrdinalIgnoreCase) ||
             source.IsHidden || overrideRow?.IsHidden == true || subject is null || body is null)
         {

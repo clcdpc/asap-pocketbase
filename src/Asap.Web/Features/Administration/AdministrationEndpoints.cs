@@ -2,12 +2,14 @@ using Asap.Web.Infrastructure.Data;
 using Asap.Shared;
 using Asap.Web.Features.Staff;
 using Asap.Web.Features.Email;
+using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Jobs;
 using Hangfire;
 
 namespace Asap.Web.Features.Administration;
 
 public sealed record AdministrationVersionInput(string? Version);
+public sealed record EmailTemplatePreviewInput(string TemplateKey, string Subject, string Body);
 public sealed record EmailTestIntentInput(string? ConfigurationVersion, string? IntendedDeliveryMode);
 
 public static class AdministrationEndpoints
@@ -28,6 +30,9 @@ public static class AdministrationEndpoints
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
         endpoints.MapPost("/api/asap/staff/settings/catalog-preview", PreviewCatalogAsync)
+            .RequireAuthorization()
+            .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapPost("/api/asap/staff/settings/email-preview", PreviewEmail)
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
         endpoints.MapPost("/api/asap/staff/settings/logo", SaveLogoAsync)
@@ -156,6 +161,48 @@ public static class AdministrationEndpoints
         {
             return Invalid(exception);
         }
+    }
+
+    private static IResult PreviewEmail(HttpContext context, EmailTemplatePreviewInput input)
+    {
+        var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+        if (actor.Role is not (StaffRole.Admin or StaffRole.SuperAdmin))
+        {
+            return Results.Forbid();
+        }
+        if (input.Subject is null || input.Body is null)
+        {
+            return Results.BadRequest();
+        }
+
+        // Render the editor's effective draft against synthetic data, including a missing author.
+        // This operation does not load records, select recipients or create an outbox entry.
+        if (input.TemplateKey is "suggestion_submitted" or "purchase_approved" or "already_owned" or "rejected")
+        {
+            var patron = new PatronSnapshot(7, "00000000000000", null, "Alex", "Reader", null, null, 2, 2, "Library Two", null);
+            return Results.Json(PatronEmailTemplateRenderer.Render(
+                new EffectiveEmailTemplate(input.TemplateKey, input.Subject, input.Body),
+                patron, "Example title", null, "Video Game", patron.Barcode));
+        }
+        if (StaffEmailTemplateCatalog.Find(input.TemplateKey) is null)
+        {
+            return Results.BadRequest();
+        }
+        const string staffUrl = "https://staff.example.org/staff/";
+        const string requestId = "9007199254740993", taskId = "9007199254740994";
+        var template = new EffectiveStaffEmailTemplate(input.TemplateKey, input.Subject, input.Body, false);
+        if (input.TemplateKey == StaffEmailTemplateCatalog.WeeklySummary)
+        {
+            return Results.Json(StaffEmailTemplateRenderer.RenderWeekly(template, new StaffEmailWeeklyValues(
+                2, staffUrl, "Casey Staff", "Library Two", new DateTime(2026, 11, 5), new DateTime(2026, 11, 12),
+                1, [new(requestId, 2, "Example title", null, null, false, RequestStatus.Suggestion)],
+                0, [], 1, [new(taskId, 2, "Example copy", null, "123456", true, "additional_copies")])));
+        }
+        var isTask = input.TemplateKey is StaffEmailTemplateCatalog.AdditionalCopyReminder or StaffEmailTemplateCatalog.AdditionalCopyAssignment;
+        return Results.Json(StaffEmailTemplateRenderer.RenderRequest(template, new StaffEmailRequestValues(
+            2, staffUrl, "Casey Staff", "Morgan Staff", "Casey Staff", "Library Two", requestId, isTask ? taskId : null,
+            input.TemplateKey == StaffEmailTemplateCatalog.PurchaseReminder ? RequestStatus.OutstandingPurchase : RequestStatus.Suggestion,
+            isTask ? "123456" : null, "Example title", null, "Print")));
     }
 
     private static async Task<IResult> PreviewCatalogAsync(

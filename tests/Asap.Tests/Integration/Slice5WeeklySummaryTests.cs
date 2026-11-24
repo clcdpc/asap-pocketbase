@@ -820,7 +820,7 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("weekly_summary_primary", outbox.RecipientAddressKind);
             Assert.AreEqual(actor.AuthenticationEmail, outbox.RecipientAuthenticationEmail);
             StringAssert.Contains(outbox.Subject!, $"{expectedNew} new");
-            StringAssert.Contains(outbox.Subject!, $"{expectedPurchases} awaiting bibs");
+            StringAssert.Contains(outbox.Subject!, $"{expectedPurchases} awaiting BIBs");
             StringAssert.Contains(outbox.Subject!, $"{expectedCopies} additional copies");
             StringAssert.Contains(outbox.BodyText!, "Weekly submission");
             StringAssert.Contains(outbox.BodyText!, "Weekly purchase");

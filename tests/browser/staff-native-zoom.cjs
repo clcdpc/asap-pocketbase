@@ -346,6 +346,12 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       await page.locator('#email-submit-body').fill('Hello {{firstName}},\n\nYour suggestion: {{title}}\n{{unknown}}');
       assert.equal(await emailCard.locator('.settings-template-preview-body').textContent(),
         'Hello Alex,\n\nYour suggestion: Example title\n{{unknown}}');
+      await emailCard.getByRole('button', { name: 'Preview email formats' }).press('Enter');
+      const delivered = emailCard.locator('.settings-template-delivered-html');
+      await delivered.waitFor();
+      assert.equal(await delivered.locator('br').count(), 3);
+      assert.equal(await emailCard.locator('.settings-template-delivered-text').textContent(),
+        'Hello Alex,\n\nYour suggestion: Example title\n{{unknown}}');
       try { await emailTemplateGeometry(emailCard, true); }
       catch (error) {
         const diagnosticSession = await context.newCDPSession(page);

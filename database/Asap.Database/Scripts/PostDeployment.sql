@@ -172,168 +172,171 @@ IF NOT EXISTS (SELECT 1 FROM [asap].[WorkflowTag] WHERE [Code] = N'polaris_bib_n
 IF NOT EXISTS (SELECT 1 FROM [asap].[WorkflowTag] WHERE [Code] = N'polaris_multiple_matches')
     INSERT INTO [asap].[WorkflowTag] ([Code], [Label], [SortOrder]) VALUES (N'polaris_multiple_matches', N'Multiple Polaris matches', 40);
 
--- Defaults are missing-row inserts only: preserve saved customizations, blanks,
--- hidden state and library lineage on every subsequent deployment. The three
--- hold promises omitted below are not true for every current workflow.
-IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'suggestion_submitted')
-BEGIN
-    INSERT INTO [asap].[EmailTemplate]
-        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-    VALUES
-        (1, N'suggestion_submitted', N'Suggestion submitted',
-         N'Suggestion received: {{title}}',
-         N'Hello {{name}},' + NCHAR(10) + NCHAR(10) +
-         N'Thank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.' + NCHAR(10) + NCHAR(10) +
-         N'Thank you for helping us shape the library collection.',
-         0, 0, 10);
-END;
+-- Refresh only a complete, byte-for-byte match to a previously shipped system row.
+-- Hold placed is an editor default. The hold workflow composes its own plain-text notice.
+DECLARE @lf nchar(1) = NCHAR(10), @paragraph nchar(2) = NCHAR(10) + NCHAR(10);
+DECLARE @emailDefaults TABLE (
+    TemplateKey nvarchar(100) PRIMARY KEY, DisplayName nvarchar(256), SortOrder int,
+    PriorSubject nvarchar(max), PriorBody nvarchar(max), Subject nvarchar(max), Body nvarchar(max)
+);
+INSERT INTO @emailDefaults (TemplateKey, DisplayName, SortOrder, PriorSubject, PriorBody, Subject, Body)
+VALUES
+    (N'suggestion_submitted', N'Suggestion submitted', 10,
+     N'Suggestion received: {{title}}',
+     N'Hello {{name}},' + @paragraph +
+        N'Thank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.' + @paragraph +
+        N'Thank you for helping us shape the library collection.',
+     N'Suggestion received: {{title}}',
+     N'Hello {{name}},' + @paragraph +
+        N'Thank you for your suggestion. We received your request for the following item.' + @paragraph +
+        N'Title: {{title}} by {{author}}' + @lf + N'Format: {{format}}' + @paragraph +
+        N'Our collection development team will review your suggestion.'),
+    (N'purchase_approved', N'Purchase approved', 20,
+     N'Purchase approved: {{title}}',
+     N'Hello {{name}},' + @paragraph +
+        N'Good news. The library has approved your suggestion for purchase: {{title}} by {{author}} in {{format}} format.' + @paragraph +
+        N'This request is now awaiting ordering and cataloging.' + @paragraph +
+        N'Thank you for your suggestion.',
+     N'Purchase approved: {{title}}',
+     N'Hello {{name}},' + @paragraph +
+        N'The library has approved your suggestion for purchase.' + @paragraph +
+        N'Title: {{title}} by {{author}}' + @lf + N'Format: {{format}}' + @paragraph +
+        N'The item is awaiting ordering and cataloging.'),
+    (N'already_owned', N'Already owned', 30,
+     N'{{title}} is already available',
+     N'Hello {{name}},' + @paragraph +
+        N'Thank you for suggesting {{title}} by {{author}} in {{format}} format.' + @paragraph +
+        N'The library already owns this title or has it on order.' + @paragraph +
+        N'Thank you for using the library''s suggestion service.',
+     N'Already owned or on order: {{title}}',
+     N'Hello {{name}},' + @paragraph +
+        N'Thank you for your suggestion. The library already owns this title or has it on order.' + @paragraph +
+        N'Title: {{title}} by {{author}}' + @lf + N'Format: {{format}}'),
+    (N'hold_placed', N'Hold placed', 40,
+     N'Hold placed for {{title}}',
+     N'Hello {{name}},' + @paragraph +
+        N'{{title}} by {{author}} in {{format}} format is now available in the catalog.' + @paragraph +
+        N'We have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.' + @paragraph +
+        N'Thank you for your suggestion.',
+     N'Hold placed for {{title}}',
+     N'Hello {{name}},' + @paragraph +
+        N'A hold has been placed on your card ({{barcode}}).' + @paragraph +
+        N'Title: {{title}} by {{author}}' + @lf + N'Format: {{format}}' + @paragraph +
+        N'Please wait for your pickup notice before visiting the library.'),
+    (N'rejected', N'Rejected', 50,
+     N'Update on your suggestion: {{title}}',
+     N'Hello {{name}},' + @paragraph +
+        N'Thank you for suggesting {{title}} by {{author}} in {{format}} format.' + @paragraph +
+        N'After review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.' + @paragraph +
+        N'Thank you for helping us build a collection that reflects our community.',
+     N'Update on your suggestion: {{title}}',
+     N'Hello {{name}},' + @paragraph +
+        N'Thank you for suggesting this item for the collection.' + @paragraph +
+        N'Title: {{title}} by {{author}}' + @lf + N'Format: {{format}}' + @paragraph +
+        N'After review, we are unable to add it at this time. We appreciate your suggestion.'),
+    (N'staff_title_assignment', N'Title request assigned', 60,
+     N'ASAP request assigned',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'{{title}} has been assigned to you.' + @paragraph +
+        N'Assigned by: {{actorName}}' + @lf + N'Assignee: {{assigneeName}}' + @lf + N'Library: {{libraryName}}' + @lf + N'Title request: {{requestId}}' + @paragraph +
+        N'Title: {{title}}' + @lf + N'Author/creator: {{author}}' + @lf + N'Format: {{format}}' + @paragraph +
+        N'View request: {{requestUrl}}',
+     N'Title request assigned: {{title}}',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'A title request at {{libraryName}} has been assigned to you.' + @paragraph +
+        N'Assigned by: {{actorName}}' + @lf + N'Assignee: {{assigneeName}}' + @paragraph +
+        N'Title: {{title}}' + @lf + N'Author / creator: {{author}}' + @lf + N'Format: {{format}}' + @lf + N'Request ID: {{requestId}}' + @paragraph +
+        N'View request in ASAP: {{requestUrl}}'),
+    (N'staff_purchase_reminder', N'Purchase reminder', 70,
+     N'ASAP purchase reminder',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'Purchase requested for {{title}}.' + @paragraph +
+        N'Requested by: {{actorName}}' + @lf + N'Library: {{libraryName}}' + @lf + N'Title request: {{requestId}}' + @paragraph +
+        N'Title: {{title}}' + @lf + N'Author/creator: {{author}}' + @lf + N'Format: {{format}}' + @lf + N'BIB: {{bibId}}' + @paragraph +
+        N'View request: {{requestUrl}}',
+     N'Purchase reminder: {{title}}',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'Please follow up on this purchase for {{libraryName}}.' + @paragraph +
+        N'Requested by: {{actorName}}' + @lf + N'Title: {{title}}' + @lf + N'Author / creator: {{author}}' + @lf + N'Format: {{format}}' + @lf + N'BIB: {{bibId}}' + @lf + N'Request ID: {{requestId}}' + @paragraph +
+        N'View request in ASAP: {{requestUrl}}'),
+    (N'staff_additional_copy_reminder', N'Additional-copy reminder', 80,
+     N'ASAP additional-copy reminder',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'Additional-copy task {{taskId}} for {{title}} (BIB {{bibId}}) was created.' + @paragraph +
+        N'Created by: {{actorName}}' + @lf + N'Library: {{libraryName}}' + @lf + N'Title request: {{requestId}}' + @paragraph +
+        N'Title: {{title}}' + @lf + N'Author/creator: {{author}}' + @lf + N'Format: {{format}}' + @paragraph +
+        N'View task: {{requestUrl}}',
+     N'Additional-copy reminder: {{title}}',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'An additional-copy task was created for {{libraryName}}. Please review the purchase details.' + @paragraph +
+        N'Created by: {{actorName}}' + @lf + N'Title: {{title}}' + @lf + N'Author / creator: {{author}}' + @lf + N'Format: {{format}}' + @lf + N'BIB: {{bibId}}' + @lf + N'Task ID: {{taskId}}' + @lf + N'Request ID: {{requestId}}' + @paragraph +
+        N'View additional-copy task in ASAP: {{requestUrl}}'),
+    (N'staff_additional_copy_assignment', N'Additional-copy task assigned', 90,
+     N'ASAP additional-copy task assigned',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'Additional-copy task {{taskId}} for {{title}} has been assigned to you.' + @paragraph +
+        N'Assigned by: {{actorName}}' + @lf + N'Assignee: {{assigneeName}}' + @lf + N'Library: {{libraryName}}' + @lf + N'Title request: {{requestId}}' + @paragraph +
+        N'Title: {{title}}' + @lf + N'Author/creator: {{author}}' + @lf + N'Format: {{format}}' + @lf + N'BIB: {{bibId}}' + @paragraph +
+        N'View task: {{requestUrl}}',
+     N'Additional-copy task assigned: {{title}}',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'An additional-copy task at {{libraryName}} has been assigned to you.' + @paragraph +
+        N'Assigned by: {{actorName}}' + @lf + N'Assignee: {{assigneeName}}' + @paragraph +
+        N'Title: {{title}}' + @lf + N'Author / creator: {{author}}' + @lf + N'Format: {{format}}' + @lf + N'BIB: {{bibId}}' + @lf + N'Task ID: {{taskId}}' + @lf + N'Request ID: {{requestId}}' + @paragraph +
+        N'View additional-copy task in ASAP: {{requestUrl}}'),
+    (N'staff_new_patron_request', N'New patron purchase request', 65,
+     N'New purchase request: {{title}}',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'A new patron purchase request was submitted to {{libraryName}}.' + @paragraph +
+        N'Title request: {{requestId}}' + @lf + N'Title: {{title}}' + @lf + N'Author/creator: {{author}}' + @lf + N'Format: {{format}}' + @paragraph +
+        N'View request: {{requestUrl}}',
+     N'New purchase request — {{title}}',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'A patron submitted a new purchase request to {{libraryName}}.' + @paragraph +
+        N'Title: {{title}}' + @lf + N'Author / creator: {{author}}' + @lf + N'Format: {{format}}' + @lf + N'Request ID: {{requestId}}' + @paragraph +
+        N'View request in ASAP: {{requestUrl}}'),
+    (N'staff_weekly_summary', N'Weekly action summary', 100,
+     N'Weekly ASAP action summary: {{submissionCount}} new, {{purchaseCount}} awaiting bibs, {{additionalCopyCount}} additional copies',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'Weekly ASAP action summary for {{libraryName}}.' + @lf + N'Business period: {{periodStart}} through {{periodEnd}}' + @paragraph +
+        N'New submissions' + @lf + N'{{submissionCount}} active requests' + @lf + N'Five most recent:' + @lf + N'{{submissionItems}}' + @lf + N'View new submissions: {{submissionQueueUrl}}' + @paragraph +
+        N'Approved purchases without bibs' + @lf + N'{{purchaseCount}} active requests' + @lf + N'Five most recent:' + @lf + N'{{purchaseItems}}' + @lf + N'View purchases awaiting BIBs: {{purchaseQueueUrl}}' + @paragraph +
+        N'Additional copies' + @lf + N'{{additionalCopyCount}} open tasks' + @lf + N'Five most recent:' + @lf + N'{{additionalCopyItems}}' + @lf + N'View additional copies: {{additionalCopiesQueueUrl}}',
+     N'Weekly ASAP summary: {{submissionCount}} new, {{purchaseCount}} awaiting BIBs, {{additionalCopyCount}} additional copies',
+     N'Hello {{recipientName}},' + @paragraph +
+        N'Here is the weekly action summary for {{libraryName}}.' + @lf + N'Business period: {{periodStart}} through {{periodEnd}}' + @paragraph +
+        N'New submissions' + @lf + N'Active requests: {{submissionCount}}' + @lf + N'Recent items (up to five):' + @lf + N'{{submissionItems}}' + @lf + N'View new submissions: {{submissionQueueUrl}}' + @paragraph +
+        N'Purchases awaiting BIBs' + @lf + N'Active requests: {{purchaseCount}}' + @lf + N'Recent items (up to five):' + @lf + N'{{purchaseItems}}' + @lf + N'View purchases awaiting BIBs: {{purchaseQueueUrl}}' + @paragraph +
+        N'Additional copies' + @lf + N'Open tasks: {{additionalCopyCount}}' + @lf + N'Recent items (up to five):' + @lf + N'{{additionalCopyItems}}' + @lf + N'View Additional copies: {{additionalCopiesQueueUrl}}');
 
-IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'purchase_approved')
-BEGIN
-    INSERT INTO [asap].[EmailTemplate]
-        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-    VALUES
-        (1, N'purchase_approved', N'Purchase approved',
-         N'Purchase approved: {{title}}',
-         N'Hello {{name}},' + NCHAR(10) + NCHAR(10) +
-         N'Good news. The library has approved your suggestion for purchase: {{title}} by {{author}} in {{format}} format.' + NCHAR(10) + NCHAR(10) +
-         N'This request is now awaiting ordering and cataloging.' + NCHAR(10) + NCHAR(10) +
-         N'Thank you for your suggestion.',
-         0, 0, 20);
-END;
+UPDATE t SET SubjectTemplate = d.Subject, BodyTemplate = d.Body
+FROM [asap].[EmailTemplate] AS t
+JOIN @emailDefaults AS d ON t.TemplateKey = d.TemplateKey
+CROSS APPLY (
+    SELECT d.PriorBody
+    UNION ALL
+    SELECT N'Hello {{name}},' + @paragraph +
+        N'Thank you for suggesting {{title}} by {{author}} in {{format}} format. Our collection development team has received your request and will review it.' + @paragraph +
+        N'If we add this item, we will place a hold for you automatically and send another update.' + @paragraph +
+        N'Thank you for helping us shape the library collection.'
+    WHERE d.TemplateKey = N'suggestion_submitted'
+) AS historical(Body)
+WHERE t.OrganizationId = 1 AND t.SourceTemplateId IS NULL AND t.IsCustom = 0 AND t.IsHidden = 0
+  AND t.SortOrder = d.SortOrder
+  AND CONVERT(varbinary(max), t.TemplateKey) = CONVERT(varbinary(max), d.TemplateKey)
+  AND CONVERT(varbinary(max), t.DisplayName) = CONVERT(varbinary(max), d.DisplayName)
+  AND CONVERT(varbinary(max), t.SubjectTemplate) = CONVERT(varbinary(max), d.PriorSubject)
+  AND CONVERT(varbinary(max), t.BodyTemplate) = CONVERT(varbinary(max), historical.Body)
+  AND DATALENGTH(t.TemplateKey) = DATALENGTH(d.TemplateKey)
+  AND DATALENGTH(t.DisplayName) = DATALENGTH(d.DisplayName)
+  AND DATALENGTH(t.SubjectTemplate) = DATALENGTH(d.PriorSubject)
+  AND DATALENGTH(t.BodyTemplate) = DATALENGTH(historical.Body);
 
-IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'already_owned')
-BEGIN
-    INSERT INTO [asap].[EmailTemplate]
-        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-    VALUES
-        (1, N'already_owned', N'Already owned',
-         N'{{title}} is already available',
-         N'Hello {{name}},' + NCHAR(10) + NCHAR(10) +
-         N'Thank you for suggesting {{title}} by {{author}} in {{format}} format.' + NCHAR(10) + NCHAR(10) +
-         N'The library already owns this title or has it on order.' + NCHAR(10) + NCHAR(10) +
-         N'Thank you for using the library''s suggestion service.',
-         0, 0, 30);
-END;
-
--- This editor default has no configured-template dispatch consumer. The hold
--- service continues to compose its existing notice from the frozen pickup.
-IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'hold_placed')
-BEGIN
-    INSERT INTO [asap].[EmailTemplate]
-        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-    VALUES
-        (1, N'hold_placed', N'Hold placed',
-         N'Hold placed for {{title}}',
-         N'Hello {{name}},' + NCHAR(10) + NCHAR(10) +
-         N'{{title}} by {{author}} in {{format}} format is now available in the catalog.' + NCHAR(10) + NCHAR(10) +
-         N'We have placed a hold on card {{barcode}}. You will receive the usual pickup notice when the item is ready.' + NCHAR(10) + NCHAR(10) +
-         N'Thank you for your suggestion.',
-         0, 0, 40);
-END;
-
-IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'rejected')
-BEGIN
-    INSERT INTO [asap].[EmailTemplate]
-        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-    VALUES
-        (1, N'rejected', N'Rejected',
-         N'Update on your suggestion: {{title}}',
-         N'Hello {{name}},' + NCHAR(10) + NCHAR(10) +
-         N'Thank you for suggesting {{title}} by {{author}} in {{format}} format.' + NCHAR(10) + NCHAR(10) +
-         N'After review, we are not able to add this item to the collection at this time. We appreciate you taking the time to share your suggestion with us.' + NCHAR(10) + NCHAR(10) +
-         N'Thank you for helping us build a collection that reflects our community.',
-         0, 0, 50);
-END;
-
--- Staff notification defaults are system-owned templates with optional library
--- lineage rows. Keep these inserts missing-row-only so deployments preserve
--- configured content, explicit blanks, hidden state and rowversions.
-IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_title_assignment')
-BEGIN
-    INSERT INTO [asap].[EmailTemplate]
-        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-    VALUES
-        (1, N'staff_title_assignment', N'Title request assigned',
-         N'ASAP request assigned',
-         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
-         N'{{title}} has been assigned to you.' + NCHAR(10) + NCHAR(10) +
-         N'Assigned by: {{actorName}}' + NCHAR(10) + N'Assignee: {{assigneeName}}' + NCHAR(10) + N'Library: {{libraryName}}' + NCHAR(10) + N'Title request: {{requestId}}' + NCHAR(10) + NCHAR(10) +
-         N'Title: {{title}}' + NCHAR(10) + N'Author/creator: {{author}}' + NCHAR(10) + N'Format: {{format}}' + NCHAR(10) + NCHAR(10) + N'View request: {{requestUrl}}',
-         0, 0, 60);
-END;
-
-IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_new_patron_request')
-BEGIN
-    INSERT INTO [asap].[EmailTemplate]
-        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-    VALUES
-        (1, N'staff_new_patron_request', N'New patron purchase request',
-         N'New purchase request: {{title}}',
-         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
-         N'A new patron purchase request was submitted to {{libraryName}}.' + NCHAR(10) + NCHAR(10) +
-         N'Title request: {{requestId}}' + NCHAR(10) + N'Title: {{title}}' + NCHAR(10) + N'Author/creator: {{author}}' + NCHAR(10) + N'Format: {{format}}' + NCHAR(10) + NCHAR(10) +
-         N'View request: {{requestUrl}}',
-         0, 0, 65);
-END;
-
-IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_purchase_reminder')
-BEGIN
-    INSERT INTO [asap].[EmailTemplate]
-        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-    VALUES
-        (1, N'staff_purchase_reminder', N'Purchase reminder',
-         N'ASAP purchase reminder',
-         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
-         N'Purchase requested for {{title}}.' + NCHAR(10) + NCHAR(10) +
-         N'Requested by: {{actorName}}' + NCHAR(10) + N'Library: {{libraryName}}' + NCHAR(10) + N'Title request: {{requestId}}' + NCHAR(10) + NCHAR(10) +
-         N'Title: {{title}}' + NCHAR(10) + N'Author/creator: {{author}}' + NCHAR(10) + N'Format: {{format}}' + NCHAR(10) + N'BIB: {{bibId}}' + NCHAR(10) + NCHAR(10) + N'View request: {{requestUrl}}',
-         0, 0, 70);
-END;
-
-IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_additional_copy_reminder')
-BEGIN
-    INSERT INTO [asap].[EmailTemplate]
-        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-    VALUES
-        (1, N'staff_additional_copy_reminder', N'Additional-copy reminder',
-         N'ASAP additional-copy reminder',
-         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
-         N'Additional-copy task {{taskId}} for {{title}} (BIB {{bibId}}) was created.' + NCHAR(10) + NCHAR(10) +
-         N'Created by: {{actorName}}' + NCHAR(10) + N'Library: {{libraryName}}' + NCHAR(10) + N'Title request: {{requestId}}' + NCHAR(10) + NCHAR(10) +
-         N'Title: {{title}}' + NCHAR(10) + N'Author/creator: {{author}}' + NCHAR(10) + N'Format: {{format}}' + NCHAR(10) + NCHAR(10) + N'View task: {{requestUrl}}',
-         0, 0, 80);
-END;
-
-IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_additional_copy_assignment')
-BEGIN
-    INSERT INTO [asap].[EmailTemplate]
-        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-    VALUES
-        (1, N'staff_additional_copy_assignment', N'Additional-copy task assigned',
-         N'ASAP additional-copy task assigned',
-         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
-         N'Additional-copy task {{taskId}} for {{title}} has been assigned to you.' + NCHAR(10) + NCHAR(10) +
-         N'Assigned by: {{actorName}}' + NCHAR(10) + N'Assignee: {{assigneeName}}' + NCHAR(10) + N'Library: {{libraryName}}' + NCHAR(10) + N'Title request: {{requestId}}' + NCHAR(10) + NCHAR(10) +
-         N'Title: {{title}}' + NCHAR(10) + N'Author/creator: {{author}}' + NCHAR(10) + N'Format: {{format}}' + NCHAR(10) + N'BIB: {{bibId}}' + NCHAR(10) + NCHAR(10) + N'View task: {{requestUrl}}',
-         0, 0, 90);
-END;
-
-IF NOT EXISTS (SELECT 1 FROM [asap].[EmailTemplate] WHERE [OrganizationId] = 1 AND [TemplateKey] = N'staff_weekly_summary')
-BEGIN
-    INSERT INTO [asap].[EmailTemplate]
-        ([OrganizationId], [TemplateKey], [DisplayName], [SubjectTemplate], [BodyTemplate], [IsHidden], [IsCustom], [SortOrder])
-    VALUES
-        (1, N'staff_weekly_summary', N'Weekly action summary',
-         N'Weekly ASAP action summary: {{submissionCount}} new, {{purchaseCount}} awaiting bibs, {{additionalCopyCount}} additional copies',
-         N'Hello {{recipientName}},' + NCHAR(10) + NCHAR(10) +
-         N'Weekly ASAP action summary for {{libraryName}}.' + NCHAR(10) +
-         N'Business period: {{periodStart}} through {{periodEnd}}' + NCHAR(10) + NCHAR(10) +
-         N'New submissions' + NCHAR(10) + N'{{submissionCount}} active requests' + NCHAR(10) + N'Five most recent:' + NCHAR(10) + N'{{submissionItems}}' + NCHAR(10) +
-         N'View new submissions: {{submissionQueueUrl}}' + NCHAR(10) + NCHAR(10) +
-         N'Approved purchases without bibs' + NCHAR(10) + N'{{purchaseCount}} active requests' + NCHAR(10) + N'Five most recent:' + NCHAR(10) + N'{{purchaseItems}}' + NCHAR(10) +
-         N'View purchases awaiting BIBs: {{purchaseQueueUrl}}' + NCHAR(10) + NCHAR(10) +
-         N'Additional copies' + NCHAR(10) + N'{{additionalCopyCount}} open tasks' + NCHAR(10) + N'Five most recent:' + NCHAR(10) + N'{{additionalCopyItems}}' + NCHAR(10) +
-         N'View additional copies: {{additionalCopiesQueueUrl}}',
-         0, 0, 100);
-END;
+INSERT INTO [asap].[EmailTemplate]
+    (OrganizationId, TemplateKey, DisplayName, SubjectTemplate, BodyTemplate, IsHidden, IsCustom, SortOrder)
+SELECT 1, d.TemplateKey, d.DisplayName, d.Subject, d.Body, 0, 0, d.SortOrder
+FROM @emailDefaults AS d
+WHERE NOT EXISTS (
+    SELECT 1 FROM [asap].[EmailTemplate] AS t WHERE t.OrganizationId = 1 AND t.TemplateKey = d.TemplateKey
+)
+ORDER BY d.SortOrder;
