@@ -335,23 +335,29 @@ public sealed partial class PolarisPatronProvider
 
     private static string CleanSearch(string? value) => Regex.Replace(value ?? string.Empty, "\\s+", " ").Trim();
 
-    internal static bool HasPairedSearchWildcard(string title, string author) =>
-        title.AsSpan().ContainsAny('*', '?', '#') || author.AsSpan().ContainsAny('*', '?', '#');
+    internal const string PairedSearchNumberSignError = "Remove # from the title or author to search for a phrase.";
+
+    internal static bool HasPairedSearchNumberSign(string title, string author) =>
+        title.Contains('#') || author.Contains('#');
 
     private static string PairedSearch(string title, string author)
     {
-        if (HasPairedSearchWildcard(title, author))
+        if (HasPairedSearchNumberSign(title, author))
         {
-            throw new ArgumentException("Title and author phrases cannot contain Polaris wildcards.");
+            throw new ArgumentException(PairedSearchNumberSignError);
         }
 
-        var condition = $"AU={QuoteSearch(author)}";
+        var condition = $"AU={QuotePairedPhrase(author)}";
         if (AlternateAuthor(author) is { } alternate)
         {
-            condition = $"({condition} OR AU={QuoteSearch(alternate)})";
+            condition = $"({condition} OR AU={QuotePairedPhrase(alternate)})";
         }
-        return $"TI={QuoteSearch(title)} AND {condition}";
+        return $"TI={QuotePairedPhrase(title)} AND {condition}";
     }
+
+    private static string QuotePairedPhrase(string value) => QuoteSearch(value)
+        .Replace("*", "\\*", StringComparison.Ordinal)
+        .Replace("?", "\\?", StringComparison.Ordinal);
 
     private static string? AlternateAuthor(string author)
     {

@@ -328,10 +328,10 @@ public static partial class TitleRequestEndpoints
                 {
                     return Results.BadRequest(new { code = "search_query_required", message = "Enter a letter or digit in each catalog search field." });
                 }
-                if (mode == "title_author" && PolarisPatronProvider.HasPairedSearchWildcard(title, author))
+                if (mode == "title_author" && PolarisPatronProvider.HasPairedSearchNumberSign(title, author))
                 {
                     return Results.BadRequest(new { code = "search_wildcard_unsupported",
-                        message = "Remove *, ? and # from the title and author to search for a phrase." });
+                        message = PolarisPatronProvider.PairedSearchNumberSignError });
                 }
                 var search = await polaris.SearchBibsAsync(mode!, query, title, author, scope.OrganizationId, page, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();

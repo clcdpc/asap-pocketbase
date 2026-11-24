@@ -68,6 +68,10 @@ public sealed partial class PolarisProtocolTests
     [DataRow("C++: $100, 99% & more", "A\\\" OR TI=\"B",
         "TI=\"C++: $100, 99% & more\" AND AU=\"A\\\\\\\" OR TI=\\\"B\"")]
     [DataRow("a b c d e f g h i j k", "Lee", "TI=\"a b c d e f g h i j k\" AND AU=\"Lee\"")]
+    [DataRow("What If?", "Randall Munroe",
+        "TI=\"What If\\?\" AND (AU=\"Randall Munroe\" OR AU=\"Munroe, Randall\")")]
+    [DataRow("M*A*S*H", "An? author", "TI=\"M\\*A\\*S\\*H\" AND AU=\"An\\? author\"")]
+    [DataRow("A\\? \"title\"", "An\\* author", "TI=\"A\\\\\\? \\\"title\\\"\" AND AU=\"An\\\\\\* author\"")]
     public async Task StaffPairedSearchSendsCompletePhrasesWithoutFallback(string title, string author, string term)
     {
         var handler = new StaticResponseHandler(HttpStatusCode.OK, PageResponse(0, []));
@@ -78,10 +82,9 @@ public sealed partial class PolarisProtocolTests
     }
 
     [TestMethod]
-    [DataRow("A title?", "An author")]
-    [DataRow("A title", "An* author")]
+    [DataRow("A title", "Author #1")]
     [DataRow("#MeToo", "An author")]
-    public async Task StaffPairedSearchRejectsWildcardsBeforeSending(string title, string author)
+    public async Task StaffPairedSearchRejectsNumberSignBeforeSending(string title, string author)
     {
         var handler = new StaticResponseHandler(HttpStatusCode.OK, PageResponse(0, []));
         var provider = await CreatePolarisProviderAsync(handler);

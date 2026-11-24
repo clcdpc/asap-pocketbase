@@ -190,8 +190,7 @@ public sealed partial class PatronJourneyTests
             ("title_author", "", "Catalog", "", 2, "search_query_required"),
             ("title_author", "", "Catalog", "?!", 2, "search_query_required"),
             ("title_author", "", "#MeToo", "Author", 2, "search_wildcard_unsupported"),
-            ("title_author", "", "Catalog", "Row*", 2, "search_wildcard_unsupported"),
-            ("title_author", "", "What now?", "Author", 2, "search_wildcard_unsupported"),
+            ("title_author", "", "Catalog", "Author #1", 2, "search_wildcard_unsupported"),
             ("identifier", "00", "", "", 3, "library_scope_mismatch")
         })
         {
@@ -202,12 +201,26 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(HttpStatusCode.BadRequest, invalid.StatusCode);
             using var error = JsonDocument.Parse(await invalid.Content.ReadAsStringAsync());
             Assert.AreEqual(code, error.RootElement.GetProperty("code").GetString());
+            if (code == "search_wildcard_unsupported")
+            {
+                Assert.AreEqual("Remove # from the title or author to search for a phrase.",
+                    error.RootElement.GetProperty("message").GetString());
+            }
         }
         Assert.IsFalse(fixture.Provider.Calls.Any(call => call.Operation == TestingPolarisOperation.BibSearch));
-        fixture.Provider.SetBibSearch("title_author", "", "𠮷野", "𠮷", 2, new([], 21), page: 2);
+    }
+
+    [TestMethod]
+    [DataRow("𠮷野", "𠮷")]
+    [DataRow("What If?", "Row*")]
+    public async Task PolarisCatalogAcceptsPairedSearchText(string title, string author)
+    {
+        await using var fixture = await SeedPolarisQueueAsync();
+        using var client = await PolarisQueueClientAsync(fixture.Actor);
+        fixture.Provider.SetBibSearch("title_author", "", title, author, 2, new([], 21), page: 2);
         using var filtered = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
         {
-            mode = "title_author", title = "𠮷野", author = "𠮷", page = 2, libraryOrgId = 2
+            mode = "title_author", title, author, page = 2, libraryOrgId = 2
         });
         Assert.AreEqual(HttpStatusCode.OK, filtered.StatusCode);
         using var result = JsonDocument.Parse(await filtered.Content.ReadAsStringAsync());

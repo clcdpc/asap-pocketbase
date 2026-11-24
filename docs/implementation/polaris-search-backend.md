@@ -36,10 +36,22 @@ The original author comes first. A distinct alternative joins it with a
 parenthesized OR. A single name, ambiguous multiword name, or qualified heading
 uses just the original phrase. This heuristic does not classify organizations.
 
-Whitespace is normalized. The provider escapes embedded quotes and backslashes,
-and the package URL-encodes the complete expression. Paired mode rejects
-`*`, `?`, and `#` because Polaris uses them as wildcards and literal handling
-has not been established. [Polaris wildcard semantics](https://documentation.iii.com/polaris/7.8/PolarisStaffHelp/Polaris_Basics/PIfindrec/Doing_Power_Searches.htm) · [Polaris phrase matching](https://documentation.iii.com/polaris/8.0/PolarisStaffHelp/Public_Access_Admin/PDOccl/PAC_CQL_Commands_Access_Points.htm)
+Whitespace is normalized. Within each paired phrase, the provider escapes
+embedded backslashes and quotes, then prefixes each `*` and `?` with a
+backslash. For *What If?* by Randall Munroe, the decoded `q` parameter is
+`TI="What If\?" AND (AU="Randall Munroe" OR AU="Munroe, Randall")`.
+PowerPAC documents backslash escaping for both wildcards. It also treats a
+word-final question mark as punctuation, while staff CCL documents it as a
+wildcard. Paired search uses the explicit escape in every position. It rejects
+`#` in either field because staff CCL treats even a quoted number sign as a
+wildcard and the PAPI reference gives no literal form.
+[PowerPAC Boolean syntax](https://devpac.clcohio.org/polaris/help/content/1033/boolean.htm) · [Staff CCL wildcard semantics](https://documentation.iii.com/polaris/7.8/PolarisStaffHelp/Polaris_Basics/PIfindrec/Doing_Power_Searches.htm)
+
+PAPI specifies URL-encoded CCL for its Boolean route. Controlled HTTP tests
+verify the quoted and escaped expression sent by the pinned client. The PAPI
+reference leaves wildcard escaping unspecified, and matching these literals
+against the deployed catalog remains unverified.
+[PAPI Boolean search](https://documentation.iii.com/polaris/PAPI/current/PAPIService/PAPIServiceBibBooleanSearch.htm)
 
 Identifiers stay strings. The ISBN/UPC clauses compact formatting separators and
 preserve leading zeros and ISBN check letters. For LCCNs the LCCN clause also
