@@ -696,7 +696,7 @@ public sealed partial class PatronJourneyTests
             return Task.FromResult<IReadOnlyList<PatronSnapshot>>([Patron(Barcode)]);
         }
         public Task<StaffBibSearchResult> SearchBibsAsync(string mode, string query, string title, string author,
-            int context, CancellationToken token)
+            int context, int page, CancellationToken token)
         {
             Check("bib-search", context, token);
             return Task.FromResult(new StaffBibSearchResult([new(9001, "Context Title", null, null, "Book", "FOUND")], 1));

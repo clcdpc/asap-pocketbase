@@ -31,7 +31,7 @@ public sealed partial class PolarisProtocolTests
         var actual = await Assert.ThrowsExactlyAsync<ArgumentException>(() => operation switch
         {
             "identifier" => provider.LookupIdentifierAsync("9780000000001", 2, CancellationToken.None),
-            "bibs" => provider.SearchBibsAsync("title", "Title", "", "", 2, CancellationToken.None),
+            "bibs" => provider.SearchBibsAsync("title", "Title", "", "", 2, 1, CancellationToken.None),
             "patrons" => provider.SearchPatronsAsync("Name", 2, CancellationToken.None),
             "organizations" => provider.GetOrganizationsAsync(CancellationToken.None),
             "codes" => provider.GetPatronCodesAsync(CancellationToken.None),

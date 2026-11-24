@@ -13,22 +13,83 @@ Additional-copy research should supply its authorized `libraryOrgId` without
 a title-request ID.
 
 ```json
-{"requestId":"9007199254740993","mode":"title","query":"Catalog title"}
+{"requestId":"9007199254740993","mode":"title","query":"Catalog title","page":2}
 ```
 
-Modes remain `title`, `author`, `identifier`, `title_author`, and `bib`. The
-paired mode uses `title` and `author`; the other text modes use `query`. Exact
-lookup uses `bibId`. Searches return at most ten results, `mode`, `libraryOrgId`,
-`requestId`, `version`, `totalMatches`, and `totalMatchesKind`.
+Each non-exact search issues one Polaris BIB search for the submitted page.
 
-`totalMatches` comes from Polaris, including when filtered/deduplicated rows
-leave fewer results. `totalMatchesKind: provider` means a single provider query.
-For existing alternative ISBN/UPC/LCCN and title/author searches,
-`provider_maximum` means the largest reported provider total across attempts.
-Those result sets overlap; the API does not claim to know their union size and
-never substitutes the number of returned rows. The UI should label alternative
-search totals accordingly instead of presenting them as an exact union count.
-Provider failure remains an error, distinct from a definitive empty search.
+| Mode | Input and native search | Provider order |
+| --- | --- | --- |
+| `title` | `query`, keyword TI | Relevance |
+| `author` | `query`, keyword AU | Author |
+| `identifier` | `query`, Boolean `ISBN="…" OR UPC="…" OR LCCN="…"` | Publication date descending, then title |
+| `title_author` | `TI="French cooking" AND (AU="Julia Child" OR AU="Child, Julia")` | Publication date descending, then title |
+| `bib` | Exact lookup by positive `bibId` | Single record, outside pagination |
+
+Paired search favors precision for a known request. Each page uses one native
+Boolean query with the complete title and author as quoted phrases. The title
+words stay in order, and a catalog field may contain additional text.
+Two-part names and names with middle initials get a surname-first alternative
+(`Mary H. Clark` → `Clark, Mary H.`). An explicit surname separator preserves
+both components (`García Márquez, Gabriel` → `Gabriel García Márquez`).
+The original author comes first. A distinct alternative joins it with a
+parenthesized OR. A single name, ambiguous multiword name, or qualified heading
+uses just the original phrase. This heuristic does not classify organizations.
+
+Whitespace is normalized. Within each paired phrase, the provider escapes
+embedded backslashes and quotes, then prefixes each `*` and `?` with a
+backslash. For *What If?* by Randall Munroe, the decoded `q` parameter is
+`TI="What If\?" AND (AU="Randall Munroe" OR AU="Munroe, Randall")`.
+PowerPAC documents backslash escaping for both wildcards. It also treats a
+word-final question mark as punctuation, while staff CCL documents it as a
+wildcard. Paired search uses the explicit escape in every position. It rejects
+`#` in either field because staff CCL treats even a quoted number sign as a
+wildcard and the PAPI reference gives no literal form.
+[PowerPAC Boolean syntax](https://devpac.clcohio.org/polaris/help/content/1033/boolean.htm) · [Staff CCL wildcard semantics](https://documentation.iii.com/polaris/7.8/PolarisStaffHelp/Polaris_Basics/PIfindrec/Doing_Power_Searches.htm)
+
+PAPI specifies URL-encoded CCL for its Boolean route. Controlled HTTP tests
+verify the quoted and escaped expression sent by the pinned client. The PAPI
+reference leaves wildcard escaping unspecified, and matching these literals
+against the deployed catalog remains unverified.
+[PAPI Boolean search](https://documentation.iii.com/polaris/PAPI/current/PAPIService/PAPIServiceBibBooleanSearch.htm)
+
+Identifiers stay strings. The ISBN/UPC clauses compact formatting separators and
+preserve leading zeros and ISBN check letters. For LCCNs the LCCN clause also
+removes revision suffixes and pads a hyphenated serial number to six digits.
+[Library of Congress normalization](https://www.loc.gov/marc/lccn-namespace.html)
+
+The optional positive integer `page` defaults to 1. The pinned client sends
+`page` and `bibsperpage=10` on the native keyword and Boolean routes.
+The response includes `page`, `pageSize`, `hasPreviousPage`, `hasNextPage`,
+`mode`, `libraryOrgId`, `requestId`, and `version`. Next uses the provider's
+`totalMatches` (`totalMatchesKind: provider`). The page keeps provider order
+and the first displayable row per BIB. Material types 36 and 41 are excluded
+before detail reads. Polaris documents TOM filters by search code. Equivalence
+to those two numeric primary-type IDs has not been established for the deployed
+catalog, so exclusions remain local. A short or fully excluded page can still
+have a next page. The dialog reports the displayed count separately from catalog
+matches. [Pinned request serialization](https://github.com/clcdpc/polaris-api-csharp/blob/c89d9e604fdf9c1a21012c639f8baa9e1e80d214/src/polaris-api-csharp/Methods/BibSearch.cs)
+
+Each page is a fresh search. A successful empty native page beyond the current
+total allows staff to go back after catalog changes. Contradictory counts,
+incomplete responses and provider failures surface as lookup errors. A failed
+navigation preserves the accepted page and can be retried. The PAPI references
+specify 1-based paging and publish no fixed maximum navigable result count for
+these routes. [BibBooleanSearch](https://documentation.iii.com/polaris/PAPI/current/PAPIService/PAPIServiceBibBooleanSearch.htm)
+[BibKeywordSearch](https://knowledge.ag-software.clarivate.com/polaris/PAPI/PAPIService/PAPIServiceBibKeywordSearch.htm)
+
+The maintainer compared 839,995 simple two-part MARC 100$a BIB/name combinations
+with the deployed `Polaris.Z3950_AP_BR_AU_S` author index. Of the 699,086 with
+index entries, 608,121 had both phrases and 90,965 had only the surname-first
+phrase. The other 140,909 had no author index entry. Manual Polaris searches
+for `AU="Erma Bombeck"`, `AU="Bombeck, Erma"`, and their OR returned an
+additional distinct result with the combined query. SQL identified BIB 1270
+as a surname-first-only example.
+
+Controlled HTTP tests verify the pinned package's request serialization.
+Remaining live checks include known ISBN, UPC and LCCN records, title stop words
+and punctuation, author formats outside the verified example, and the deployed
+catalog's deepest navigable page, site-specific limits and out-of-range response.
 
 Each result retains `bibId`, `title`, `author`, `publication`, `identifier`, and
 `format`, with additive `materialTypeId`, `materialTypeSearchCode`, and

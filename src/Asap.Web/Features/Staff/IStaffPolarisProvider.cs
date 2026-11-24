@@ -14,7 +14,7 @@ public interface IStaffPolarisProvider
     Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken);
 
     Task<StaffBibSearchResult> SearchBibsAsync(
-        string mode, string query, string title, string author, int organizationId, CancellationToken cancellationToken) =>
+        string mode, string query, string title, string author, int organizationId, int page, CancellationToken cancellationToken) =>
         Task.FromException<StaffBibSearchResult>(new PolarisOperationalException(
             "polaris_bib_search_unimplemented", "The selected Polaris provider does not implement BIB search."));
 
@@ -62,6 +62,7 @@ public sealed record BibValidationResult(
 public sealed record StaffBibSearchRow(
     int BibId, string? Title, string? Author, string? Publication, string? Format, string? Identifier)
 {
+    public string? Publisher { get; init; }
     public int? MaterialTypeId { get; init; }
     public string? MaterialTypeSearchCode { get; init; }
     public string? FormatIconUrl { get; init; }
@@ -69,7 +70,7 @@ public sealed record StaffBibSearchRow(
 
 public sealed record StaffBibSearchResult(IReadOnlyList<StaffBibSearchRow> Results, int TotalMatches)
 {
-    public string TotalMatchesKind { get; init; } = "provider";
+    public const int PageSize = 10;
 }
 
 public sealed record StaffBibHoldingsSummary(

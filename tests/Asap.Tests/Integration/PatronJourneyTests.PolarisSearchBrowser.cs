@@ -40,8 +40,11 @@ public sealed partial class PatronJourneyTests
         provider.SetBib(9004, 2, new(true, rows[3].Title, Format: "Book"), new(1, 0, 1, false, false));
         provider.SetFailure(new(TestingPolarisOperation.BibHoldings, 2, NativeId: 9005),
             new PolarisOperationalException("fixture_outage", "Deterministic holdings outage"));
-        provider.SetBibSearch("title", "Queue fixture", "", "", 2, new(rows, 2951));
-        provider.SetBibSearch("title_author", "", "Queue fixture", "Staff author", 2, new(rows, 2951));
+        foreach (var (index, batch) in rows.Chunk(StaffBibSearchResult.PageSize).Index())
+        {
+            provider.SetBibSearch("title", "Queue fixture", "", "", 2, new(batch, rows.Length), index + 1);
+            provider.SetBibSearch("title_author", "", "Queue fixture", "Staff author", 2, new(batch, rows.Length), index + 1);
+        }
         var root = Path.GetDirectoryName(TestArtifactPaths.FindRepositoryFile("Asap.sln"))!;
         var artifacts = Path.Combine(root, ".artifacts", "i439", $"polaris-search-{Guid.NewGuid():N}");
         Directory.CreateDirectory(artifacts);
@@ -61,7 +64,7 @@ public sealed partial class PatronJourneyTests
             var task = await verify.AdditionalCopyRequests.AsNoTracking().SingleAsync(item => item.SourceTitleRequestId == saved.Id);
             Assert.IsTrue(saved.AutoHold);
             Assert.AreEqual("pending_hold", saved.Status);
-            Assert.AreEqual(9001, saved.BibId);
+            Assert.AreEqual(9011, saved.BibId);
             Assert.AreEqual(saved.BibId, task.BibId);
             Assert.AreEqual(saved.LibraryOrganizationId, task.LibraryOrganizationId);
             Assert.AreEqual(fixture.Source.MaterialFormatId, saved.MaterialFormatId);
@@ -72,6 +75,7 @@ public sealed partial class PatronJourneyTests
         foreach (var fixture in new[] { useOff, useOn })
         {
             var saved = await verify.TitleRequests.AsNoTracking().SingleAsync(item => item.Id == fixture.Source.Id);
+            Assert.AreEqual(9011, saved.BibId);
             Assert.AreEqual(fixture.Source.AutoHold, saved.AutoHold);
             Assert.AreEqual(fixture.Source.AutoHold ? "pending_hold" : "closed", saved.Status);
             Assert.AreEqual(0, await verify.AdditionalCopyRequests.CountAsync(item => item.SourceTitleRequestId == saved.Id));

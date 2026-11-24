@@ -21,8 +21,8 @@ public sealed partial class PolarisProtocolTests
     {
         var handler = new CatalogMaterialHandler(failure);
         var provider = await CreatePolarisProviderAsync(handler);
-        var result = await provider.SearchBibsAsync("title", "Title", "", "", 2, CancellationToken.None);
-        var again = await provider.SearchBibsAsync("title", "Title", "", "", 2, CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "Title", "", "", 2, 1, CancellationToken.None);
+        var again = await provider.SearchBibsAsync("title", "Title", "", "", 2, 1, CancellationToken.None);
         Assert.AreEqual(3, result.Results.Count);
         Assert.AreEqual(2951, again.TotalMatches);
         Assert.AreEqual("Unknown", result.Results.Single(item => item.BibId == 9001).Format);
@@ -35,13 +35,13 @@ public sealed partial class PolarisProtocolTests
     {
         var handler = new CatalogMaterialHandler();
         var provider = await CreatePolarisProviderAsync(handler);
-        await provider.SearchBibsAsync("title", "Title", "", "", 2, CancellationToken.None);
-        await provider.SearchBibsAsync("author", "Author", "", "", 2, CancellationToken.None);
+        await provider.SearchBibsAsync("title", "Title", "", "", 2, 1, CancellationToken.None);
+        await provider.SearchBibsAsync("author", "Author", "", "", 2, 1, CancellationToken.None);
         Assert.AreEqual(1, handler.ReferenceCalls);
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            provider.SearchBibsAsync("title", "Title", "", "", 2, canceled.Token));
+            provider.SearchBibsAsync("title", "Title", "", "", 2, 1, canceled.Token));
         Assert.AreEqual(1, handler.ReferenceCalls);
     }
 

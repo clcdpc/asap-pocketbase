@@ -14,7 +14,7 @@ public enum TestingPolarisOperation
 
 public sealed record TestingPolarisCall(
     TestingPolarisOperation Operation, int OrganizationId, string? Key = null, int? NativeId = null,
-    string? Mode = null, string? Title = null, string? Author = null);
+    string? Mode = null, string? Title = null, string? Author = null, int Page = 1);
 
 // Empty by default: fixtures explicitly declare data, contexts and every external write.
 // Unexpected calls are programming failures, never simulated provider outages.
@@ -74,8 +74,8 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
     }
 
     public void SetBibSearch(string mode, string query, string title, string author, int organizationId,
-        StaffBibSearchResult result) =>
-        Set(new(TestingPolarisOperation.BibSearch, organizationId, query, Mode: mode, Title: title, Author: author), result);
+        StaffBibSearchResult result, int page = 1) =>
+        Set(new(TestingPolarisOperation.BibSearch, organizationId, query, Mode: mode, Title: title, Author: author, Page: page), result);
 
     public void SetPatronSearch(string query, int organizationId, IReadOnlyList<PatronSnapshot> patrons) =>
         Set(new(TestingPolarisOperation.PatronSearch, organizationId, query), patrons.ToArray());
@@ -175,8 +175,8 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
         Read<BibValidationResult>(new(TestingPolarisOperation.BibValidation, organizationId, NativeId: bibId), cancellationToken);
 
     public Task<StaffBibSearchResult> SearchBibsAsync(string mode, string query, string title, string author,
-        int organizationId, CancellationToken cancellationToken) =>
-        Read<StaffBibSearchResult>(new(TestingPolarisOperation.BibSearch, organizationId, query, Mode: mode, Title: title, Author: author), cancellationToken);
+        int organizationId, int page, CancellationToken cancellationToken) =>
+        Read<StaffBibSearchResult>(new(TestingPolarisOperation.BibSearch, organizationId, query, Mode: mode, Title: title, Author: author, Page: page), cancellationToken);
 
     public Task<IReadOnlyList<PatronSnapshot>> SearchPatronsAsync(string query, int organizationId, CancellationToken cancellationToken) =>
         Read<IReadOnlyList<PatronSnapshot>>(new(TestingPolarisOperation.PatronSearch, organizationId, query), cancellationToken);

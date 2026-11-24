@@ -171,6 +171,7 @@ const { JSDOM } = require('jsdom');
         <select id="polaris-mode"><option value="title">Title</option></select>
         <label id="polaris-query-field"><span id="polaris-query-label"></span><input id="polaris-query"></label>
         <div id="polaris-pair-fields"><input id="polaris-title"><input id="polaris-author"></div>
+        <nav id="polaris-pages"><button id="polaris-previous"></button><button id="polaris-next"></button></nav>
         <p id="polaris-status"></p><p id="polaris-ownership-status"></p><ul id="polaris-results"></ul>
         <form id="polaris-form"></form><button id="close-polaris"></button>
         <button id="polaris-add-author" type="button"></button><section id="polaris-confirmation" hidden></section>
@@ -212,7 +213,7 @@ const { JSDOM } = require('jsdom');
         outgoingBodies.push(options.body);
         if (options.body.mode === 'bib') return exactDetail;
         return {
-          status: 'found',
+          ...options.body, hasNextPage: false, hasPreviousPage: false, status: 'found',
           totalMatches: 1,
           results: [searchRow]
         };
@@ -331,7 +332,7 @@ const { JSDOM } = require('jsdom');
     const staleLookup = createPolarisLookup({
       authorizedJson: async (url, options) => options.body.mode === 'bib'
         ? pendingVerification
-        : { status: 'found', totalMatches: 1, results: [searchRow] },
+        : { ...options.body, hasNextPage: false, hasPreviousPage: false, status: 'found', totalMatches: 1, results: [searchRow] },
       isAbortError: () => false,
       announce: () => {}
     });

@@ -177,7 +177,9 @@ async function fixture(route, journey, options = {}) {
       if (pathname.endsWith('/research-configuration')) return response(200, {});
       if (pathname.endsWith('/bib-lookup')) {
         const detail = { bibId: 9001, title: request.title, author: null };
-        return response(200, JSON.parse(init.body).mode === 'bib' ? detail : { results: [detail] });
+        const body = JSON.parse(init.body);
+        return response(200, body.mode === 'bib' ? detail : { ...body, totalMatches: 1,
+          pageSize: 10, hasPreviousPage: false, hasNextPage: false, results: [detail] });
       }
       if (pathname.endsWith('/additional-copy') && init.method === 'GET') return response(200, {
         version: request.version, bibid: request.bibid, openCount: 0, emailPurchaseReminderDefault: false });
@@ -2385,7 +2387,7 @@ for (const owner of ['request editor', 'Staff Suggestion']) {
       ui.setApi(({ pathname, init }) => {
         if (pathname.endsWith('/organizations')) return new Promise(done => { validateScope = done; });
         if (pathname.endsWith('/bib-lookup')) return response(200,
-          JSON.parse(init.body).mode === 'bib' ? selected : { results: [selected], totalMatches: 1 });
+          JSON.parse(init.body).mode === 'bib' ? selected : { ...JSON.parse(init.body), results: [selected], totalMatches: 1, hasPreviousPage: false, hasNextPage: false });
       });
       require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, message => { ui.confirms.push(message); return ui.confirms.length === 1; });
       ui.dom.window.history.back();

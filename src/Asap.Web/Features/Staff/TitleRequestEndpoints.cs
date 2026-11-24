@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -19,7 +20,7 @@ public static partial class TitleRequestEndpoints
     public sealed record BibLookupInput(string? RequestId, int? LibraryOrgId,
         [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] int? BibId,
         string? Mode, string? Query, string? Title, string? Author,
-        bool IncludePatronHolds = true);
+        bool IncludePatronHolds = true, JsonElement Page = default);
 
     public static IEndpointRouteBuilder MapTitleRequestEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -316,12 +317,30 @@ public static partial class TitleRequestEndpoints
         {
             if (!exact)
             {
-                var search = await polaris.SearchBibsAsync(mode!, query, title, author, scope.OrganizationId, cancellationToken);
+                var page = 1;
+                if (input.Page.ValueKind != JsonValueKind.Undefined &&
+                    (input.Page.ValueKind != JsonValueKind.Number || !input.Page.TryGetInt32(out page) || page < 1))
+                {
+                    return Results.BadRequest(new { code = "invalid_page", message = "Enter a positive catalog page number." });
+                }
+                if ((mode == "identifier" && !query.EnumerateRunes().Any(Rune.IsLetterOrDigit)) ||
+                    (mode == "title_author" && (!title.EnumerateRunes().Any(Rune.IsLetterOrDigit) || !author.EnumerateRunes().Any(Rune.IsLetterOrDigit))))
+                {
+                    return Results.BadRequest(new { code = "search_query_required", message = "Enter a letter or digit in each catalog search field." });
+                }
+                if (mode == "title_author" && PolarisPatronProvider.HasPairedSearchNumberSign(title, author))
+                {
+                    return Results.BadRequest(new { code = "search_wildcard_unsupported",
+                        message = PolarisPatronProvider.PairedSearchNumberSignError });
+                }
+                var search = await polaris.SearchBibsAsync(mode!, query, title, author, scope.OrganizationId, page, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                return Results.Json(new { status = search.Results.Count == 0 ? "not_found" : "found",
+                return Results.Json(new { status = search.TotalMatches == 0 ? "not_found" : "found",
                     mode, libraryOrgId = scope.OrganizationId,
                     requestId = scope.Request?.Id, version = scope.Request?.Version,
-                    search.TotalMatches, search.TotalMatchesKind, results = search.Results.Take(10) });
+                    page, pageSize = StaffBibSearchResult.PageSize, search.TotalMatches, totalMatchesKind = "provider",
+                    hasPreviousPage = page > 1, hasNextPage = (long)page * StaffBibSearchResult.PageSize < search.TotalMatches,
+                    search.Results });
             }
             var bibId = input.BibId!.Value;
             var bib = await polaris.ValidateBibAsync(bibId, scope.OrganizationId, cancellationToken);

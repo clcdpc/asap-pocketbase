@@ -38,6 +38,16 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
     await targetPage.locator('#polaris-query').press('Enter');
     await targetPage.locator('.polaris-result').first().getByText('Owned by you (1)', { exact: true }).waitFor();
   };
+  const laterPage = async (target = page) => {
+    const next = target.getByRole('navigation', { name: 'Catalog result pages' }).getByRole('button', { name: 'Next', exact: true });
+    await next.focus(); await target.keyboard.press('Enter');
+    await target.locator('#polaris-status').filter({ hasText: 'Page 2 · 2 results shown · 12 catalog matches.' }).waitFor();
+    const later = target.locator('.polaris-result').first();
+    await later.getByText(/BIB: 9011/).waitFor();
+    await later.getByText('Owned by you (1)', { exact: true }).waitFor();
+    assert.equal(await next.isDisabled(), true);
+    assert.equal(await target.locator('#polaris-previous').evaluate(button => button === document.activeElement), true);
+  };
   async function scan(name, target = page, nativeZoom = false) {
     await target.evaluate(axe);
     const state = await target.evaluate(async () => {
@@ -46,7 +56,7 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
       return { violations: (await axe.run()).violations.filter(item => ['serious', 'critical'].includes(item.impact)),
         width: innerWidth, height: innerHeight, documentWidth: document.documentElement.scrollWidth,
         frame: { left: frame.left, right: frame.right, top: frame.top, bottom: frame.bottom },
-        overflow: [...dialog.querySelectorAll('.polaris-result, .polaris-result-actions, .polaris-confirmation')]
+        overflow: [...dialog.querySelectorAll('.polaris-result, .polaris-result-actions, .polaris-confirmation, #polaris-pages')]
           .filter(node => node.getClientRects().length).some(node => node.scrollWidth > node.clientWidth + 1),
         images: [...document.images].filter(node => node.getClientRects().length).every(node => node.complete && node.naturalWidth > 0),
         resultWidth: document.getElementById('polaris-results').clientWidth,
@@ -91,7 +101,7 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
     await openSearch(copyOff);
     await lookup.getByText('Holdings unavailable', { exact: true }).waitFor();
     assert.equal(await cards.count(), 10);
-    assert.equal(await lookup.locator('#polaris-status').textContent(), '10 catalog results shown of 2,951.');
+    assert.equal(await lookup.locator('#polaris-status').textContent(), 'Page 1 · 10 results shown · 12 catalog matches.');
     assert.match(await cards.nth(1).textContent(), /Owned by consortium \(4\)/);
     assert.match(await cards.nth(2).textContent(), /No item records found/);
     assert.match(await cards.nth(3).textContent(), /Not holdable/);
@@ -113,12 +123,24 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
     await first().getByText('Owned by you (1)', { exact: true }).waitFor();
     assert.ok(posts.filter(body => body.mode === 'bib').every(body => body.libraryOrgId === 2 && body.includePatronHolds === false));
     await scan('polaris-desktop-results');
+    await page.locator('#polaris-author').fill('Unsubmitted author');
+    await laterPage();
+    assert.deepEqual(posts.findLast(body => body.mode === 'title_author'), {
+      requestId: copyOff, libraryOrgId: 2, mode: 'title_author', includePatronHolds: false,
+      title: 'Queue fixture', author: 'Staff author', page: 2 });
+    await page.keyboard.press('Enter');
+    await first().getByText(/BIB: 9001/).waitFor();
+    await first().getByText('Owned by you (1)', { exact: true }).waitFor();
+    assert.equal(await page.locator('#polaris-previous').isDisabled(), true);
     await first().locator('.polaris-copy-button').focus(); await page.keyboard.press('Enter');
     assert.match(await confirmation().textContent(), /This action will turn on automatic hold placement for this request\./);
     await scan('polaris-desktop-confirmation');
     await page.keyboard.press('Escape');
     assert.equal(await first().locator('.polaris-copy-button').evaluate(node => node === document.activeElement), true);
     await page.setViewportSize({ width: 390, height: 844 }); await scan('polaris-mobile-results');
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await laterPage(); await scan('polaris-mobile-dark-page-two');
+    await page.emulateMedia({ colorScheme: 'light' });
     await first().locator('.polaris-copy-button').click(); await scan('polaris-mobile-confirmation');
     await confirmation().getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.keyboard.press('Escape'); await page.setViewportSize({ width: 1280, height: 900 });
@@ -142,6 +164,7 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
       }, new URL(baseURL).origin), 2);
       await zoomPage.waitForFunction(before => Math.abs(devicePixelRatio / before - 2) < 0.01, ratio);
       await openSearch(copyOff, 'suggestion', zoomPage); await scan('polaris-native-zoom-results', zoomPage, true);
+      await laterPage(zoomPage); await scan('polaris-native-zoom-page-two', zoomPage, true);
       await zoomPage.locator('.polaris-copy-button').first().click(); await scan('polaris-native-zoom-confirmation', zoomPage, true);
       await zoomPage.keyboard.press('Escape'); await zoomPage.keyboard.press('Escape');
       await zoomPage.locator(`#request-grid a[data-request-id="${copyOff}"]`).click();
@@ -154,6 +177,7 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
 
     // Pending close locks and a lost acknowledgement after the real SQL commit.
     await openSearch(copyOff);
+    await laterPage();
     const actionPath = `**/staff/title-requests/${copyOff}/action`;
     let release, started;
     const dispatched = new Promise(resolve => { started = resolve; });
@@ -166,6 +190,7 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
       await route.fulfill({ status: 503, json: { code: 'request_outcome_unconfirmed', message: 'Fixture acknowledgement lost after SQL commit.' } });
     });
     await first().locator('.polaris-copy-button').click();
+    assert.equal(await page.locator('#polaris-pages').isVisible(), false);
     await confirmation().getByLabel('Email me a purchase reminder', { exact: true }).check();
     await confirmation().getByRole('button', { name: 'Confirm additional copy and queue', exact: true }).click();
     await dispatched;
@@ -187,6 +212,7 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
     await confirmation().getByRole('button', { name: 'Recover identical action', exact: true }).click();
     await recoveredCounts();
     await lookup.waitFor({ state: 'hidden' });
+    assert.equal(commands[0].bibid, 9011);
     assert.equal(commands.length, 2); assert.deepEqual(commands[1], commands[0]); report.identicalRecovery = true;
     report.committed.push({ id: copyOff, ...(await getDetail(copyOff)) });
     assert.equal(report.committed.at(-1).autohold, true);
@@ -195,6 +221,7 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
 
     for (const [id, stage, copy] of [[copyOn, 'outstanding_purchase', true], [useOff, 'suggestion', false], [useOn, 'outstanding_purchase', false]]) {
       await openSearch(id, stage);
+      await laterPage();
       await first().locator(copy ? '.polaris-copy-button' : '.polaris-queue-button').click();
       if (copy) {
         assert.doesNotMatch(await confirmation().textContent(), /This action will turn on automatic hold placement/);
@@ -244,6 +271,7 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
     releasePrior(); await priorDone; await page.unroute('**/api/asap/staff/bib-lookup', delayedPrior);
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     assert.equal(await cards.count(), 1, 'Late successful research cannot replace a closed/reopened dialog context.');
+    assert.equal(await page.locator('#polaris-pages').isVisible(), false);
     await scan('polaris-exact-bib');
     await first().getByRole('button', { name: 'Use BIB 9001 in form', exact: true }).focus();
     assert.equal(await first().getByRole('button', { name: 'Use BIB 9001 in form', exact: true }).evaluate(node => {

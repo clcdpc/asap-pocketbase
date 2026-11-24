@@ -140,12 +140,14 @@ public sealed partial class PatronJourneyTests
     [DataRow("author")]
     [DataRow("identifier")]
     [DataRow("title_author")]
-    public async Task PolarisCatalogSearchEndpointKeepsTenResultCapAndProviderTotal(string mode)
+    public async Task PolarisCatalogSearchPagesInAuthorizedRequestContext(string mode)
     {
         await using var fixture = await SeedPolarisQueueAsync();
         fixture.Provider.SetBibSearch(mode, "Catalog query", "Title", "Author", 2,
-            new StaffBibSearchResult(Enumerable.Range(1, 15).Select(id => new StaffBibSearchRow(
-                9100 + id, $"Result {id}", "Author", "2026", "Book", "Identifier")).ToArray(), 2951));
+            new StaffBibSearchResult(Enumerable.Range(1, 10).Select(id => new StaffBibSearchRow(
+                9100 + id, $"Result {id}", "Author", "2026", "Book", "Identifier")).ToArray(), 11));
+        fixture.Provider.SetBibSearch(mode, "Catalog query", "Title", "Author", 2,
+            new([new(9111, "Last", null, null, "Book", null)], 11), page: 2);
         using var client = await PolarisQueueClientAsync(fixture.Actor);
         using var response = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
         {
@@ -154,9 +156,92 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.AreEqual(10, body.RootElement.GetProperty("results").GetArrayLength());
-        Assert.AreEqual(2951, body.RootElement.GetProperty("totalMatches").GetInt32());
+        Assert.AreEqual(11, body.RootElement.GetProperty("totalMatches").GetInt32());
+        Assert.AreEqual("provider", body.RootElement.GetProperty("totalMatchesKind").GetString());
+        Assert.AreEqual(10, body.RootElement.GetProperty("pageSize").GetInt32());
+        Assert.AreEqual(1, body.RootElement.GetProperty("page").GetInt32());
+        Assert.IsFalse(body.RootElement.GetProperty("hasPreviousPage").GetBoolean());
+        Assert.IsTrue(body.RootElement.GetProperty("hasNextPage").GetBoolean());
+        using var next = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+        {
+            requestId = fixture.Source.Id.ToString(), mode, query = "Catalog query", title = "Title", author = "Author", page = 2
+        });
+        Assert.AreEqual(HttpStatusCode.OK, next.StatusCode);
+        using var last = JsonDocument.Parse(await next.Content.ReadAsStringAsync());
+        Assert.AreEqual(9111, last.RootElement.GetProperty("results").EnumerateArray().Single().GetProperty("bibId").GetInt32());
+        Assert.AreEqual(2, last.RootElement.GetProperty("page").GetInt32());
+        Assert.IsTrue(last.RootElement.GetProperty("hasPreviousPage").GetBoolean());
+        Assert.IsFalse(last.RootElement.GetProperty("hasNextPage").GetBoolean());
+        CollectionAssert.AreEqual(new[] { 1, 2 }, fixture.Provider.Calls
+            .Where(call => call.Operation == TestingPolarisOperation.BibSearch).Select(call => call.Page).ToArray());
         Assert.AreEqual(mode, body.RootElement.GetProperty("mode").GetString());
         Assert.AreEqual(2, body.RootElement.GetProperty("libraryOrgId").GetInt32());
+    }
+
+    [TestMethod]
+    public async Task PolarisCatalogValidatesTextAndScopeOnEveryPage()
+    {
+        await using var fixture = await SeedPolarisQueueAsync();
+        using var client = await PolarisQueueClientAsync(fixture.Actor);
+        foreach (var (mode, query, title, author, library, code) in new[]
+        {
+            ("title", " ", "", "", 2, "search_query_required"),
+            ("author", new string('a', 251), "", "", 2, "search_query_too_long"),
+            ("title_author", "", "Catalog", "", 2, "search_query_required"),
+            ("title_author", "", "Catalog", "?!", 2, "search_query_required"),
+            ("title_author", "", "#MeToo", "Author", 2, "search_wildcard_unsupported"),
+            ("title_author", "", "Catalog", "Author #1", 2, "search_wildcard_unsupported"),
+            ("identifier", "00", "", "", 3, "library_scope_mismatch")
+        })
+        {
+            using var invalid = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+            {
+                mode, query, title, author, page = 2, requestId = fixture.Source.Id.ToString(), libraryOrgId = library
+            });
+            Assert.AreEqual(HttpStatusCode.BadRequest, invalid.StatusCode);
+            using var error = JsonDocument.Parse(await invalid.Content.ReadAsStringAsync());
+            Assert.AreEqual(code, error.RootElement.GetProperty("code").GetString());
+            if (code == "search_wildcard_unsupported")
+            {
+                Assert.AreEqual("Remove # from the title or author to search for a phrase.",
+                    error.RootElement.GetProperty("message").GetString());
+            }
+        }
+        Assert.IsFalse(fixture.Provider.Calls.Any(call => call.Operation == TestingPolarisOperation.BibSearch));
+    }
+
+    [TestMethod]
+    [DataRow("𠮷野", "𠮷")]
+    [DataRow("What If?", "Row*")]
+    public async Task PolarisCatalogAcceptsPairedSearchText(string title, string author)
+    {
+        await using var fixture = await SeedPolarisQueueAsync();
+        using var client = await PolarisQueueClientAsync(fixture.Actor);
+        fixture.Provider.SetBibSearch("title_author", "", title, author, 2, new([], 21), page: 2);
+        using var filtered = await client.PostAsJsonAsync("/api/asap/staff/bib-lookup", new
+        {
+            mode = "title_author", title, author, page = 2, libraryOrgId = 2
+        });
+        Assert.AreEqual(HttpStatusCode.OK, filtered.StatusCode);
+        using var result = JsonDocument.Parse(await filtered.Content.ReadAsStringAsync());
+        Assert.AreEqual("found", result.RootElement.GetProperty("status").GetString());
+        Assert.AreEqual(0, result.RootElement.GetProperty("results").GetArrayLength());
+        Assert.IsTrue(result.RootElement.GetProperty("hasNextPage").GetBoolean());
+    }
+
+    [TestMethod]
+    public async Task PolarisCatalogRejectsInvalidPageBeforeProviderSearch()
+    {
+        await using var fixture = await SeedPolarisQueueAsync();
+        using var client = await PolarisQueueClientAsync(fixture.Actor);
+        foreach (var page in new[] { "0", "-1", "2147483648", "1.5", "\"2\"", "null", "true", "{}" })
+        {
+            using var content = new StringContent(
+                $$"""{"libraryOrgId":2,"mode":"title","query":"Title","page":{{page}}}""", Encoding.UTF8, "application/json");
+            using var response = await client.PostAsync("/api/asap/staff/bib-lookup", content);
+            Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode, page);
+        }
+        Assert.IsFalse(fixture.Provider.Calls.Any(call => call.Operation == TestingPolarisOperation.BibSearch));
     }
 
     [TestMethod]
@@ -179,7 +264,7 @@ public sealed partial class PatronJourneyTests
         await context.SaveChangesAsync();
         try
         {
-            var result = await provider.SearchBibsAsync("title", "Title", "", "", 2, CancellationToken.None);
+            var result = await provider.SearchBibsAsync("title", "Title", "", "", 2, 1, CancellationToken.None);
             var row = result.Results.Single(item => item.BibId == 9001);
             Assert.AreEqual("Large print", row.Format);
             Assert.AreEqual(53, row.MaterialTypeId);

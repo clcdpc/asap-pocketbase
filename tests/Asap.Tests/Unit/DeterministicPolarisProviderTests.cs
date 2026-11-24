@@ -40,7 +40,7 @@ public sealed class DeterministicPolarisProviderTests
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => provider.LookupIdentifierAsync("native", wrongContext, CancellationToken.None));
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => provider.ValidateBibAsync(9001, wrongContext, CancellationToken.None));
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => provider.SearchPatronsAsync("name", wrongContext, CancellationToken.None));
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => provider.SearchBibsAsync("title", "Title", "", "", wrongContext, CancellationToken.None));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => provider.SearchBibsAsync("title", "Title", "", "", wrongContext, 1, CancellationToken.None));
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => provider.GetBibHoldingsAsync(9001, wrongContext, CancellationToken.None));
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => provider.GetPatronHoldsAsync(patron.Barcode, wrongContext, CancellationToken.None));
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => provider.GetPatronCheckoutsAsync(patron.Barcode, wrongContext, CancellationToken.None));
@@ -64,7 +64,7 @@ public sealed class DeterministicPolarisProviderTests
             provider.SetBibSearch("title", "same-query", "", "", org, new([new(bib, org == 2 ? "West title" : "East title", null, null, null, null)], 1));
             Assert.AreEqual(bib, (await provider.LookupIdentifierAsync("same-query", org, CancellationToken.None)).BibId);
             Assert.AreEqual(patron.Barcode, (await provider.SearchPatronsAsync("same-query", org, CancellationToken.None)).Single().Barcode);
-            Assert.AreEqual(bib, (await provider.SearchBibsAsync("title", "same-query", "", "", org, CancellationToken.None)).Results.Single().BibId);
+            Assert.AreEqual(bib, (await provider.SearchBibsAsync("title", "same-query", "", "", org, 1, CancellationToken.None)).Results.Single().BibId);
             Assert.AreEqual(branch, (await provider.GetPickupBranchesAsync(patron, org, CancellationToken.None)).First().Id);
             await provider.UpdatePreferredPickupBranchAsync(patron.Barcode, branch + 1, org, CancellationToken.None);
             Assert.AreEqual(branch + 1, (await provider.RefreshAsync(patron.Barcode, org, CancellationToken.None)).PreferredPickupBranchId);

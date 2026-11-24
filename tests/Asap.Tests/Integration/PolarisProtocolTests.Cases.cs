@@ -57,42 +57,42 @@ public sealed partial class PolarisProtocolTests
     {
         var handler = new StaticResponseHandler(HttpStatusCode.OK,
             """
-            {"PAPIErrorCode":0,"TotalRecordsFound":4,"BibSearchRows":[
+            {"PAPIErrorCode":0,"TotalRecordsFound":5,"BibSearchRows":[
               {"ControlNumber":9001,"Title":"  Catalog title  ","Author":"Catalog author",
-               "PublicationDate":"2026","ISBN":"9780000000001","TypeOfMaterial":"1"},
+               "PublicationDate":"2026","Publisher":"Catalog press","ISBN":"9780000000001","TypeOfMaterial":"1"},
               {"ControlNumber":9002,"Title":"Electronic title","PrimaryTypeOfMaterial":36},
               {"ControlNumber":9003,"Title":"Alternate title","Author":"Second author",
                "TypeOfMaterial":"Book","UPC":"012345678901"},
-              {"ControlNumber":9001,"Title":"Duplicate title"}]}
+              {"ControlNumber":9001,"Title":"Duplicate title"},
+              {"ControlNumber":9004,"Title":"LCCN hit without ISBN or UPC"}]}
             """);
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var byIdentifier = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", 2, CancellationToken.None);
-        Assert.AreEqual(2, byIdentifier.Results.Count);
-        Assert.AreEqual(4, byIdentifier.TotalMatches);
+        var byIdentifier = await provider.SearchBibsAsync("identifier", "978-0000000001", "", "", 2, 1, CancellationToken.None);
+        Assert.AreEqual(3, byIdentifier.Results.Count);
+        Assert.AreEqual(5, byIdentifier.TotalMatches);
         Assert.AreEqual(9001, byIdentifier.Results[0].BibId);
         Assert.AreEqual("Catalog title", byIdentifier.Results[0].Title);
         Assert.AreEqual("2026", byIdentifier.Results[0].Publication);
+        Assert.AreEqual("Catalog press", byIdentifier.Results[0].Publisher);
         Assert.AreEqual(9003, byIdentifier.Results[1].BibId);
         Assert.AreEqual("012345678901", byIdentifier.Results[1].Identifier);
-        CollectionAssert.AreEqual(
-            new[] { "ISBN", "boolean", "LCCN" },
-            handler.RequestUris.Where(uri => uri.AbsolutePath.Contains("/search/bibs/", StringComparison.Ordinal))
-                .Select(uri => uri.AbsolutePath.Split('/').Last()).ToArray());
-        StringAssert.Contains(Uri.UnescapeDataString(handler.RequestUris[1].Query), "q=UPC=\"9780000000001\"");
+        Assert.AreEqual(9004, byIdentifier.Results[2].BibId);
+        Assert.IsNull(byIdentifier.Results[2].Identifier);
+        Assert.AreEqual(1, handler.RequestUris.Count(uri => SearchPath(uri) == "/search/bibs/boolean"));
         Assert.IsTrue(handler.RequestUris.Where(uri => uri.AbsolutePath.Contains("/search/bibs/", StringComparison.Ordinal)).All(uri =>
             Uri.UnescapeDataString(uri.Query).Contains("sortby=PDTI", StringComparison.Ordinal) &&
             Uri.UnescapeDataString(uri.Query).Contains("notran=1", StringComparison.Ordinal) &&
             !Uri.UnescapeDataString(uri.Query).Contains("sort=", StringComparison.Ordinal)));
 
         handler.RequestUris.Clear();
-        await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
-        await provider.SearchBibsAsync("author", "An author", "", "", 2, CancellationToken.None);
-        await provider.SearchBibsAsync("title_author", "", "A title", "An author", 2, CancellationToken.None);
-        CollectionAssert.AreEqual(new[] { "TI", "AU", "boolean", "TI" },
+        await provider.SearchBibsAsync("title", "A title", "", "", 2, 1, CancellationToken.None);
+        await provider.SearchBibsAsync("author", "An author", "", "", 2, 1, CancellationToken.None);
+        await provider.SearchBibsAsync("title_author", "", "A title", "An author", 2, 1, CancellationToken.None);
+        CollectionAssert.AreEqual(new[] { "TI", "AU", "boolean" },
             handler.RequestUris.Select(uri => uri.AbsolutePath.Split('/').Last()).ToArray());
-        StringAssert.Contains(Uri.UnescapeDataString(handler.RequestUris[2].Query),
-            "q=TI=\"A title\" AND AU=\"An author\"");
+        AssertSearchRequest(handler.RequestUris[2], "/search/bibs/boolean",
+            "TI=\"A title\" AND (AU=\"An author\" OR AU=\"author, An\")", "PDTI", 1);
     }
 
     [TestMethod]
@@ -102,7 +102,7 @@ public sealed partial class PolarisProtocolTests
             """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001}]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, 1, CancellationToken.None);
 
         Assert.AreEqual(1, result.Results.Count);
         Assert.AreEqual(9001, result.Results[0].BibId);
@@ -120,7 +120,7 @@ public sealed partial class PolarisProtocolTests
         var provider = await CreatePolarisProviderAsync(handler);
 
         await Assert.ThrowsExactlyAsync<PolarisOperationalException>(() =>
-            provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None));
+            provider.SearchBibsAsync("title", "A title", "", "", 2, 1, CancellationToken.None));
     }
 
     [TestMethod]
@@ -130,7 +130,7 @@ public sealed partial class PolarisProtocolTests
             """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[],"ErrorMessage":""}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, 1, CancellationToken.None);
 
         Assert.AreEqual(0, result.Results.Count);
         Assert.AreEqual(0, result.TotalMatches);
@@ -144,7 +144,7 @@ public sealed partial class PolarisProtocolTests
             """{"PAPIErrorCode":0,"ErrorMessage":"Search terms normalized","TotalRecordsFound":0,"BibSearchRows":[]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, 1, CancellationToken.None);
 
         Assert.AreEqual(0, result.Results.Count);
         Assert.AreEqual(0, result.TotalMatches);
@@ -158,7 +158,7 @@ public sealed partial class PolarisProtocolTests
             """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, 1, CancellationToken.None);
 
         Assert.AreEqual(0, result.Results.Count);
         Assert.AreEqual(0, result.TotalMatches);
@@ -172,7 +172,7 @@ public sealed partial class PolarisProtocolTests
             """{"PAPIErrorCode":1,"ErrorMessage":"Search terms normalized","TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001}]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, 1, CancellationToken.None);
 
         Assert.AreEqual(9001, result.Results.Single().BibId);
     }
@@ -184,7 +184,7 @@ public sealed partial class PolarisProtocolTests
             """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001,"PrimaryTypeOfMaterial":36}]}""");
         var provider = await CreatePolarisProviderAsync(handler);
 
-        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "A title", "", "", 2, 1, CancellationToken.None);
 
         Assert.AreEqual(0, result.Results.Count);
         Assert.AreEqual(1, result.TotalMatches);
@@ -226,74 +226,10 @@ public sealed partial class PolarisProtocolTests
         var provider = await CreatePolarisProviderAsync(handler);
 
         var failure = await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await provider.SearchBibsAsync("title", "A title", "", "", 2, CancellationToken.None));
+            await provider.SearchBibsAsync("title", "A title", "", "", 2, 1, CancellationToken.None));
 
         Assert.AreEqual("polaris_bib_search_failed", failure.Code);
         Assert.AreEqual(1, handler.RequestCount);
-    }
-
-    [TestMethod]
-    public async Task PolarisIdentifierSearchKeepsTrustworthyPartialResultsAndFailsWhenEveryAttemptFails()
-    {
-        var valid = """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9001,"Title":"Catalog title"}]}""";
-        var first = new SequenceResponseHandler(
-            (HttpStatusCode.OK, valid),
-            (HttpStatusCode.ServiceUnavailable, "{}"),
-            (HttpStatusCode.InternalServerError, "{}"));
-        var firstProvider = await CreatePolarisProviderAsync(first);
-        var firstResult = await firstProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
-        Assert.AreEqual(9001, firstResult.Results.Single().BibId);
-        Assert.AreEqual(3, first.RequestCount);
-
-        var partial = new SequenceResponseHandler(
-            (HttpStatusCode.ServiceUnavailable, "{}"),
-            (HttpStatusCode.OK, valid),
-            (HttpStatusCode.ServiceUnavailable, "{}"));
-        var partialProvider = await CreatePolarisProviderAsync(partial);
-
-        var result = await partialProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
-
-        Assert.AreEqual(1, result.Results.Count);
-        Assert.AreEqual(9001, result.Results[0].BibId);
-        Assert.AreEqual(3, partial.RequestCount);
-
-        var last = new SequenceResponseHandler(
-            (HttpStatusCode.ServiceUnavailable, "{}"),
-            (HttpStatusCode.InternalServerError, "{}"),
-            (HttpStatusCode.OK, valid));
-        var lastProvider = await CreatePolarisProviderAsync(last);
-        var lastResult = await lastProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
-        Assert.AreEqual(9001, lastResult.Results.Single().BibId);
-        Assert.AreEqual(3, last.RequestCount);
-
-        var failed = new SequenceResponseHandler(
-            (HttpStatusCode.ServiceUnavailable, "{}"),
-            (HttpStatusCode.InternalServerError, "{}"),
-            (HttpStatusCode.BadGateway, "{}"));
-        var failedProvider = await CreatePolarisProviderAsync(failed);
-        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await failedProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None));
-        Assert.AreEqual(3, failed.RequestCount);
-
-        var empty = """{"PAPIErrorCode":0,"TotalRecordsFound":0,"BibSearchRows":[]}""";
-        var allEmpty = new SequenceResponseHandler(
-            (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}"""),
-            (HttpStatusCode.OK, empty),
-            (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}"""));
-        var emptyProvider = await CreatePolarisProviderAsync(allEmpty);
-        var noMatches = await emptyProvider.SearchBibsAsync("identifier", "9780000000001", "", "", 2, CancellationToken.None);
-        Assert.AreEqual(0, noMatches.Results.Count);
-        Assert.AreEqual(3, allEmpty.RequestCount);
-
-        var emptyAndFailed = new SequenceResponseHandler(
-            (HttpStatusCode.OK, """{"PAPIErrorCode":-1,"TotalRecordsFound":0,"BibSearchRows":[]}"""),
-            (HttpStatusCode.ServiceUnavailable, "{}"),
-            (HttpStatusCode.OK, empty));
-        var emptyAndFailedProvider = await CreatePolarisProviderAsync(emptyAndFailed);
-        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(async () =>
-            await emptyAndFailedProvider.SearchBibsAsync(
-                "identifier", "9780000000001", "", "", 2, CancellationToken.None));
-        Assert.AreEqual(3, emptyAndFailed.RequestCount);
     }
 
     [TestMethod]
@@ -372,19 +308,15 @@ public sealed partial class PolarisProtocolTests
     }
 
     [TestMethod]
-    public async Task PolarisTitleAuthorSearchCanUseAValidFallbackAfterPrimaryFailure()
+    [DataRow("title_author")]
+    [DataRow("identifier")]
+    public async Task PolarisBooleanSearchPropagatesProviderFailureWithoutFallback(string mode)
     {
-        var handler = new SequenceResponseHandler(
-            (HttpStatusCode.ServiceUnavailable, "{}"),
-            (HttpStatusCode.OK,
-             """{"PAPIErrorCode":0,"TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":9002,"Title":"Fallback title","Author":"An author"}]}"""));
+        var handler = new StaticResponseHandler(HttpStatusCode.ServiceUnavailable, "{}");
         var provider = await CreatePolarisProviderAsync(handler);
-
-        var result = await provider.SearchBibsAsync("title_author", "", "A title", "An author", 2, CancellationToken.None);
-
-        Assert.AreEqual(1, result.Results.Count);
-        Assert.AreEqual(9002, result.Results[0].BibId);
-        Assert.AreEqual(2, handler.RequestCount);
+        await Assert.ThrowsExactlyAsync<PolarisOperationalException>(() =>
+            provider.SearchBibsAsync(mode, "9780000000001", "A title", "An author", 2, 1, CancellationToken.None));
+        Assert.AreEqual(1, handler.RequestCount);
     }
 
     [TestMethod]
@@ -399,7 +331,7 @@ public sealed partial class PolarisProtocolTests
         var canceled = false;
         try
         {
-            await provider.SearchBibsAsync("title", "A title", "", "", 2, cancellation.Token);
+            await provider.SearchBibsAsync("title", "A title", "", "", 2, 1, cancellation.Token);
         }
         catch (OperationCanceledException)
         {
