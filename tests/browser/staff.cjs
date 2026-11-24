@@ -4358,7 +4358,7 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
 
 async function runSettingsLayout(browser, args, axeSource, report) {
   const sections = [
-    { name: 'start', pairs: [['leap-bib-url-pattern', 'leap-patron-url-pattern']], wide: ['system-staff-url', 'format-icon-url-pattern'] },
+    { name: 'start', pairs: [['leap-bib-url-pattern', 'leap-patron-url-pattern']], wide: ['system-staff-url'] },
     { name: 'polaris', pairs: [['polaris-access-id', 'polaris-api-key'], ['polaris-admin-user', 'polaris-admin-pass'], ['polaris-workstation-id', 'polaris-system-user-id']], wide: ['polaris-host', 'polaris-domain'] },
     { name: 'smtp', pairs: [['email-from-address', 'email-from-name']], wide: ['email-postmark-token', 'email-clear-postmark-token'] },
     { name: 'staff', pairs: [['staff-add-role', 'staff-add-organization']], wide: ['staff-add-email'] },

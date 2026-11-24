@@ -83,14 +83,6 @@ public sealed record PolarisSettingsPatch
         ApiKey.IsSupplied || AdminPassword.IsSupplied || ClearApiKey.IsSupplied || ClearAdminPassword.IsSupplied;
 }
 
-public sealed record CatalogSettingsPatch
-{
-    public SuppliedValue<string?> PacBaseUrl { get; init; }
-    public SuppliedValue<string?> FormatIconUrlPattern { get; init; }
-    public SuppliedValue<int?> PacOrganizationId { get; init; }
-    public bool HasChanges => PacBaseUrl.IsSupplied || FormatIconUrlPattern.IsSupplied || PacOrganizationId.IsSupplied;
-}
-
 public sealed record EmailSettingsPatch
 {
     public SuppliedValue<string?> FromAddress { get; init; }
@@ -109,7 +101,6 @@ public sealed record AdministrationSettingsCommand(
     public SystemSettingsPatch System { get; init; } = new();
     public PolarisSettingsPatch Polaris { get; init; } = new();
     public EmailSettingsPatch Email { get; init; } = new();
-    public CatalogSettingsPatch Catalog { get; init; } = new();
 }
 
 // Legacy collection shapes are interpreted by the settings collection mapper. Scalar patches
@@ -377,10 +368,6 @@ public static class AdministrationSettingsBinding
         var rootLeapBibUrlPattern = Text(payload, "leapBibUrlPattern", ref error);
         var leapPatronUrlPattern = Text(system, "leapPatronUrlPattern", ref error);
         var rootLeapPatronUrlPattern = Text(payload, "leapPatronUrlPattern", ref error);
-        var formatIconUrlPattern = Text(system, "formatIconUrlPattern", ref error);
-        var rootFormatIconUrlPattern = Text(payload, "formatIconUrlPattern", ref error);
-        var catalog = Section(payload, ref error, "catalog");
-        var catalogFormatIconUrlPattern = Text(catalog, "formatIconUrlPattern", ref error);
         var systemNotEnabledMessage = Text(system, "systemNotEnabledMessage", ref error);
         var rootSystemNotEnabledMessage = Text(payload, "systemNotEnabledMessage", ref error);
         var patronSystemNotEnabledMessage = Text(patron, "systemNotEnabledMessage", ref error);
@@ -406,7 +393,6 @@ public static class AdministrationSettingsBinding
         if (ConflictingSuppliedValues(staffUrl, rootStaffUrl) ||
             ConflictingSuppliedValues(leapBibUrlPattern, rootLeapBibUrlPattern) ||
             ConflictingSuppliedValues(leapPatronUrlPattern, rootLeapPatronUrlPattern) ||
-            ConflictingSuppliedValues(formatIconUrlPattern, rootFormatIconUrlPattern, catalogFormatIconUrlPattern) ||
             ConflictingSuppliedValues(systemNotEnabledMessage, rootSystemNotEnabledMessage, patronSystemNotEnabledMessage) ||
             ConflictingSuppliedValues(misconfiguredMessage, rootMisconfiguredMessage, patronMisconfiguredMessage) ||
             ConflictingSuppliedValues(systemPolarisUserId, legacyPolarisUserId) ||
@@ -427,20 +413,6 @@ public static class AdministrationSettingsBinding
             SystemNotEnabledMessage = Last(Last(systemNotEnabledMessage, rootSystemNotEnabledMessage), patronSystemNotEnabledMessage),
             MisconfiguredMessage = Last(Last(misconfiguredMessage, rootMisconfiguredMessage), patronMisconfiguredMessage)
         };
-        var catalogPatch = new CatalogSettingsPatch
-        {
-            PacBaseUrl = Text(catalog, "pacBaseUrl", ref error),
-            FormatIconUrlPattern = Last(Last(formatIconUrlPattern, rootFormatIconUrlPattern), catalogFormatIconUrlPattern),
-            PacOrganizationId = Integer(catalog, "pacOrganizationId", ref error, int.MaxValue)
-        };
-        if (scope.Kind != LibraryScopeKind.System && (formatIconUrlPattern.IsSupplied || rootFormatIconUrlPattern.IsSupplied))
-        {
-            error ??= "settings_system_only";
-        }
-        if (scope.Kind == LibraryScopeKind.System && catalogPatch.PacOrganizationId.IsSupplied)
-        {
-            error ??= "catalog_context_library_only";
-        }
         var polarisPatch = new PolarisSettingsPatch
         {
             Host = Text(polaris, "host", ref error, "polaris_host_invalid"),
@@ -494,7 +466,7 @@ public static class AdministrationSettingsBinding
             string.Equals(Text(payload, "action", ref error).Value, "reset", StringComparison.OrdinalIgnoreCase),
             workflowPatch, patronPatch, payload.ValueKind == JsonValueKind.Undefined ? JsonSerializer.SerializeToElement(new { }) : payload.Clone(), error)
         {
-            System = systemPatch, Polaris = polarisPatch, Email = emailPatch, Catalog = catalogPatch
+            System = systemPatch, Polaris = polarisPatch, Email = emailPatch
         };
     }
 

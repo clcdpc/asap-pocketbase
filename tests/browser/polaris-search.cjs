@@ -21,6 +21,7 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
   });
   await guard(context);
   const page = await context.newPage();
+  await context.route('**/formats/53.svg', route => route.fulfill({ status: 404 }));
   page.on('pageerror', error => report.errors.push(error.message)); rejectNativeDialogs(page, report.errors);
   const lookup = page.locator('#polaris-dialog'), cards = lookup.locator('.polaris-result');
   const first = () => cards.first();
@@ -98,6 +99,11 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
   try {
     await page.goto(`${baseURL}/staff/?scope=all`, { waitUntil: 'networkidle' });
     assert.equal(await page.locator('#library-scope').inputValue(), 'all');
+    const releaseArtwork = Promise.withResolvers();
+    await page.route(`${baseURL}/formats/02.svg`, async route => {
+      await releaseArtwork.promise;
+      await route.continue();
+    }, { times: 1 });
     await openSearch(copyOff);
     await lookup.getByText('Holdings unavailable', { exact: true }).waitFor();
     assert.equal(await cards.count(), 10);
@@ -106,8 +112,18 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
     assert.match(await cards.nth(2).textContent(), /No item records found/);
     assert.match(await cards.nth(3).textContent(), /Not holdable/);
     for (const index of [2, 3, 4]) assert.equal(await cards.nth(index).locator('.polaris-queue-button').isDisabled(), true);
-    assert.equal(await first().locator('img').getAttribute('alt'), '');
-    assert.equal(new URL(await first().locator('img').getAttribute('src'), baseURL).origin, new URL(baseURL).origin);
+    const icon = first().locator('img');
+    const label = first().locator('.polaris-format-label');
+    assert.equal(await icon.getAttribute('src'), '/formats/02.svg');
+    assert.equal(await first().locator('.polaris-format-fallback').isVisible(), true);
+    const labelBeforeLoad = await label.boundingBox();
+    releaseArtwork.resolve();
+    await icon.waitFor({ state: 'visible' });
+    assert.deepEqual(await label.boundingBox(), labelBeforeLoad);
+    assert.equal(await icon.getAttribute('alt'), '');
+    for (const id of [64, 65]) {
+      await cards.locator(`img[src="/formats/${id}.svg"]`).first().waitFor({ state: 'visible' });
+    }
     await cards.nth(1).locator('img').waitFor({ state: 'detached' });
     assert.equal(await cards.nth(1).locator('.polaris-format-fallback').isVisible(), true);
     assert.equal(await cards.nth(2).locator('.polaris-format-fallback').isVisible(), true);
@@ -272,6 +288,7 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     assert.equal(await cards.count(), 1, 'Late successful research cannot replace a closed/reopened dialog context.');
     assert.equal(await page.locator('#polaris-pages').isVisible(), false);
+    await first().locator('img[src="/formats/02.svg"]').waitFor({ state: 'visible' });
     await scan('polaris-exact-bib');
     await first().getByRole('button', { name: 'Use BIB 9001 in form', exact: true }).focus();
     assert.equal(await first().getByRole('button', { name: 'Use BIB 9001 in form', exact: true }).evaluate(node => {

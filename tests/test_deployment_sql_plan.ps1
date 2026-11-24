@@ -54,6 +54,7 @@ try {
         Assert-True ($args -contains '-i' -and $args -contains '-E' -and $args -contains '-b') 'SQL execution must retain integrated authentication and fail on SQL errors.'
         $sql = Get-Content -LiteralPath $args[-1] -Raw
         if ($sql -match 'schema identity') {
+            $script:ranBeforeProtectedPlan = $sql.Contains("EXEC sys.sp_set_session_context N'AsapBeforeProtectedPlan', 1;")
             Assert-True ($sql -match 'Version\] < 13' -and $sql -match 'Version\] > 13') 'Actual DACPAC schema guards must remain.'
             if ($script:nativeFailure -eq 'guard') { $script:LASTEXITCODE = 1 }
         }
@@ -251,9 +252,11 @@ try {
     $publish = @{ SqlCmdPath = $config.SqlCmdPath; SqlPackagePath = $config.SqlPackagePath; ConnectionString = $connection; DacpacPath = $dacpac }
     $script:nativeCalls.Clear()
     Invoke-DacpacPublish @publish
+    Assert-True $script:ranBeforeProtectedPlan 'Protected publish must perform the targeted DACPAC retirement before planning.'
     Assert-True ($script:nativeCalls.Count -eq 2 -and $script:nativeCalls[1] -contains '/Action:Publish' -and $script:nativeCalls[1] -contains '/p:BlockOnPossibleDataLoss=True') 'Default publication must retain the schema guard and protected SqlPackage publish.'
     $script:nativeCalls.Clear()
     Invoke-DacpacPublish @publish -AllowSqlDataLoss -Plan $plan
+    Assert-True (-not $script:ranBeforeProtectedPlan) 'An existing DEV plan must execute against the schema it inspected.'
     Assert-True ($script:nativeCalls.Count -eq 2 -and $script:nativeCalls[1][-1] -eq $plan.ScriptPath) 'Opt-in must run the exact reviewed SQL bytes after the DACPAC schema guard.'
     Assert-True (-not @($script:nativeCalls | Where-Object { $_ -contains '/Action:Publish' }).Count) 'Opt-in must never replan with an unprotected Publish action.'
     $script:nativeFailure = 'guard'

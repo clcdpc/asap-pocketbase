@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 34 34"><g stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="17" cy="14.1" r="12.1" fill="#3299cc" stroke="#bcbdbd" stroke-width="1.1"/>
+    <!-- Eurasia / Africa in light land fill -->
+    <path d="M12.8 4.6L15.1 3.8L17.9 5.1L19.8 3.8L21.4 5.4L23.1 5.0L25.7 7.1L25 9.5L22.5 9.3L21 11.2L19.1 10.8L18.6 13.2L21 14.4L21.8 17.0L20.5 20.1L18.2 23.4L16.8 21.7L17.0 18.8L15.5 16.6L16.1 13.8L14.1 12.3L14.3 9.8L12.4 8.5Z" fill="#f0f2f2"/>
+    <!-- Southern land edge and a second coastal landmass -->
+    <path d="M7.6 6.8L10.1 6.2L11.4 8.5L11.3 10.6L9.2 10.4L10.5 13.0L9.0 16.1L10 18.4L8.8 19.7L7 17.8L5.1 14.8L5.2 11.2Z" fill="#f0f2f2"/>
+    <path d="M23.1 17.5L25.9 18.5L27.3 20.5L25.9 22.8L23.5 22.5L22.8 20.1Z" fill="#f0f2f2"/>
+    <path d="M26.3 8.1Q29.6 16 24.9 22.7" fill="none" stroke="#75bedf" stroke-width="0.62"/>
+    <path d="M29.6 6.3Q32 15 26.6 23.6Q22.5 28 17 28" stroke="#bcbdbd" stroke-width="1.05" fill="none"/>
+    <path d="M17 26.3V29.2" stroke="#a7a9aa" stroke-width="1.9"/>
+    <path d="M14.7 29.0H19.3L20.2 30.2V30.8H13.8V30.2Z" fill="#bcbdbd"/>
+    <path d="M11.1 31.7L13.4 30.4H20.5L23.1 31.7V32.6H11.1Z" fill="#bcbdbd"/>
+</g></svg>

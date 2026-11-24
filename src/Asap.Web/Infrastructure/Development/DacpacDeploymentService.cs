@@ -56,12 +56,14 @@ public sealed class DacpacDeploymentService
             return;
         }
 
-        // The DACPAC remains the only DDL owner. Check its read-only schema identity
-        // guards before DacFx plans any changes or evaluates data-loss guards.
+        // Run the package's schema identity check and targeted retirement before planning.
         using var script = package.PreDeploymentScript;
         using var reader = new StreamReader(script);
         using var connection = new SqlConnection(databaseConnectionString);
         connection.Open();
+        using var preflight = connection.CreateCommand();
+        preflight.CommandText = "EXEC sys.sp_set_session_context N'AsapBeforeProtectedPlan', 1;";
+        preflight.ExecuteNonQuery();
         foreach (var batch in Regex.Split(reader.ReadToEnd(), @"^GO\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase))
         {
             if (string.IsNullOrWhiteSpace(batch))

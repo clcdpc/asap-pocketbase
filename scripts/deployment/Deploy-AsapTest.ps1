@@ -944,7 +944,11 @@ function Invoke-DacpacPublish {
         }
         $reader = [IO.StreamReader]::new($entry.Open())
         try {
-            [IO.File]::WriteAllText($preflightPath, $reader.ReadToEnd(), [Text.UTF8Encoding]::new($false))
+            $preflight = $reader.ReadToEnd()
+            if (-not $AllowSqlDataLoss) {
+                $preflight = "EXEC sys.sp_set_session_context N'AsapBeforeProtectedPlan', 1;`n" + $preflight
+            }
+            [IO.File]::WriteAllText($preflightPath, $preflight, [Text.UTF8Encoding]::new($false))
         }
         finally {
             $reader.Dispose()

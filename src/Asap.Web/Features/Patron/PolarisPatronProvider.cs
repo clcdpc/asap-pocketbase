@@ -607,9 +607,7 @@ public sealed partial class PolarisPatronProvider(
                 Clean(data.ISBN) ?? Clean(data.ISSN) ?? Clean(data.UPC?.FirstOrDefault()),
                 Clean(data.Publisher?.FirstOrDefault()))
             {
-                MaterialTypeId = material.MaterialTypeId,
-                MaterialTypeSearchCode = material.MaterialTypeSearchCode,
-                FormatIconUrl = material.FormatIconUrl
+                MaterialTypeId = material.MaterialTypeId
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

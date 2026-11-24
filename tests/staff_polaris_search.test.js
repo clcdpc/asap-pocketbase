@@ -16,7 +16,7 @@ const { JSDOM } = require('jsdom');
       fs.copyFileSync(path.join(root, 'js', `${name}.js`), path.join(temporary, `${name}.js`));
     }
     global.window = dom.window; global.document = dom.window.document; global.Node = dom.window.Node;
-    const { createPolarisLookup, safeMaterialIconUrl } = await import(pathToFileURL(path.join(temporary, 'research.js')).href);
+    const { createPolarisLookup } = await import(pathToFileURL(path.join(temporary, 'research.js')).href);
     const { createSessionIdentity } = await import(pathToFileURL(path.join(temporary, 'session-identity.js')).href);
     const { catalogQueueStorageKey, decodeCatalogQueue } = await import(pathToFileURL(path.join(temporary, 'catalog-queue.js')).href);
     const tick = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -30,9 +30,10 @@ const { JSDOM } = require('jsdom');
     dialog.showModal = () => { dialog.open = true; }; dialog.close = () => { dialog.open = false; };
     const query = document.querySelector('#polaris-query'), mode = document.querySelector('#polaris-mode');
     const resultPane = document.querySelector('#polaris-results'), panel = document.querySelector('#polaris-confirmation');
+    const materialIds = [2, undefined, 53, 64, 65, 0, 29, -1, 1.5, '2'];
     const rows = Array.from({ length: 12 }, (_, index) => ({ bibId: 9001 + index, title: `Catalog <unsafe> ${index}`,
       author: 'Catalog author', publication: '2026', format: index === 1 ? '33181604' : 'Book',
-      formatIconUrl: index === 0 ? '/material.svg' : 'javascript:alert(1)', identifier: `ID-${index}` }));
+      materialTypeId: materialIds[index], identifier: `ID-${index}` }));
     let lookups = [], mutations = [], pendingReads = [], activeReads = 0, maxReads = 0, delay = false, version = 'authoritative-v2';
     let behavior = 'success', mutationResolve, callbacks = 0, readCurrent = true;
     const messages = [], receipts = [];
@@ -81,22 +82,18 @@ const { JSDOM } = require('jsdom');
     const click = text => [...panel.querySelectorAll('button')].find(button => button.textContent === text).click();
     const cancel = () => dialog.dispatchEvent(new dom.window.Event('cancel', { cancelable: true }));
 
-    assert.equal(safeMaterialIconUrl('https://localhost/valid.svg'), 'https://localhost/valid.svg');
-    assert.equal(safeMaterialIconUrl('/icons/material-01.svg'), '/icons/material-01.svg');
-    for (const url of ['javascript:alert(1)', 'data:image/png;base64,x', '//evil.test/x', '///evil.test/x', '/\\evil.test/x',
-      '/icons/\nmaterial.svg', 'https://user:secret@evil.test/x', 'https://x.test/\\y', 'https://x.test/\nx']) {
-      assert.equal(safeMaterialIconUrl(url), '');
-    }
     delay = true; lookup.open(current()); await search();
     assert.equal(pendingReads.length, 3, 'Only three ownership lookups can run concurrently.');
     assert.equal(resultPane.children.length, 10, 'Show the requested provider page.');
     assert.equal(document.querySelector('#polaris-status').textContent, 'Page 1 · 10 results shown · 12 catalog matches.');
     assert.match(resultPane.textContent, /Checking ownership/);
     assert.equal(resultPane.querySelector('button').disabled, true);
-    assert.equal(resultPane.querySelectorAll('img').length, 1); assert.equal(resultPane.querySelector('img').alt, '');
-    assert.equal(resultPane.querySelector('img').src, 'https://localhost/material.svg', 'Root-relative material icons stay on the application origin.');
-    resultPane.querySelector('img').dispatchEvent(new dom.window.Event('error'));
-    assert.equal(resultPane.querySelectorAll('img').length, 0, 'Broken decorative icons fall back to the readable format label.');
+    const paths = [...resultPane.children].map(card => card.querySelector('img')?.getAttribute('src') ?? null);
+    assert.deepEqual(paths, ['/formats/02.svg', null, '/formats/53.svg', '/formats/64.svg', '/formats/65.svg', null, null, null, null, null]);
+    const image = resultPane.querySelector('img');
+    assert.equal(image.alt, '');
+    image.dispatchEvent(new dom.window.Event('error'));
+    assert.equal(resultPane.firstElementChild.querySelector('img'), null);
     assert.doesNotMatch(resultPane.textContent, /33181604/);
     assert.equal(resultPane.querySelector('unsafe'), null);
     query.value = 'Replacement'; query.dispatchEvent(new dom.window.Event('input'));

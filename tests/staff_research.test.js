@@ -205,7 +205,7 @@ const { JSDOM } = require('jsdom');
       publication: '2026',
       format: 'Book',
       identifier: '9780000000001',
-      formatIconUrl: '/fixtures/material.gif'
+      materialTypeId: 2
     };
     const lookup = createPolarisLookup({
       authorizedJson: async (url, options) => {

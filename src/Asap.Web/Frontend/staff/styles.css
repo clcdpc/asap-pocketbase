@@ -668,15 +668,6 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
   #material-formats-editor > .settings-format-row > .settings-inheritance-field:has(> .settings-domain-check),
   #material-formats-editor > .settings-format-row:has(> .settings-inheritance-field) > .settings-row-actions { margin-top: calc(.78lh + 4px); }
 }
-.catalog-preview { overflow-wrap: anywhere; }
-.catalog-preview img { object-fit: contain; }
-.catalog-preview:empty { display: none; }
-#settings-catalog-links { display: grid; gap: 12px; }
-#settings-catalog-links > .field-help { margin: 0; }
-#settings-catalog-links .field-help { font-weight: 400; }
-/* Catalog fields add inheritance after help; each wide field owns its tracks. */
-#settings-catalog-links .settings-grid > .settings-field { grid-row: auto; grid-template-rows: none; }
-#catalog-preview-button { justify-self: start; }
 #external-search-provider-help { margin: 12px 0; }
 #external-search-provider-editor { container-type: inline-size; }
 #external-search-provider-editor .settings-provider-row { grid-template-columns: minmax(0, 1fr); }

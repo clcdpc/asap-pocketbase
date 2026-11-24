@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 34 34"><g stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.8" y="2.9" width="28.7" height="28.3" fill="#f0f2f2" stroke="#bcbdbd" stroke-width="0.95"/>
+    <text x="7.3" y="7.4" font-family="DejaVu Sans,Arial,sans-serif" font-size="5.1" font-weight="bold" text-anchor="middle" fill="#bcbdbd">N</text>
+    <path d="M17.0 3.7V30.3" stroke="#75bedf" stroke-width="0.72" stroke-dasharray="1.2 2.25"/>
+    <path d="M3.4 17.0H17.6" stroke="#3299cc" stroke-width="0.75" stroke-dasharray="1.1 1.85"/>
+    <path d="M17.7 17H25.8" stroke="#e2e5e6" stroke-width="0.72" stroke-dasharray="1.1 1.7"/>
+    <path d="M9.0 11.2L10.8 15.4L15 17L10.8 18.6L9 22.8L7.2 18.6L3 17L7.2 15.4Z" fill="#3299cc"/>
+    <path d="M9 12.3L10.3 16.2L14.2 17L10.3 17.8Z" fill="#75bedf"/>
+    <path d="M29.9 6.5Q28.9 8.4 27.1 8.5L26 10.6L24.7 11.9L23.4 14L24.7 16.6L22.1 18.6L24.0 20.3L22.0 22.2L20.9 24.2L19.4 25.4L19.6 29.7" fill="none" stroke="#bcbdbd" stroke-width="1.12"/>
+    <path d="M26.2 23.1H30M28.1 21.3V25.0" stroke="#bcbdbd" stroke-width="0.95"/>
+</g></svg>

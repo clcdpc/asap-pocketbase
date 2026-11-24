@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Asap.Tests.Integration;
 
@@ -46,6 +47,20 @@ public sealed class FrontendPublishTests
             {
                 await RunAsync(scratch.FullName, cancellationToken, "dotnet", "publish", "Fixture.csproj", "-c", "Release", "-o", output);
                 await VerifyAsync(root, output, cancellationToken);
+                var formats = Path.Combine(output, "wwwroot", "formats");
+                var names = Enumerable.Range(1, 28).Concat(Enumerable.Range(33, 22)).Concat([64, 65])
+                    .Select(id => $"{id:D2}.svg").ToArray();
+                CollectionAssert.AreEquivalent(names, Directory.GetFileSystemEntries(formats).Select(Path.GetFileName).ToArray());
+                using var artwork = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                foreach (var name in names)
+                {
+                    var bytes = await File.ReadAllBytesAsync(Path.Combine(formats, name), cancellationToken);
+                    CollectionAssert.AreEqual(await File.ReadAllBytesAsync(Path.Combine(frontend, "formats", name), cancellationToken), bytes, name);
+                    artwork.AppendData(bytes);
+                }
+                // Original SVG bytes from the supplied archive, concatenated in material-type order.
+                Assert.AreEqual("53376e39e8681d4e291dbb9ceeb10c31dcd2b48560e4341ed8e56f06fb732848",
+                    Convert.ToHexStringLower(artwork.GetHashAndReset()));
                 var firstVersion = ReadVersion(output);
                 var htmlTime = File.GetLastWriteTimeUtc(Path.Combine(scratch.FullName, "wwwroot", "staff", "index.html"));
 

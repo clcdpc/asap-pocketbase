@@ -1,14 +1,3 @@
-using System.Net;
-using System.Net.Http.Json;
-using System.Text;
-using System.Text.Json;
-using Asap.Web.Features.Patron;
-using Asap.Web.Features.Staff;
-using Asap.Web.Infrastructure.Data;
-using Asap.Web.Infrastructure.Testing;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-
 namespace Asap.Tests.Integration;
 
 public sealed partial class PolarisProtocolTests
@@ -26,7 +15,7 @@ public sealed partial class PolarisProtocolTests
         Assert.AreEqual(3, result.Results.Count);
         Assert.AreEqual(2951, again.TotalMatches);
         Assert.AreEqual("Unknown", result.Results.Single(item => item.BibId == 9001).Format);
-        Assert.IsNull(result.Results[0].FormatIconUrl);
+        Assert.AreEqual(53, result.Results.Single(item => item.BibId == 9001).MaterialTypeId);
         Assert.AreEqual(1, handler.ReferenceCalls);
     }
 
@@ -35,7 +24,16 @@ public sealed partial class PolarisProtocolTests
     {
         var handler = new CatalogMaterialHandler();
         var provider = await CreatePolarisProviderAsync(handler);
-        await provider.SearchBibsAsync("title", "Title", "", "", 2, 1, CancellationToken.None);
+        var result = await provider.SearchBibsAsync("title", "Title", "", "", 2, 1, CancellationToken.None);
+        var row = result.Results.Single(item => item.BibId == 9001);
+        Assert.AreEqual("Large print", row.Format);
+        Assert.AreEqual(53, row.MaterialTypeId);
+        Assert.AreEqual("Book", result.Results.Single(item => item.BibId == 9002).Format);
+        Assert.AreEqual("Unknown", result.Results.Single(item => item.BibId == 9003).Format);
+        Assert.AreEqual(2951, result.TotalMatches);
+        var exact = await provider.ValidateBibAsync(9001, 2, CancellationToken.None);
+        Assert.AreEqual(53, exact.MaterialTypeId);
+        Assert.AreEqual("Large print", exact.Format);
         await provider.SearchBibsAsync("author", "Author", "", "", 2, 1, CancellationToken.None);
         Assert.AreEqual(1, handler.ReferenceCalls);
         using var canceled = new CancellationTokenSource();

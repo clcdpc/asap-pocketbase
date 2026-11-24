@@ -29,11 +29,11 @@ public sealed partial class PatronJourneyTests
             $"Catalog result {index + 1}: a readable title that wraps at narrow widths", "Catalog author", "2026",
             index % 3 == 0 ? "Audio CD" : index % 3 == 1 ? "Large print with full provider description" : "Book",
             index == 1 ? new string('9', 180) : $"CATALOG-{index}")
-            { FormatIconUrl = index == 1 ? "/fixtures/material-missing.gif" : index == 2 ? null : "/jpl.png" }).ToArray();
+            { MaterialTypeId = index switch { 0 => 2, 1 => 53, 2 => 29, 3 => 65, _ => 64 } }).ToArray();
         foreach (var row in rows)
         {
             provider.SetBib(row.BibId, 2, new(true, row.Title, row.Author, row.Publication, row.Format, row.Identifier)
-                { FormatIconUrl = row.FormatIconUrl }, new(1, 3, 4, true, true));
+                { MaterialTypeId = row.MaterialTypeId }, new(1, 3, 4, true, true));
         }
         provider.SetBib(9002, 2, new(true, rows[1].Title, Format: "Book"), new(0, 4, 4, true, false));
         provider.SetBib(9003, 2, new(true, rows[2].Title, Format: "Book"), new(0, 0, 0, false, false));

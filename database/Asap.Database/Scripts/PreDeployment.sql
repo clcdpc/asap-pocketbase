@@ -20,3 +20,12 @@ ELSE IF EXISTS (SELECT 1 FROM sys.tables WHERE [schema_id] = SCHEMA_ID(N'asap'))
 BEGIN
     THROW 51000, 'An existing application database has no schema identity.', 1;
 END;
+
+-- Protected publishers retire these columns before DacFx compares the schemas.
+-- A precomputed DEV script already contains its own planned column drops.
+IF SESSION_CONTEXT(N'AsapBeforeProtectedPlan') = 1
+    AND OBJECT_ID(N'[asap].[SystemSettings]', N'U') IS NOT NULL
+BEGIN
+    ALTER TABLE [asap].[SystemSettings] DROP COLUMN IF EXISTS [PacBaseUrl];
+    ALTER TABLE [asap].[SystemSettings] DROP COLUMN IF EXISTS [MaterialTypeIconUrlPattern];
+END;

@@ -10,6 +10,9 @@ BEGIN
     THROW 51000, 'This DACPAC requires schema 13.', 1;
 END;
 
+-- The DACPAC explicitly retires the library-owned artwork configuration.
+DROP TABLE IF EXISTS [asap].[LibraryCatalogSettings];
+
 IF NOT EXISTS (SELECT 1 FROM [asap].[DeploymentState] WHERE [Id] = 1)
 BEGIN
     INSERT INTO [asap].[DeploymentState] ([Id]) VALUES (1);

@@ -1,16 +1,12 @@
 using System.Globalization;
 using System.Text.Json;
 using Asap.Web.Features.Staff;
-using Asap.Web.Infrastructure.Data;
-using Clc.Polaris.Api;
-using Microsoft.EntityFrameworkCore;
 
 namespace Asap.Web.Features.Patron;
 
 public sealed partial class PolarisPatronProvider
 {
-    private sealed record MaterialDefinition(int Id, string Description, string? SearchCode);
-    private sealed record MaterialReference(DateTimeOffset Expires, IReadOnlyDictionary<int, MaterialDefinition> Rows);
+    private sealed record MaterialReference(DateTimeOffset Expires, IReadOnlyDictionary<int, string> Rows);
     private readonly SemaphoreSlim materialReferenceGate = new(1, 1);
     private readonly Dictionary<(int OrganizationId, string Host), MaterialReference> materialReferences = [];
 
@@ -20,6 +16,7 @@ public sealed partial class PolarisPatronProvider
     private async Task<IReadOnlyList<StaffBibSearchRow>> PresentStaffMaterialsAsync(
         DispatchAwarePapiClient client, IReadOnlyList<StaffBibSearchRow> rows, int organizationId, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!rows.Any(row => row.MaterialTypeId.HasValue || IsNumericMaterialCode(row.Format)))
         {
             return rows;
@@ -27,27 +24,19 @@ public sealed partial class PolarisPatronProvider
 
         var definitions = rows.Any(row => row.MaterialTypeId.HasValue)
             ? await LoadMaterialDefinitionsAsync(client, organizationId, cancellationToken)
-            : new Dictionary<int, MaterialDefinition>();
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var presentation = await CatalogPresentation.LoadAsync(context, organizationId, cancellationToken);
+            : new Dictionary<int, string>();
         return rows.Select(row =>
         {
-            definitions.TryGetValue(row.MaterialTypeId ?? 0, out var definition);
-            var label = definition?.Description ??
+            var label = definitions.GetValueOrDefault(row.MaterialTypeId ?? 0) ??
                 (Clean(row.Format) is { } text && !IsNumericMaterialCode(text) ? text : "Unknown");
-            return row with
-            {
-                Format = label,
-                MaterialTypeSearchCode = definition?.SearchCode,
-                FormatIconUrl = definition is null ? null : CatalogPresentation.IconUrl(presentation, definition.Id, definition.SearchCode)
-            };
+            return row with { Format = label };
         }).ToArray();
     }
 
     private static bool IsNumericMaterialCode(string? value) =>
         Clean(value) is { Length: > 0 } code && code.All(char.IsAsciiDigit);
 
-    private async Task<IReadOnlyDictionary<int, MaterialDefinition>> LoadMaterialDefinitionsAsync(
+    private async Task<IReadOnlyDictionary<int, string>> LoadMaterialDefinitionsAsync(
         DispatchAwarePapiClient client, int organizationId, CancellationToken cancellationToken)
     {
         await materialReferenceGate.WaitAsync(cancellationToken);
@@ -77,7 +66,7 @@ public sealed partial class PolarisPatronProvider
                 {
                     throw new PolarisOperationalException("polaris_material_types_unavailable", "Material definitions were unavailable.");
                 }
-                var definitions = new Dictionary<int, MaterialDefinition>();
+                var definitions = new Dictionary<int, string>();
                 foreach (var row in rawRows.EnumerateArray())
                 {
                     if (row.ValueKind != JsonValueKind.Object || HasDuplicateProperties(row) ||
@@ -85,9 +74,7 @@ public sealed partial class PolarisPatronProvider
                         !TryReadPositiveInt32(rawId, out var id) ||
                         !TryGetUniqueProperty(row, "Description", out var description) ||
                         description.ValueKind != JsonValueKind.String || Clean(description.GetString()) is not { } label ||
-                        !definitions.TryAdd(id, new MaterialDefinition(id, label,
-                            TryGetUniqueProperty(row, "SearchCode", out var searchCode) && searchCode.ValueKind == JsonValueKind.String
-                                ? Clean(searchCode.GetString()) : null)))
+                        !definitions.TryAdd(id, label))
                     {
                         throw new PolarisOperationalException("polaris_material_types_unavailable", "Material definitions were incomplete.");
                     }
@@ -104,7 +91,7 @@ public sealed partial class PolarisPatronProvider
                 logger.LogWarning(exception, "Polaris material descriptions were unavailable for library {OrganizationId}", organizationId);
                 // Optional presentation data must not turn a trustworthy search into an empty result.
                 // Briefly cache the fallback to bound repeated reference calls during an outage.
-                var fallback = cached?.Rows ?? new Dictionary<int, MaterialDefinition>();
+                var fallback = cached?.Rows ?? new Dictionary<int, string>();
                 materialReferences[key] = new MaterialReference(now.AddMinutes(1), fallback);
                 return fallback;
             }

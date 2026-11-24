@@ -399,7 +399,7 @@ public static partial class TitleRequestEndpoints
             cancellationToken.ThrowIfCancellationRequested();
             return Results.Json(new { bibId, bib.Title, bib.Author,
                 bib.Publication, bib.Format, bib.Identifier, bib.Publisher,
-                bib.MaterialTypeId, bib.MaterialTypeSearchCode, bib.FormatIconUrl,
+                bib.MaterialTypeId,
                 libraryOrgId = scope.OrganizationId, requestId = scope.Request?.Id, version = scope.Request?.Version,
                 holdingsSummary = holdings, holdingsUnavailable, holdingsErrorCode,
                 holdingsStatus = HoldingsStatus(holdings), patronHasHold, queueActions });

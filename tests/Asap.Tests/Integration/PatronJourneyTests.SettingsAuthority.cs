@@ -19,6 +19,25 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    public async Task SettingsContractOmitsRetiredArtworkConfiguration()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        using var client = factory!.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        using var document = await ReadSettingsDocumentAsync(client, "2");
+        var settings = document.RootElement;
+        var stored = settings.GetProperty("stored");
+        Assert.IsFalse(settings.TryGetProperty("catalog", out _));
+        Assert.IsFalse(settings.GetProperty("systemValues").TryGetProperty("catalog", out _));
+        Assert.IsFalse(stored.GetProperty("configuredSystem").TryGetProperty("catalog", out _));
+        Assert.IsFalse(stored.GetProperty("libraryOverride").TryGetProperty("catalog", out _));
+        Assert.IsFalse(stored.GetProperty("systemSettings").TryGetProperty("formatIconUrlPattern", out _));
+        using var response = await client.PostAsJsonAsync("/api/asap/staff/settings/catalog-preview", new { orgId = "2" });
+        Assert.AreEqual(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [TestMethod]
     public async Task RequiredSelectFeasibilityCoversLibraryAndInheritedSystemFormatEdits()
     {
         const string fieldKey = "required_select_contract";
@@ -954,7 +973,7 @@ public sealed partial class PatronJourneyTests
         var systemSettingsSnapshot = system.RootElement.GetProperty("stored").GetProperty("systemSettings");
         foreach (var field in new[]
                  {
-                     "staffUrl", "leapBibUrlPattern", "leapPatronUrlPattern", "formatIconUrlPattern",
+                     "staffUrl", "leapBibUrlPattern", "leapPatronUrlPattern",
                      "systemNotEnabledMessage", "misconfiguredMessage"
                  })
         {
@@ -2883,9 +2902,8 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(report.RootElement.GetProperty("libraryCommonAuthorsRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("suggestionLimitPlaceholderRoundTrip").GetBoolean());
                 Assert.IsTrue(report.RootElement.GetProperty("wildcardOriginNormalized").GetBoolean());
-                Assert.IsTrue(report.RootElement.GetProperty("catalogSettingsRoundTrip").GetBoolean());
                 var states = report.RootElement.GetProperty("states").EnumerateArray().ToArray();
-                Assert.HasCount(19, states);
+                Assert.HasCount(17, states);
                 CollectionAssert.AreEquivalent(new[]
                 {
                     "system-desktop", "system-mobile", "library-desktop", "library-mobile",
@@ -2896,7 +2914,6 @@ public sealed partial class PatronJourneyTests
                     "suggestion-placeholder-mobile", "organizations-system-desktop",
                     "organizations-system-mobile", "organizations-library-mobile",
                     "participation-summary-system-desktop", "participation-summary-library-mobile",
-                    "catalog-preview-desktop", "catalog-preview-mobile"
                 },
                     states.Select(item => item.GetProperty("viewport").GetString()!).ToArray());
             }

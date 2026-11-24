@@ -264,7 +264,7 @@ const { JSDOM } = require('jsdom');
       'Send auto-rejection email', 'The email/template subgroup is named by its existing checkbox label.');
     assert.deepStrictEqual([...timeoutSubgroup.querySelectorAll('.settings-field input, .settings-field select')]
       .map(control => control.id), ['outstanding-timeout-send-email', 'outstanding-timeout-rejection-template-id']);
-    ['polaris-host', 'polaris-domain', 'format-icon-url-pattern',
+    ['polaris-host', 'polaris-domain',
       'email-postmark-token', 'email-clear-postmark-token', 'staff-add-email', 'patron-page-title'].forEach(wide);
     const ids = [...document.querySelectorAll('[id]')].map(element => element.id);
     assert.strictEqual(new Set(ids).size, ids.length, 'control IDs must remain unique');
