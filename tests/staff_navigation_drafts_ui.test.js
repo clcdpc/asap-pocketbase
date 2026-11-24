@@ -2385,7 +2385,7 @@ for (const owner of ['request editor', 'Staff Suggestion']) {
       ui.setApi(({ pathname, init }) => {
         if (pathname.endsWith('/organizations')) return new Promise(done => { validateScope = done; });
         if (pathname.endsWith('/bib-lookup')) return response(200,
-          JSON.parse(init.body).mode === 'bib' ? selected : { results: [selected], totalMatches: 1 });
+          JSON.parse(init.body).mode === 'bib' ? selected : { ...JSON.parse(init.body), results: [selected], totalMatches: 1, hasPreviousPage: false, hasNextPage: false });
       });
       require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, message => { ui.confirms.push(message); return ui.confirms.length === 1; });
       ui.dom.window.history.back();

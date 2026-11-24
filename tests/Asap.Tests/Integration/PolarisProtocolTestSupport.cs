@@ -614,37 +614,6 @@ public abstract class PolarisProtocolTestSupport
         var searchIndex = path.IndexOf("/search/bibs/", StringComparison.Ordinal);
         return searchIndex >= 0 ? path[searchIndex..] : path;
     }
-    protected static string SearchResponse(params Dictionary<string, object?>[] rows) =>
-        JsonSerializer.Serialize(new
-        {
-            PAPIErrorCode = rows.Length,
-            TotalRecordsFound = rows.Length,
-            BibSearchRows = rows
-        });
-
-
-    protected static Dictionary<string, object?> SearchRow(
-        int controlNumber,
-        string title,
-        string? author = null,
-        string? publication = null,
-        string? identifierName = null,
-        string? identifier = null,
-        int? materialType = null)
-    {
-        var row = new Dictionary<string, object?>
-        {
-            ["ControlNumber"] = controlNumber,
-            ["Title"] = title
-        };
-        if (author is not null) row["Author"] = author;
-        if (publication is not null) row["PublicationDate"] = publication;
-        if (identifierName is not null && identifier is not null) row[identifierName] = identifier;
-        if (materialType is not null) row["PrimaryTypeOfMaterial"] = materialType;
-        return row;
-    }
-
-
     protected sealed class SequenceResponseHandler(
         params (HttpStatusCode StatusCode, string Content)[] responses) : HttpMessageHandler
     {

@@ -45,7 +45,8 @@ const { JSDOM } = require('jsdom');
     const response = body => ({ id: '9007199254740993', version: 'committed-v3', status: body.action === 'catalogFound' ? 'closed' : 'pending_hold',
       committed: true, operationId: body.operationId, additionalCopyRequestId: body.action === 'additionalCopy' ? '21' : null,
       notificationStatus: 'queued' });
-    let searchRows = rows;
+    const total = 12;
+    let searchRows = rows.slice(0, 10), pageOverride = null;
     const lookup = createPolarisLookup({ sessionIdentity, announce: (...args) => messages.push(args),
       onReceipt: (...args) => receipts.push(args), clearReceipt() {}, isAbortError: error => error.name === 'AbortError',
       authorizedJson: async (url, options) => {
@@ -57,7 +58,12 @@ const { JSDOM } = require('jsdom');
           return response(options.body);
         }
         lookups.push({ ...options.body, signal: options.signal });
-        if (options.body.mode !== 'bib') return { results: searchRows, totalMatches: 2951 };
+        if (options.body.mode !== 'bib') {
+          const body = options.body;
+          const found = { ...body, results: body.page === 1 ? searchRows : rows.slice(10), totalMatches: total,
+            hasPreviousPage: body.page > 1, hasNextPage: body.page * 10 < total };
+          return pageOverride ? pageOverride(found) : found;
+        }
         activeReads++; maxReads = Math.max(maxReads, activeReads);
         if (delay) await new Promise(resolve => pendingReads.push(resolve));
         activeReads--;
@@ -83,8 +89,8 @@ const { JSDOM } = require('jsdom');
     }
     delay = true; lookup.open(current()); await search();
     assert.equal(pendingReads.length, 3, 'Only three ownership lookups can run concurrently.');
-    assert.equal(resultPane.children.length, 10, 'Defend the ten-result cap at rendering as well as at the endpoint.');
-    assert.equal(document.querySelector('#polaris-status').textContent, '10 catalog results shown of 2,951.');
+    assert.equal(resultPane.children.length, 10, 'Show the requested provider page.');
+    assert.equal(document.querySelector('#polaris-status').textContent, 'Page 1 · 10 results shown · 12 catalog matches.');
     assert.match(resultPane.textContent, /Checking ownership/);
     assert.equal(resultPane.querySelector('button').disabled, true);
     assert.equal(resultPane.querySelectorAll('img').length, 1); assert.equal(resultPane.querySelector('img').alt, '');
@@ -94,12 +100,36 @@ const { JSDOM } = require('jsdom');
     assert.doesNotMatch(resultPane.textContent, /33181604/);
     assert.equal(resultPane.querySelector('unsafe'), null);
     query.value = 'Replacement'; query.dispatchEvent(new dom.window.Event('input'));
+    const previous = document.querySelector('#polaris-previous'), next = document.querySelector('#polaris-next');
+    const status = document.querySelector('#polaris-status');
+    assert.equal(lookups[0].page, 1);
+    assert.equal(previous.disabled, true);
+    assert.equal(next.disabled, false);
+    assert.match(status.textContent, /Search to use your edits/);
     const staleSignals = lookups.filter(item => item.mode === 'bib').map(item => item.signal);
+    let finishPage;
+    pageOverride = found => new Promise(resolve => { finishPage = () => resolve(found); });
+    next.focus(); next.click(); next.click(); await tick();
+    assert.equal(lookups.filter(item => item.page === 2).length, 1);
+    assert.equal(lookups.at(-1).query, 'Catalog');
+    assert.equal(resultPane.inert, true);
     assert.ok(staleSignals.every(signal => signal.aborted));
-    pendingReads.splice(0).forEach(resolve => resolve()); await tick();
-    assert.equal(resultPane.children.length, 0, 'Late ownership cannot repaint a changed query.');
-    assert.equal(maxReads, 3);
-    delay = false;
+    assert.match(status.textContent, /^Page 1 .*Loading page 2/);
+    pendingReads.splice(0).forEach(resolve => resolve()); delay = false;
+    finishPage(); await tick();
+    assert.equal(resultPane.children.length, 2);
+    assert.match(resultPane.textContent, /BIB: 9011/);
+    assert.doesNotMatch(resultPane.textContent, /BIB: 9001/);
+    assert.equal(next.disabled, true); assert.equal(document.activeElement, previous);
+    assert.ok(maxReads <= 3);
+    pageOverride = () => { throw new Error('Catalog offline'); };
+    previous.click(); await tick();
+    assert.match(status.textContent, /^Page 2 .*Could not load page 1.*Catalog offline/);
+    assert.equal(resultPane.inert, false); assert.match(resultPane.textContent, /BIB: 9011/);
+    assert.equal(previous.disabled, false);
+    pageOverride = null; previous.click(); await tick();
+    assert.match(resultPane.textContent, /BIB: 9001/); assert.equal(document.activeElement, next);
+    assert.equal(query.value, 'Replacement');
     searchRows = [rows[0], rows[0], rows[1]];
     lookups = []; await search();
     await until(() => resultPane.textContent.includes('Owned by you (2)'), 'Ownership completes.');
@@ -111,9 +141,48 @@ const { JSDOM } = require('jsdom');
     assert.equal(mode.value, 'title_author'); assert.equal(document.querySelector('#polaris-title').value, 'Replacement');
     assert.equal(document.querySelector('#polaris-author').value, 'Staff author');
     assert.equal(document.activeElement.id, 'polaris-author'); assert.equal(lookups.length, searchesBeforeShortcut);
+    await search();
+    const author = document.querySelector('#polaris-author');
+    author.value = 'Unsubmitted'; author.dispatchEvent(new dom.window.Event('input'));
+    next.click(); await tick();
+    const pair = lookups.findLast(item => item.mode === 'title_author');
+    assert.equal(pair.page, 2); assert.equal(pair.title, 'Replacement'); assert.equal(pair.author, 'Staff author');
+    let rejectOld;
+    pageOverride = () => new Promise((_, reject) => { rejectOld = reject; });
+    previous.click(); await tick();
+    pageOverride = found => ({ ...found, results: [], totalMatches: 21, hasNextPage: true });
+    await search(); assert.equal(lookups.at(-1).page, 1); assert.equal(lookups.at(-1).author, 'Unsubmitted');
+    rejectOld(new Error('obsolete failure')); await tick();
+    assert.match(status.textContent, /Page 1 · No displayable results on this page · 21 catalog matches/);
+    assert.equal(next.disabled, false); assert.equal(previous.disabled, true);
+    pageOverride = found => ({ ...found, totalMatches: 0, results: [], hasNextPage: false });
+    await search(); assert.equal(status.textContent, 'No Polaris matches found.');
+    assert.equal(document.querySelector('#polaris-pages').hidden, true);
+    pageOverride = null; await search(); next.click(); await tick();
+    pageOverride = found => ({ ...found, totalMatches: 0, results: [], hasNextPage: false });
+    previous.focus(); previous.click(); await tick();
+    assert.equal(document.activeElement, document.querySelector('#polaris-form button[type="submit"]'));
+    pageOverride = null;
     mode.value = 'identifier'; mode.dispatchEvent(new dom.window.Event('change'));
     assert.equal(document.querySelector('#polaris-add-author').hidden, true);
+    assert.equal(document.querySelector('#polaris-pages').hidden, true);
     lookup.close();
+
+    // A pending page belongs to its opener and identity even if the transport ignores the abort.
+    lookup.open(current()); await search();
+    pageOverride = found => new Promise(resolve => { finishPage = () => resolve(found); });
+    next.click(); await tick(); const oldPage = lookups.at(-1);
+    lookup.signedOut(); assert.equal(oldPage.signal.aborted, true);
+    pageOverride = null;
+    lookup.open(current({ requestId: '8', libraryOrgId: 3, directActions: false }));
+    await search();
+    const newContextSummary = status.textContent;
+    finishPage(); await tick();
+    assert.equal(status.textContent, newContextSummary); assert.doesNotMatch(resultPane.textContent, /BIB: 9011/);
+    pageOverride = found => new Promise(resolve => { finishPage = () => resolve(found); });
+    next.click(); await tick(); readCurrent = false; finishPage(); await tick();
+    assert.doesNotMatch(resultPane.textContent, /BIB: 9011/);
+    pageOverride = null; lookup.signedOut(); readCurrent = true;
 
     // Both buttons use the exact preview version rather than the stale grid version.
     lookup.open(current()); await search(); await until(() => !resultPane.querySelector('button').disabled, 'Actions become eligible.');
@@ -121,6 +190,8 @@ const { JSDOM } = require('jsdom');
     assert.match(panel.textContent, /This action will turn on automatic hold placement for this request\./);
     assert.match(panel.textContent, /2 open additional-copy tasks/);
     assert.equal(panel.querySelector('input').checked, true);
+    const callsWhileLocked = lookups.length;
+    next.click(); await tick(); assert.equal(lookups.length, callsWhileLocked);
     assert.equal(mutations.length, 0, 'Opening a confirmation never mutates.');
     cancel(); assert.equal(panel.hidden, true); assert.equal(document.activeElement.className, 'polaris-copy-button');
     resultPane.querySelector('.polaris-copy-button').click(); panel.querySelector('input').checked = false;
@@ -137,7 +208,7 @@ const { JSDOM } = require('jsdom');
 
     behavior = 'reject'; lookup.open(current()); await search();
     await until(() => !resultPane.querySelector('button').disabled, 'Action before rejection is eligible.');
-    assert.match(document.querySelector('#polaris-status').textContent, /catalog results shown of 2,951/);
+    assert.match(document.querySelector('#polaris-status').textContent, /results shown · 12 catalog matches/);
     resultPane.querySelector('.polaris-queue-button').click(); click('Confirm use BIB');
     await until(() => panel.textContent.includes('Catalog action not completed'), 'Rejection is visible.');
     click('Return to search');

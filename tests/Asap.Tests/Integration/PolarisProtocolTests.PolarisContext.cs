@@ -27,7 +27,7 @@ public sealed partial class PolarisProtocolTests
         Assert.AreEqual(9001, (await provider.LookupIdentifierAsync("9780000000001", organizationId,
             CancellationToken.None)).BibId);
         Assert.AreEqual(9001, (await provider.SearchBibsAsync("title", "Title", "", "",
-            organizationId, CancellationToken.None)).Results.Single().BibId);
+            organizationId, 1, CancellationToken.None)).Results.Single().BibId);
         Assert.IsTrue((await provider.ValidateBibAsync(9001, organizationId, CancellationToken.None)).IsValid);
         await provider.GetBibHoldingsAsync(9001, organizationId, CancellationToken.None);
         Assert.AreEqual(8456, (await provider.GetPatronHoldsAsync(barcode, organizationId,

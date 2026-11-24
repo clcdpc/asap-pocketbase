@@ -933,7 +933,13 @@
               <button id="polaris-add-author" class="polaris-author-shortcut" type="button" hidden>Add author to search</button>
             </div>
           </form>
-          <p id="polaris-status" role="status" aria-live="polite"></p>
+          <div class="polaris-page-bar">
+            <p id="polaris-status" role="status" aria-live="polite"></p>
+            <nav id="polaris-pages" aria-label="Catalog result pages" hidden>
+              <button id="polaris-previous" type="button" class="secondary-button">Previous</button>
+              <button id="polaris-next" type="button" class="secondary-button">Next</button>
+            </nav>
+          </div>
           <p id="polaris-ownership-status" class="sr-only" role="status" aria-live="polite"></p>
           <div class="polaris-result-pane">
             <section id="polaris-confirmation" class="polaris-confirmation" aria-label="Review catalog action" hidden></section>

@@ -160,6 +160,12 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
   const closeButton = dialog.querySelector('#close-polaris');
   const addAuthor = dialog.querySelector('#polaris-add-author');
   const confirmation = dialog.querySelector('#polaris-confirmation');
+  const pages = dialog.querySelector('#polaris-pages');
+  const previous = dialog.querySelector('#polaris-previous');
+  const nextPage = dialog.querySelector('#polaris-next');
+  let submitted = null;
+  let accepted = null;
+  let loading = false;
   let context = null;
   let controller = null;
   let generation = 0;
@@ -175,8 +181,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
     },
     onReturnToSearch: current => {
       if (context !== current || !current.isCurrent()) return;
-      abort();
-      results.replaceChildren();
+      resetSearch();
       status.textContent = 'Search Polaris again to review current results and available actions.';
       searchForm.querySelector('button[type="submit"]')?.focus();
     }
@@ -196,7 +201,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
   function close(owner = null, force = false) {
     if (disposed || !context || owner !== null && owner !== context) return false;
     if (!queue.reset(force)) return false;
-    abort();
+    resetSearch();
     const old = context;
     context = null;
     escapeHeld = false;
@@ -220,9 +225,40 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
       ? 'Exact Polaris BIB ID' : mode.value === 'identifier' ? 'Catalog identifier'
         : mode.value === 'author' ? 'Author keywords' : 'Title keywords';
     addAuthor.hidden = !String(context?.sourceAuthor || context?.author || '').trim() || !['title', 'author'].includes(mode.value);
+    resetSearch();
+  }
+
+  function resetSearch() {
     abort();
+    submitted = null;
+    accepted = null;
+    loading = false;
+    pages.hidden = true;
+    results.inert = false;
     results.replaceChildren();
     status.textContent = '';
+  }
+
+  function summary(found) {
+    const edited = submitted.mode === 'title_author'
+      ? submitted.title !== title.value.trim() || submitted.author !== author.value.trim()
+      : submitted.query !== query.value.trim();
+    const hint = edited ? ' Search to use your edits.' : '';
+    if (!found.totalMatches && found.page === 1) return 'No Polaris matches found.' + hint;
+    const count = found.results.length;
+    const shown = count ? `${count} result${count === 1 ? '' : 's'} shown` : 'No displayable results on this page';
+    return `Page ${found.page} · ${shown} · ${found.totalMatches.toLocaleString()} catalog match${found.totalMatches === 1 ? '' : 'es'}.${hint}`;
+  }
+
+  function updatePages() {
+    const found = accepted?.found;
+    pages.hidden = !found || !found.hasPreviousPage && !found.hasNextPage;
+    previous.disabled = !found?.hasPreviousPage;
+    nextPage.disabled = !found?.hasNextPage;
+    for (const button of [previous, nextPage]) {
+      button.setAttribute('aria-disabled', String(loading || button.disabled));
+    }
+    results.inert = loading;
   }
 
   function holdingsReady(detail) {
@@ -280,7 +316,9 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
         text: label, 'aria-label': `${label}: ${row.title || 'Catalog title'}, BIB ${row.bibId}` });
       button.disabled = !allowed;
       if (!allowed) button.title = detail ? catalogActionReason(choice?.blockingReason || 'holdings_unavailable') : 'Checking ownership and current action eligibility…';
-      button.addEventListener('click', () => queue.confirm(current, row, detail, key, button));
+      button.addEventListener('click', () => {
+        if (!loading && results.contains(button)) queue.confirm(current, row, detail, key, button);
+      });
       actions.append(button);
     }
     if (detail && (!scoped || !preview.useBib.allowed || !preview.additionalCopy.allowed)) {
@@ -292,12 +330,9 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
   }
 
   function showResults(current, found, token, exactDetail = null) {
-    const rows = (exactDetail ? [exactDetail] : Array.isArray(found.results) ? found.results : []).slice(0, 10);
+    const rows = exactDetail ? [exactDetail] : found.results;
     results.replaceChildren();
-    const total = Number.isInteger(found.totalMatches) && found.totalMatches >= 0 ? found.totalMatches : null;
-    status.textContent = rows.length
-      ? `${rows.length} catalog result${rows.length === 1 ? '' : 's'} shown${total !== null ? ` of ${total.toLocaleString()}` : ''}.`
-      : 'No Polaris matches found.';
+    status.textContent = exactDetail ? '1 catalog result shown.' : summary(found);
     const cards = rows.map(row => {
       const item = node('li', { className: 'polaris-result' });
       const rail = node('div', { className: 'polaris-format-rail' });
@@ -330,7 +365,9 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
         const select = node('button', { type: 'button', className: 'primary-button polaris-use-bib' },
           [node('span', { text: `Use BIB ${row.bibId}` }), node('span', { text: ' in form' })]);
         select.disabled = !positivePolarisId(row.bibId) || !(typeof current.canApply === 'function' ? current.canApply(row) : current.canApply);
-        select.addEventListener('click', () => selectResult(current, row, exactDetail));
+        select.addEventListener('click', () => {
+          if (results.contains(select)) void selectResult(current, row, exactDetail);
+        });
         actions.append(select);
       } else renderDirectActions(current, row, null, actions);
       item.append(actions);
@@ -346,10 +383,14 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
         const card = cards[index++], id = positivePolarisId(card.row.bibId);
         try {
           if (!id) throw new Error('Invalid catalog BIB');
-          if (!cache.has(id)) cache.set(id, exactDetail ? Promise.resolve(exactDetail) : exactLookup(current, id, controller.signal));
+          if (!cache.has(id)) {
+            const known = exactDetail || accepted?.details.get(id);
+            cache.set(id, known || exactLookup(current, id, controller.signal));
+          }
           const detail = await cache.get(id);
           if (!active(current, token)) return;
           if (!matchingDetail(current, card.row, detail)) throw new Error('The catalog result context changed.');
+          accepted?.details.set(id, detail);
           showOwnership(card.ownership, detail);
           card.unavailable = !holdingsReady(detail);
           if (current.readOnly === true) renderDirectActions(current, card.row, detail, card.actions);
@@ -370,7 +411,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
   }
 
   async function selectResult(current, row, existingDetail) {
-    if (queue.isLocked() || !current.isCurrent() || current.readOnly === true ||
+    if (loading || queue.isLocked() || !current.isCurrent() || current.readOnly === true ||
         !(typeof current.canApply === 'function' ? current.canApply(row) : current.canApply)) return;
     abort();
     const token = generation;
@@ -404,11 +445,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
     event.preventDefault();
     const current = context;
     if (!current?.isCurrent() || queue.isLocked()) return;
-    abort();
-    const token = generation;
-    controller = new AbortController();
-    results.replaceChildren();
-    status.textContent = 'Searching Polaris...';
+    resetSearch();
     const body = { requestId: current.requestId, libraryOrgId: current.libraryOrgId, mode: mode.value,
       includePatronHolds: mode.value === 'bib' && current.readOnly !== true };
     if (mode.value === 'bib') {
@@ -424,19 +461,66 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
       body.title = title.value.trim();
       body.author = author.value.trim();
     } else body.query = query.value.trim();
+    submitted = Object.freeze(body);
+    await loadPage(current, 1);
+  }
+
+  async function loadPage(current, page, opener = null) {
+    if (loading || queue.isLocked() || !current?.isCurrent() || !submitted) return;
+    abort();
+    const token = generation;
+    controller = new AbortController();
+    const exact = submitted.mode === 'bib';
+    const body = exact ? submitted : { ...submitted, page };
+    loading = true;
+    updatePages();
+    status.textContent = accepted ? `${summary(accepted.found)} Loading page ${page}…` : 'Searching Polaris...';
     try {
       const found = await authorizedJson('/api/asap/staff/bib-lookup', {
         method: 'POST', body, signal: controller.signal
       });
       if (!active(current, token)) return;
-      showResults(current, found, token, mode.value === 'bib' ? found : null);
+      if (!exact) {
+        if (found.page !== page || found.mode !== body.mode || !Array.isArray(found.results) ||
+            found.requestId !== (body.requestId ?? null) || found.libraryOrgId !== body.libraryOrgId ||
+            !Number.isInteger(found.totalMatches) || found.totalMatches < 0 ||
+            typeof found.hasNextPage !== 'boolean' || typeof found.hasPreviousPage !== 'boolean') {
+          throw new Error('Polaris returned an unexpected catalog page.');
+        }
+        accepted = { found, details: new Map() };
+      }
+      showResults(current, found, token, exact ? found : null);
+      if (results.parentElement) results.parentElement.scrollTop = 0;
     } catch (error) {
       if (!active(current, token)) return;
-      status.textContent = error.message || 'Polaris search failed.';
-      current.onError?.(status.textContent);
-      announce(status.textContent, 'error');
+      if (accepted) {
+        // Restore interrupted ownership checks. Completed details belong to this accepted page only.
+        showResults(current, accepted.found, token);
+        status.textContent = `${summary(accepted.found)} Could not load page ${page}. ${error.message || 'Try again.'}`;
+      } else {
+        status.textContent = error.message || 'Polaris search failed.';
+        current.onError?.(status.textContent);
+      }
+    } finally {
+      if (active(current, token)) {
+        const restoreFocus = opener && document.activeElement === opener;
+        loading = false;
+        updatePages();
+        if (restoreFocus && opener.disabled) {
+          const target = pages.hidden ? searchForm.querySelector('button[type="submit"]')
+            : previous.disabled ? nextPage : previous;
+          target?.focus();
+        }
+      }
     }
   }
+
+  previous.addEventListener('click', () => {
+    if (accepted?.found.hasPreviousPage) void loadPage(context, accepted.found.page - 1, previous);
+  }, { signal: events.signal });
+  nextPage.addEventListener('click', () => {
+    if (accepted?.found.hasNextPage) void loadPage(context, accepted.found.page + 1, nextPage);
+  }, { signal: events.signal });
 
   searchForm.addEventListener('submit', search, { signal: events.signal });
   mode.addEventListener('change', modeChanged, { signal: events.signal });
@@ -449,9 +533,8 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
   }, { signal: events.signal });
   for (const input of [query, title, author]) input.addEventListener('input', () => {
     if (queue.isLocked()) return;
-    abort();
-    results.replaceChildren();
-    status.textContent = '';
+    if (submitted?.mode === 'bib') resetSearch();
+    else if (accepted && !loading) status.textContent = summary(accepted.found);
   }, { signal: events.signal });
   closeButton.addEventListener('click', () => close(), { signal: events.signal });
   dialog.addEventListener('keydown', event => {
@@ -476,7 +559,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
     signedOut() { close(null, true); },
     dispose() { if (disposed) return; close(null, true); disposed = true; abort(); events.abort(); },
     inspectDeparture: queue.inspectDeparture,
-    invalidate(owner = null) { if (owner === null || owner === context) abort(); },
+    invalidate(owner = null) { if (owner === null || owner === context) resetSearch(); },
     open(next) {
       if (disposed || !next.isCurrent()) return;
       if (dialog.open && !close()) return;

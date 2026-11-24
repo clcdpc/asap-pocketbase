@@ -13,22 +13,58 @@ Additional-copy research should supply its authorized `libraryOrgId` without
 a title-request ID.
 
 ```json
-{"requestId":"9007199254740993","mode":"title","query":"Catalog title"}
+{"requestId":"9007199254740993","mode":"title","query":"Catalog title","page":2}
 ```
 
-Modes remain `title`, `author`, `identifier`, `title_author`, and `bib`. The
-paired mode uses `title` and `author`; the other text modes use `query`. Exact
-lookup uses `bibId`. Searches return at most ten results, `mode`, `libraryOrgId`,
-`requestId`, `version`, `totalMatches`, and `totalMatchesKind`.
+Each non-exact search issues one Polaris BIB search for the submitted page.
 
-`totalMatches` comes from Polaris, including when filtered/deduplicated rows
-leave fewer results. `totalMatchesKind: provider` means a single provider query.
-For existing alternative ISBN/UPC/LCCN and title/author searches,
-`provider_maximum` means the largest reported provider total across attempts.
-Those result sets overlap; the API does not claim to know their union size and
-never substitutes the number of returned rows. The UI should label alternative
-search totals accordingly instead of presenting them as an exact union count.
-Provider failure remains an error, distinct from a definitive empty search.
+| Mode | Input and native search | Provider order |
+| --- | --- | --- |
+| `title` | `query`, keyword TI | Relevance |
+| `author` | `query`, keyword AU | Author |
+| `identifier` | `query`, Boolean `ISBN="…" OR UPC="…" OR LCCN="…"` | Publication date descending, then title |
+| `title_author` | `title` and `author`, e.g. `(TI="French" AND TI="cooking") AND (AU="*Child*")` | Publication date descending, then title |
+| `bib` | Exact lookup by positive `bibId` | Single record, outside pagination |
+
+Paired searches quote each keyword separately so intervening words and name order
+can vary. Parentheses group up to ten conditions at a time. Initials and punctuation delimit words, internal apostrophes stay with
+their word, and operator words remain quoted literals. The paired author condition
+adds native wildcards around name fragments (`AU="*Row*"`) or after a single
+initial (`AU="J*"`). As in the previous author substring filter, a fragment can
+match more than one name. User quotes, wildcards and backslashes cannot delimit
+a clause. A number sign is a wildcard in Polaris power searches, so the paired
+mode treats it as punctuation. Adjacent plus, percent and dollar signs are retained.
+The package URL-encodes the query. [Polaris wildcard semantics](https://documentation.iii.com/polaris/7.8/PolarisStaffHelp/Polaris_Basics/PIfindrec/Doing_Power_Searches.htm) [Polaris CQL access points and matching](https://documentation.iii.com/polaris/8.0/PolarisStaffHelp/Public_Access_Admin/PDOccl/PAC_CQL_Commands_Access_Points.htm)
+
+Identifiers stay strings. The ISBN/UPC clauses compact formatting separators and
+preserve leading zeros and ISBN check letters. For LCCNs the LCCN clause also
+removes revision suffixes and pads a hyphenated serial number to six digits.
+[Library of Congress normalization](https://www.loc.gov/marc/lccn-namespace.html)
+
+The optional positive integer `page` defaults to 1. The pinned client sends
+`page` and `bibsperpage=10` on the native keyword and Boolean routes.
+The response includes `page`, `pageSize`, `hasPreviousPage`, `hasNextPage`,
+`mode`, `libraryOrgId`, `requestId`, and `version`. Next uses the provider's
+`totalMatches` (`totalMatchesKind: provider`). The page keeps provider order
+and the first displayable row per BIB. Material types 36 and 41 are excluded
+before detail reads. Polaris documents TOM filters by search code. Equivalence
+to those two numeric primary-type IDs has not been established for the deployed
+catalog, so exclusions remain local. A short or fully excluded page can still
+have a next page. The dialog reports the displayed count separately from catalog
+matches. [Pinned request serialization](https://github.com/clcdpc/polaris-api-csharp/blob/c89d9e604fdf9c1a21012c639f8baa9e1e80d214/src/polaris-api-csharp/Methods/BibSearch.cs)
+
+Each page is a fresh search. A successful empty native page beyond the current
+total allows staff to go back after catalog changes. Contradictory counts,
+incomplete responses and provider failures surface as lookup errors. A failed
+navigation preserves the accepted page and can be retried. The PAPI references
+specify 1-based paging and publish no fixed maximum navigable result count for
+these routes. [BibBooleanSearch](https://documentation.iii.com/polaris/PAPI/current/PAPIService/PAPIServiceBibBooleanSearch.htm)
+[BibKeywordSearch](https://knowledge.ag-software.clarivate.com/polaris/PAPI/PAPIService/PAPIServiceBibKeywordSearch.htm)
+
+Controlled HTTP tests exercise the pinned package and actual serialized requests.
+Live acceptance still requires comparing known ISBN, UPC and LCCN records and
+title/author variants against the deployed indexes, including initials, punctuation,
+partial names, stop words, and the installation's last navigable page and empty-page response.
 
 Each result retains `bibId`, `title`, `author`, `publication`, `identifier`, and
 `format`, with additive `materialTypeId`, `materialTypeSearchCode`, and

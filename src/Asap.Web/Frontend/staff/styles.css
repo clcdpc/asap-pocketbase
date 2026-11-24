@@ -945,7 +945,12 @@ dialog::backdrop { background: rgba(20, 31, 39, .58); }
 #polaris-query-field[hidden] { display: none; }
 #polaris-pair-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 #polaris-pair-fields[hidden] { display: none; }
-#polaris-status { flex: 0 0 auto; min-height: 1.5em; margin: 0; padding: 10px 2px; color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
+.polaris-page-bar { display: flex; flex-wrap: wrap; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 0 8px; }
+#polaris-pages { display: flex; gap: 6px; padding: 3px; }
+#polaris-pages[hidden], .polaris-form[hidden] ~ .polaris-page-bar { display: none; }
+#polaris-pages button { min-height: 44px; }
+#polaris-pages button:focus-visible { outline: 3px solid var(--brand-dark); outline-offset: 2px; }
+#polaris-status { flex: 1 1 13rem; min-height: 1.5em; margin: 0; padding: 10px 2px; color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
 .polaris-result-pane { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .polaris-results { list-style: none; padding: 3px; margin: 0; display: grid; gap: 9px; }
 .polaris-results[hidden], .polaris-confirmation[hidden] { display: none; }

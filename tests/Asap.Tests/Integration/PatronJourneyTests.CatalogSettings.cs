@@ -47,7 +47,7 @@ public sealed partial class PatronJourneyTests
             await SaveAsync("system", new { pacBaseUrl = "https://system.example/polaris" }, new { formatIconUrlPattern = "/legacy/{id2}.gif" });
             var handler = new CatalogMaterialHandler();
             var provider = await CreatePolarisProviderAsync(handler);
-            var inherited = await provider.SearchBibsAsync("title", "Title", "", "", first, CancellationToken.None);
+            var inherited = await provider.SearchBibsAsync("title", "Title", "", "", first, 1, CancellationToken.None);
             Assert.AreEqual("/legacy/53.gif", inherited.Results.First().FormatIconUrl);
             Assert.AreEqual("/legacy/53.gif", (await provider.ValidateBibAsync(9001, first, CancellationToken.None)).FormatIconUrl);
             const string pattern = "{pacBaseUrl}/custom/{pacOrgId}/format{id2}/{SearchCode}.gif";
@@ -59,7 +59,7 @@ public sealed partial class PatronJourneyTests
                     (second, "https://beta.example/catalog/custom/41/format53/lp.gif")
                 })
             {
-                var search = await provider.SearchBibsAsync("title", "Title", "", "", library, CancellationToken.None);
+                var search = await provider.SearchBibsAsync("title", "Title", "", "", library, 1, CancellationToken.None);
                 Assert.AreEqual(expected, search.Results.First().FormatIconUrl);
                 Assert.AreEqual(expected, (await provider.ValidateBibAsync(9001, library, CancellationToken.None)).FormatIconUrl);
                 using var preview = await client.PostAsJsonAsync("/api/asap/staff/settings/catalog-preview", new { orgId = library.ToString(), materialTypeId = 53, materialTypeSearchCode = "lp", catalog = new { } });

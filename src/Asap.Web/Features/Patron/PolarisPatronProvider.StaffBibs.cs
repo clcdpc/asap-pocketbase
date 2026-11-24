@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Asap.Web.Features.Staff;
@@ -10,127 +11,40 @@ namespace Asap.Web.Features.Patron;
 
 public sealed partial class PolarisPatronProvider
 {
-    private const int StaffBibSearchLimit = 10;
-
     public async Task<StaffBibSearchResult> SearchBibsAsync(
-        string mode, string query, string title, string author, int organizationId, CancellationToken cancellationToken)
+        string mode, string query, string title, string author, int organizationId, int page, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(page);
         query = CleanSearch(query);
         title = CleanSearch(title);
         author = CleanSearch(author);
-        var searches = mode switch
+        var (type, qualifier, term, sort) = mode switch
         {
-            "identifier" => new[]
-            {
-                (Type: BibSearchTypes.keyword, Qualifier: SearchQualifiers.ISBN, Query: NormalizeIdentifier(query), Sort: SearchSortOptions.PDTI, AuthorFilter: ""),
-                (Type: BibSearchTypes.boolean, Qualifier: SearchQualifiers.KW, Query: "UPC=" + QuoteSearch(NormalizeIdentifier(query)), Sort: SearchSortOptions.PDTI, AuthorFilter: ""),
-                (Type: BibSearchTypes.keyword, Qualifier: SearchQualifiers.LCCN, Query: NormalizeIdentifier(query), Sort: SearchSortOptions.PDTI, AuthorFilter: "")
-            },
-            "title" => new[] { (Type: BibSearchTypes.keyword, Qualifier: SearchQualifiers.TI, Query: title.Length > 0 ? title : query, Sort: SearchSortOptions.RELEVANCE, AuthorFilter: "") },
-            "author" => new[] { (Type: BibSearchTypes.keyword, Qualifier: SearchQualifiers.AU, Query: author.Length > 0 ? author : query, Sort: SearchSortOptions.AU, AuthorFilter: "") },
-            "title_author" => new[]
-            {
-                (Type: BibSearchTypes.boolean, Qualifier: SearchQualifiers.KW, Query: $"TI={QuoteSearch(title)} AND AU={QuoteSearch(author)}", Sort: SearchSortOptions.PDTI, AuthorFilter: ""),
-                (Type: BibSearchTypes.keyword, Qualifier: SearchQualifiers.TI, Query: title, Sort: SearchSortOptions.RELEVANCE, AuthorFilter: author)
-            },
+            "identifier" => (BibSearchTypes.boolean, SearchQualifiers.KW, IdentifierSearch(query), SearchSortOptions.PDTI),
+            "title_author" => (BibSearchTypes.boolean, SearchQualifiers.KW,
+                $"{KeywordConditions("TI", title)} AND {KeywordConditions("AU", author)}", SearchSortOptions.PDTI),
+            "title" => (BibSearchTypes.keyword, SearchQualifiers.TI, title.Length > 0 ? title : query, SearchSortOptions.RELEVANCE),
+            "author" => (BibSearchTypes.keyword, SearchQualifiers.AU, author.Length > 0 ? author : query, SearchSortOptions.AU),
             _ => throw new ArgumentException("Invalid Polaris search mode.", nameof(mode))
         };
 
         try
         {
             var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
-            var branch = organizationId;
-            var results = new List<StaffBibSearchRow>();
-            var seen = new HashSet<int>();
-            var totalMatches = 0;
-            var failed = false;
-            foreach (var search in searches)
+            var options = new BibSearchOptions
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var options = new BibSearchOptions
-                {
-                    Branch = branch,
-                    SearchType = search.Type,
-                    Qualifier = search.Qualifier,
-                    Term = search.Query,
-                    SortOption = search.Sort,
-                    PageSize = StaffBibSearchLimit,
-                    NoTransaction = true
-                };
-                StaffSearchAttempt inspected;
-                try
-                {
-                    var response = await client.CallAsync(() => client.BibSearchAsync(options, cancellationToken), cancellationToken);
-                    inspected = InspectStaffSearchResponse(response);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception exception) when (IsExpectedProviderFailure(exception))
-                {
-                    failed = true;
-                    continue;
-                }
-
-                if (inspected.Kind == StaffSearchAttemptKind.Operational)
-                {
-                    failed = true;
-                    continue;
-                }
-
-                if (inspected.Kind == StaffSearchAttemptKind.DefinitiveEmpty)
-                {
-                    continue;
-                }
-
-                totalMatches = Math.Max(totalMatches, inspected.Data!.TotalRecordsFound);
-                foreach (var candidate in inspected.StaffRows!)
-                {
-                    var row = candidate.Result;
-                    var bibId = row.BibId;
-                    if (candidate.MaterialType is 36 or 41 || seen.Contains(bibId))
-                    {
-                        continue;
-                    }
-                    if (search.AuthorFilter.Length > 0 &&
-                        !(row.Author ?? string.Empty).Contains(search.AuthorFilter, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-                    seen.Add(bibId);
-                    results.Add(row with { MaterialTypeId = candidate.MaterialType ?? ParseMaterialTypeId(row.Format) });
-                }
-
-                if (results.Count >= StaffBibSearchLimit)
-                {
-                    break;
-                }
-            }
-            if (results.Count == 0 && failed)
-            {
-                throw new PolarisOperationalException("polaris_bib_search_failed", "Polaris BIB search was unavailable.");
-            }
-            var rankedResults = results
-                .Select((row, index) => new
-                {
-                    Row = row,
-                    Order = index,
-                    Score = ScoreStaffBib(row, query, title, author)
-                })
-                .OrderByDescending(item => item.Score)
-                .ThenBy(item => item.Order)
-                .Take(StaffBibSearchLimit)
-                .Select(item => item.Row)
-                .ToArray();
-            var presented = await PresentStaffMaterialsAsync(client, rankedResults, organizationId, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            // Alternative ISBN/UPC/LCCN and title/author attempts are not disjoint sets.
-            // Preserve the largest actual provider count; never fabricate a union count from returned rows.
-            return new StaffBibSearchResult(presented, totalMatches)
-            {
-                TotalMatchesKind = searches.Length == 1 ? "provider" : "provider_maximum"
+                Branch = organizationId, SearchType = type, Qualifier = qualifier, Term = term, SortOption = sort,
+                Page = page, PageSize = StaffBibSearchResult.PageSize, NoTransaction = true
             };
+            var response = await client.CallAsync(() => client.BibSearchAsync(options, cancellationToken), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            var search = InspectStaffSearchResponse(response, page);
+            var visible = search.Results.Where(row => row.MaterialTypeId is not (36 or 41))
+                .DistinctBy(row => row.BibId).ToArray();
+            var presented = await PresentStaffMaterialsAsync(client, visible, organizationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return search with { Results = presented };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -146,55 +60,33 @@ public sealed partial class PolarisPatronProvider
         }
     }
 
-    private static StaffSearchAttempt InspectStaffSearchResponse(
-        IRestResponse<BibSearchResult> response)
+    private static StaffBibSearchResult InspectStaffSearchResponse(IRestResponse<BibSearchResult> response, int page)
     {
         if (response.Response?.IsSuccessStatusCode != true || response.Data is null)
         {
-            return StaffSearchAttempt.Operational;
+            throw new PolarisOperationalException("polaris_bib_search_failed", "Polaris BIB search was unavailable.");
         }
 
-        try
+        using var document = JsonDocument.Parse(response.Response.Content ?? string.Empty);
+        var root = document.RootElement;
+        var offset = (page - 1L) * StaffBibSearchResult.PageSize;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !TryGetUniqueProperty(root, "PAPIErrorCode", out var codeElement) ||
+            codeElement.ValueKind != JsonValueKind.Number || !codeElement.TryGetInt32(out var code) ||
+            response.Data.PAPIErrorCode != code ||
+            !TryGetUniqueProperty(root, "TotalRecordsFound", out var totalElement) ||
+            totalElement.ValueKind != JsonValueKind.Number || !totalElement.TryGetInt32(out var total) ||
+            total < 0 || response.Data.TotalRecordsFound != total ||
+            !TryGetUniqueProperty(root, "BibSearchRows", out var rows) || rows.ValueKind != JsonValueKind.Array ||
+            rows.GetArrayLength() > StaffBibSearchResult.PageSize ||
+            (rows.GetArrayLength() == 0 ? offset < total : offset + rows.GetArrayLength() > total) ||
+            code < -1 || (code == -1 && (total != 0 || !HasNoSearchErrorMessage(root))) ||
+            (code > 0 && code != rows.GetArrayLength()) ||
+            !TryReadStaffSearchRows(rows, response.Data, out var staffRows))
         {
-            using var document = JsonDocument.Parse(response.Response.Content ?? string.Empty);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
-                !TryGetUniqueProperty(root, "PAPIErrorCode", out var codeElement) ||
-                codeElement.ValueKind != JsonValueKind.Number ||
-                !codeElement.TryGetInt32(out var code) ||
-                response.Data.PAPIErrorCode != code ||
-                !TryGetUniqueProperty(root, "TotalRecordsFound", out var totalElement) ||
-                totalElement.ValueKind != JsonValueKind.Number ||
-                !totalElement.TryGetInt32(out var totalRecordsFound) ||
-                totalRecordsFound < 0 || response.Data.TotalRecordsFound != totalRecordsFound ||
-                !TryGetUniqueProperty(root, "BibSearchRows", out var rows) ||
-                rows.ValueKind != JsonValueKind.Array ||
-                (rows.GetArrayLength() == 0 && totalRecordsFound != 0) ||
-                (rows.GetArrayLength() > 0 && totalRecordsFound < rows.GetArrayLength()) ||
-                code < -1 ||
-                (code > 0 && code != rows.GetArrayLength()) ||
-                !TryReadStaffSearchRows(rows, response.Data, out var staffRows))
-            {
-                return StaffSearchAttempt.Operational;
-            }
-
-            if (code == -1)
-            {
-                // Preserve Polaris' established -1 empty-search response only for its coherent zero-row shape.
-                return totalRecordsFound == 0 && rows.GetArrayLength() == 0 &&
-                       HasNoSearchErrorMessage(root)
-                    ? StaffSearchAttempt.DefinitiveEmpty(response.Data)
-                    : StaffSearchAttempt.Operational;
-            }
-
-            return rows.GetArrayLength() == 0
-                ? StaffSearchAttempt.DefinitiveEmpty(response.Data)
-                : StaffSearchAttempt.WithRows(response.Data, staffRows);
+            throw new PolarisOperationalException("polaris_bib_search_failed", "Polaris returned an inconsistent BIB search page.");
         }
-        catch (JsonException)
-        {
-            return StaffSearchAttempt.Operational;
-        }
+        return new StaffBibSearchResult(staffRows, total);
     }
 
     private static bool HasNoSearchErrorMessage(JsonElement root)
@@ -222,7 +114,7 @@ public sealed partial class PolarisPatronProvider
     private static bool TryReadStaffSearchRows(
         JsonElement rows,
         BibSearchResult data,
-        out IReadOnlyList<StaffBibSearchCandidate> candidates)
+        out IReadOnlyList<StaffBibSearchRow> candidates)
     {
         candidates = [];
         if (rows.ValueKind != JsonValueKind.Array ||
@@ -231,7 +123,7 @@ public sealed partial class PolarisPatronProvider
             return false;
         }
 
-        var result = new List<StaffBibSearchCandidate>(rows.GetArrayLength());
+        var result = new List<StaffBibSearchRow>(rows.GetArrayLength());
         var index = 0;
         foreach (var row in rows.EnumerateArray())
         {
@@ -244,15 +136,12 @@ public sealed partial class PolarisPatronProvider
                 return false;
             }
 
-            result.Add(new StaffBibSearchCandidate(
-                new StaffBibSearchRow(
-                    model.ControlNumber,
-                    Clean(model.Title),
-                    Clean(model.Author),
-                    Clean(model.PublicationDate),
-                    Clean(model.TypeOfMaterial),
-                    Clean(model.ISBN) ?? Clean(model.UPC)),
-                model.PrimaryTypeOfMaterial));
+            result.Add(new StaffBibSearchRow(bibId, Clean(model.Title), Clean(model.Author), Clean(model.PublicationDate),
+                Clean(model.TypeOfMaterial), Clean(model.ISBN) ?? Clean(model.UPC))
+            {
+                Publisher = Clean(model.Publisher),
+                MaterialTypeId = model.PrimaryTypeOfMaterial ?? ParseMaterialTypeId(model.TypeOfMaterial)
+            });
         }
 
         candidates = result;
@@ -277,8 +166,6 @@ public sealed partial class PolarisPatronProvider
                int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out valueAsInt32) &&
                valueAsInt32 > 0;
     }
-
-    private sealed record StaffBibSearchCandidate(StaffBibSearchRow Result, int? MaterialType);
 
     public async Task<StaffBibHoldingsSummary> GetBibHoldingsAsync(
         int bibId, int organizationId, CancellationToken cancellationToken)
@@ -446,87 +333,59 @@ public sealed partial class PolarisPatronProvider
         }
     }
 
-    private enum StaffSearchAttemptKind
-    {
-        Operational,
-        DefinitiveEmpty,
-        WithRows
-    }
-
-    private sealed record StaffSearchAttempt(
-        StaffSearchAttemptKind Kind,
-        BibSearchResult? Data,
-        IReadOnlyList<StaffBibSearchCandidate>? StaffRows)
-    {
-        public static StaffSearchAttempt Operational { get; } =
-            new(StaffSearchAttemptKind.Operational, null, null);
-
-        public static StaffSearchAttempt DefinitiveEmpty(BibSearchResult data) =>
-            new(StaffSearchAttemptKind.DefinitiveEmpty, data, []);
-
-        public static StaffSearchAttempt WithRows(
-            BibSearchResult data,
-            IReadOnlyList<StaffBibSearchCandidate> staffRows) =>
-            new(StaffSearchAttemptKind.WithRows, data, staffRows);
-    }
-
     private static string CleanSearch(string? value) => Regex.Replace(value ?? string.Empty, "\\s+", " ").Trim();
 
-    private double ScoreStaffBib(StaffBibSearchRow result, string query, string title, string author)
+    // Title words may occur in any order. Search author fragments anywhere in a name word,
+    // except single initials which match the start. Only these application-owned stars enter CCL.
+    private static string KeywordConditions(string field, string text)
     {
-        var score = 0d;
-        var targetTitle = NormalizeLabel(title.Length > 0 ? title : query);
-        var targetAuthor = NormalizeLabel(author);
-        var targetIdentifier = NormalizeIdentifier(query);
-        var rowTitle = NormalizeLabel(result.Title);
-        var rowAuthor = NormalizeLabel(result.Author);
-        var rowIdentifier = NormalizeIdentifier(result.Identifier ?? string.Empty);
-
-        if (targetIdentifier.Length > 0 && rowIdentifier.Contains(targetIdentifier, StringComparison.Ordinal))
+        var terms = new StringBuilder(text.Length);
+        foreach (var rune in text.EnumerateRunes())
         {
-            score += 200;
+            var indexed = Rune.IsLetterOrDigit(rune) || Rune.GetUnicodeCategory(rune) is
+                UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark ||
+                rune.Value is '\'' or '’' or '+' or '%' or '$';
+            terms.Append(indexed ? rune.ToString() : " ");
         }
 
-        if (targetTitle.Length > 0 && rowTitle == targetTitle)
+        var conditions = new List<string>();
+        foreach (var term in terms.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries))
         {
-            score += 100;
+            var word = term.Trim('\'', '’');
+            if (!word.EnumerateRunes().Any(Rune.IsLetterOrDigit))
+            {
+                continue;
+            }
+            if (field == "AU")
+            {
+                word = word.EnumerateRunes().Count() == 1 ? $"{word}*" : $"*{word}*";
+            }
+            conditions.Add($"{field}=\"{word}\"");
         }
-        else if (targetTitle.Length > 0 && rowTitle.StartsWith(targetTitle, StringComparison.Ordinal))
-        {
-            score += 40;
-        }
-
-        if (targetAuthor.Length > 0 && rowAuthor.Contains(targetAuthor, StringComparison.Ordinal))
-        {
-            score += 30;
-        }
-
-        var publicationDigits = Regex.Replace(result.Publication ?? string.Empty, "\\D", string.Empty);
-        if (publicationDigits.Length >= 4 &&
-            int.TryParse(publicationDigits.AsSpan(0, 4), NumberStyles.None, CultureInfo.InvariantCulture, out var year) &&
-            year > 1900 && year <= timeProvider.GetUtcNow().Year)
-        {
-            score += Math.Min(5d, (year - 1900) / 20d);
-        }
-
-        return score;
+        // Polaris documents a ten-term limit for ungrouped power searches.
+        return string.Join(" AND ", conditions.Chunk(10).Select(group => $"({string.Join(" AND ", group)})"));
     }
 
-    private static string NormalizeLabel(string? value)
+    private static string IdentifierSearch(string text)
     {
-        var normalized = (value ?? string.Empty).Trim();
-        if (normalized.EndsWith(':'))
+        // Build literals from identifier characters only. No user quote, wildcard or escape reaches CCL.
+        var compact = Regex.Replace(text, @"[\s\-_.:/]+", "").ToUpperInvariant();
+        var identifier = string.Concat(compact.EnumerateRunes()
+            .Select(rune => Rune.IsLetterOrDigit(rune) ? rune.ToString() : " ")).Trim();
+        var lccn = Regex.Replace(text.Split('/')[0], @"\s+", "").ToLowerInvariant();
+        var parts = Regex.Match(lccn, @"^([a-z]{0,3}(?:[0-9]{2}|[0-9]{4}))-([0-9]{1,6})$");
+        if (parts.Success)
         {
-            normalized = normalized[..^1];
+            lccn = parts.Groups[1].Value + parts.Groups[2].Value.PadLeft(6, '0');
         }
-        return normalized.Trim().ToLowerInvariant();
+        else if (!Regex.IsMatch(lccn, @"^[a-z]{0,3}[0-9]{8,10}$"))
+        {
+            lccn = identifier;
+        }
+        return $"ISBN=\"{identifier}\" OR UPC=\"{identifier}\" OR LCCN=\"{lccn}\"";
     }
-
-    private static string NormalizeIdentifier(string value) =>
-        Regex.Replace(value, "[\\s\\-_.:/]+", string.Empty).ToUpperInvariant();
 
     private static string QuoteSearch(string value) =>
         "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
-
 }
