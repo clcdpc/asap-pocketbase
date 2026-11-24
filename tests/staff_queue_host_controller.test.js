@@ -4,6 +4,25 @@ const staff = { id: '20', tenantId: 'a', authenticationEmail: 'a@example.org', r
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { resolve, promise }; };
 
 (async () => {
+  await fixture(async ({ load, get }) => {
+    const session = (await load('session-identity')).createSessionIdentity();
+    const { createCopyCounts } = await load('copy-counts');
+    const reads = [];
+    const counts = createCopyCounts({ root: document, sessionIdentity: session, getScope: () => '2',
+      request() { const pending = deferred(); reads.push(pending); return pending.promise; } });
+    const firstOwner = session.accept(staff);
+    const old = counts.refresh();
+    counts.signedOut(); session.clear();
+    session.accept({ ...staff, id: '21', role: 'admin', organizationId: 2 });
+    const current = counts.refresh();
+    reads[1].resolve({ scope: '2', openCount: 1, closedCount: 0 }); await current;
+    reads[0].resolve({ scope: '2', openCount: 99, closedCount: 99 }); await old;
+    await counts.refresh(firstOwner);
+    assert.equal(reads.length, 2, 'A late mutation callback from the previous actor cannot start another read.');
+    assert.equal(get('[data-view="additional-copies"] [data-copy-count]').textContent, ' (1)');
+    assert.equal(get('[data-copy-status="closed"]').textContent, 'Closed (0)');
+    counts.dispose();
+  });
   await fixture(async ({ load, get, dom }) => {
     const { createDetailHost } = await load('detail-host');
     const host = createDetailHost({ root: get('#request-dialog') });

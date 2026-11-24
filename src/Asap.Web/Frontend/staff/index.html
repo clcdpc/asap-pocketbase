@@ -53,8 +53,8 @@
         <button class="view-tab active" type="button" data-view="queue" aria-current="page">
           <i class="fa fa-list" aria-hidden="true"></i> Requests
         </button>
-        <button class="view-tab" type="button" data-view="additional-copies">
-          <i class="fa fa-clone" aria-hidden="true"></i> Additional copies
+        <button class="view-tab" type="button" data-view="additional-copies" aria-describedby="copy-count-state">
+          <i class="fa fa-clone" aria-hidden="true"></i> Additional copies<span data-copy-count="open"></span>
         </button>
         <button class="view-tab" type="button" data-view="analytics">
           <i class="fa fa-bar-chart" aria-hidden="true"></i> Analytics
@@ -66,6 +66,7 @@
           <i class="fa fa-sliders" aria-hidden="true"></i> Settings
         </button>
       </nav>
+      <span id="copy-count-state" class="sr-only"></span>
 
       <section id="search-view" class="submission-search" aria-labelledby="search-title" hidden>
         <h1 id="search-title" tabindex="-1">Search ASAP results</h1>
@@ -158,8 +159,8 @@
         </div>
 
         <div id="additional-copy-status-tabs" class="status-tabs" role="tablist" aria-label="Additional-copy status">
-          <button type="button" role="tab" data-copy-status="open" aria-selected="true">Open</button>
-          <button type="button" role="tab" data-copy-status="closed" aria-selected="false">Closed</button>
+          <button type="button" role="tab" data-copy-status="open" aria-selected="true" aria-describedby="copy-count-state">Open<span data-copy-count="open"></span></button>
+          <button type="button" role="tab" data-copy-status="closed" aria-selected="false" aria-describedby="copy-count-state">Closed<span data-copy-count="closed"></span></button>
         </div>
 
         <div class="queue-filters" aria-label="Additional-copy filters">

@@ -145,7 +145,7 @@ export function catalogActionReason(reason) {
 }
 
 export function createPolarisLookup({ authorizedJson, isAbortError, announce, sessionIdentity, onReceipt, clearReceipt,
-  storage }) {
+  storage, onCopyChanged }) {
   const dialog = document.querySelector('#polaris-dialog');
   const mode = dialog.querySelector('#polaris-mode');
   const query = dialog.querySelector('#polaris-query');
@@ -167,7 +167,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
   let escapeHeld = false;
   const events = new window.AbortController();
   const queue = createCatalogQueue({ dialog, panel: confirmation, searchForm, results,
-    sessionIdentity, authorizedJson, isAbortError, announce, onReceipt, clearReceipt, storage,
+    sessionIdentity, authorizedJson, isAbortError, announce, onReceipt, clearReceipt, storage, onCopyChanged,
     isCurrent: current => !disposed && context === current && current?.isCurrent() && dialog.open,
     onCommitted: async (current, result) => {
       close(current);

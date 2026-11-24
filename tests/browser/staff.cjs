@@ -2,6 +2,7 @@
 const { decideConfirmation, answerNextConfirmation, waitForConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
 
 const assert = require('node:assert/strict');
+const nextCopyCounts = require('./copy-counts.cjs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { URL } = require('node:url');
@@ -1646,6 +1647,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     assert.equal(pendingAttempt.sourceId, String(args.staleCreateSourceId),
       'the original source version must be saved before the task request is dispatched');
     const createdId = acceptedCreate.json.additionalCopyRequest.id;
+    const createdCounts = nextCopyCounts(page);
     await page.getByRole('button', { name: 'Cancel' }).click();
     assert.equal(await page.locator('#additional-copy-create-dialog').isVisible(), true,
       'Cancel must retain an in-flight creation until the committed result is known');
@@ -1656,6 +1658,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     await delayedMutation.completed;
     await delayedMutation.dispose();
     await page.locator('#app-status').filter({ hasText: `Additional-copy task ${createdId} created.` }).waitFor();
+    await createdCounts();
     assert.equal(await page.evaluate(key => window.sessionStorage.getItem(key), copyRecoveryKey), null);
     await page.locator('#additional-copy-create-dialog').waitFor({ state: 'hidden' });
     const createdResponse = await context.request.get(
@@ -2018,7 +2021,9 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
       await page.getByRole('link', { name: 'Open source title request' }).getAttribute('href'),
       `/staff/?request=${args.copySourceRequestId}`
     );
+    const closedCounts = nextCopyCounts(page);
     await decideConfirmation(page, () => page.getByRole('button', { name: 'Close task' }).click(), dialog => dialog.accept());
+    await closedCounts();
     await page.getByRole('button', { name: 'Reopen task' }).waitFor();
     await decideConfirmation(page, () => page.getByRole('button', { name: 'Reopen task' }).click(), dialog => {
       assert.match(dialog.message(), /return to open work/);
@@ -2026,11 +2031,13 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     });
     assert.equal(await page.getByRole('button', { name: 'Reopen task' }).isVisible(), true);
     assert.equal(await page.getByRole('button', { name: 'Reopen task' }).evaluate(node => document.activeElement === node), true);
+    const reopenedCounts = nextCopyCounts(page);
     await decideConfirmation(page, () => page.getByRole('button', { name: 'Reopen task' }).click(), dialog => {
       assert.match(dialog.message(), /return to open work/);
       return dialog.accept();
     });
     await page.getByRole('button', { name: 'Unclaim' }).waitFor();
+    await reopenedCounts();
     const retainedResponse = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/additional-copies/${created.id}`
     );
@@ -2134,8 +2141,15 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     const repeatedClear = await mutate(context, args.baseOrigin,
       `/api/asap/staff/additional-copies/${created.id}/clear-claim`, { version: assignedClaim.version });
     assert.equal(repeatedClear.status(), 409, await repeatedClear.text());
+    const externalClose = await mutate(context, args.baseOrigin,
+      `/api/asap/staff/additional-copies/${created.id}/close`, { version: clearedTask.version });
+    assert.equal(externalClose.status(), 200);
+    const conflictCounts = nextCopyCounts(page);
     await decideConfirmation(page, () => page.getByRole('button', { name: 'Close task' }).click(), dialog => dialog.accept());
+    await conflictCounts();
+    const deletedCounts = nextCopyCounts(page);
     await decideConfirmation(page, () => page.getByRole('button', { name: 'Permanently delete task' }).click(), dialog => dialog.accept());
+    await deletedCounts();
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     await page.locator('#app-status').filter({ hasText: 'Additional-copy task deleted.' }).waitFor();
 
@@ -2720,8 +2734,10 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
       window.dispatchEvent(event);
       return event.defaultPrevented;
     }), true, 'bulk deletion protects reload until the authoritative sequence completes');
+    const bulkCounts = nextCopyCounts(page);
     releaseFirstDelete();
     await page.locator('#bulk-delete-results').filter({ hasText: 'Confirmed deleted: 1 of 3. Attempted: 3.' }).waitFor();
+    await bulkCounts();
     assert.deepEqual(sent, [
       { path: '/api/asap/staff/requests/' + highId, version: title.version, actorVersion },
       { path: '/api/asap/staff/additional-copies/' + highId, version: copy.version, actorVersion },
@@ -3174,7 +3190,7 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     await page.waitForFunction(() => !new URL(location.href).searchParams.has('request'));
     assert.equal(new URL(page.url()).searchParams.get('scope'), '2');
 
-    await page.getByRole('button', { name: 'Additional copies', exact: true }).click();
+    await page.getByRole('button', { name: /^Additional copies \(\d+\)$/ }).click();
     await page.locator('[data-copy-status="closed"]').click();
     await page.reload({ waitUntil: 'networkidle' });
     assert.equal(await page.locator('[data-copy-status="closed"]').getAttribute('aria-selected'), 'true');
@@ -4266,9 +4282,9 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
         }
       };
       await page.route(args.baseOrigin + deletePath, deleteRoute);
-      const view = copy ? 'Additional copies' : 'Requests';
+      const view = copy ? /^Additional copies \(\d+\)$/ : /^Requests$/;
       const stage = copy ? '[data-copy-status="closed"]' : '[data-status="closed"]';
-      await page.getByRole('button', { name: view, exact: true }).click();
+      await page.getByRole('button', { name: view }).click();
       await page.locator(stage).click();
       // The real list may contain the source in another stage; the named route intent still opens its authoritative detail.
       await page.evaluate(({ id, copy }) => {

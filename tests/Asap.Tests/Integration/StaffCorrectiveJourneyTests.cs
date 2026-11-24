@@ -515,6 +515,11 @@ public sealed partial class PatronJourneyTests
             using var body = JsonDocument.Parse(await anonymous.Content.ReadAsStringAsync());
             Assert.IsFalse(body.RootElement.GetProperty("authenticated").GetBoolean());
         }
+        using (var counts = await client.GetAsync("/api/asap/staff/additional-copies/counts?scope=all"))
+        {
+            Assert.AreEqual(HttpStatusCode.Redirect, counts.StatusCode);
+            Assert.AreEqual("login.microsoftonline.com", counts.Headers.Location!.Host);
+        }
         client.DefaultRequestHeaders.Add("Cookie", $"__Host-ASAP.Staff={ProtectStaffCookie(cookieApplication, superAdmin.Id, superAdmin.EntraTenantId, superAdmin.AuthenticationEmail)}");
         using var replacement = await client.GetAsync("/api/asap/staff/session");
         using var replacementBody = JsonDocument.Parse(await replacement.Content.ReadAsStringAsync());

@@ -122,6 +122,44 @@ function createQueueGrid(options, container) {
   };
 }
 
+function bindGridAccessibility(root, getGrid, signal, regionLabel) {
+  const gridAccessibility = new window.MutationObserver(() => {
+    const wrapper = getGrid().querySelector('.gridjs-wrapper');
+    if (!wrapper) return;
+    if (regionLabel) {
+      wrapper.tabIndex = 0;
+      wrapper.setAttribute('role', 'region');
+      wrapper.setAttribute('aria-label', regionLabel);
+    }
+    for (const header of wrapper.querySelectorAll('thead th')) {
+      const button = header.querySelector('button.gridjs-sort');
+      if (!button) continue;
+      const label = header.querySelector('.gridjs-th-content').textContent.trim();
+      const ascending = button.classList.contains('gridjs-sort-asc');
+      const descending = button.classList.contains('gridjs-sort-desc');
+      header.setAttribute('aria-sort', ascending ? 'ascending' : descending ? 'descending' : 'none');
+      const action = `Sort ${label} ${ascending ? 'descending' : 'ascending'}`;
+      button.setAttribute('aria-label', action);
+      button.title = action;
+    }
+  });
+  gridAccessibility.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+
+  root.addEventListener('keydown', event => {
+    if (!['Enter', ' '].includes(event.key)) return;
+    const header = event.target.closest('thead th');
+    const button = header?.querySelector('button.gridjs-sort');
+    if (!button || !getGrid().contains(header) || event.target !== header && event.target !== button) return;
+    // Grid handles Enter on the header, including events bubbling from its
+    // native sort button. Own this key once so the button's default click
+    // cannot immediately undo that sort. Keep Shift's multi-sort semantics.
+    event.preventDefault();
+    event.stopPropagation();
+    button.dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: event.shiftKey }));
+  }, { capture: true, signal });
+  return gridAccessibility;
+}
+
 function bindStatusTabs(tabs, key, intent, signal) {
   for (const tab of tabs) {
     tab.addEventListener('click', () => intent(tab.dataset[key]), { signal });
@@ -164,7 +202,7 @@ function focusPort({ grid, label, fallback, sessionIdentity, getContext, copy, s
 
 export function createTitleQueue({ root, sessionIdentity, claimsFilter, getContext, announce,
   onOpen, onScopeIntent, onStatusIntent, onScopeAccepted, onLibraries, onRefreshed, onRendered,
-  onNewSuggestion = null, polarisLookup = null, onCatalogCommitted = () => {},
+  onNewSuggestion = null, polarisLookup = null, onExplicitRefresh = () => {},
   resolveScope = () => getContext().scope,
   request = authorizedJson }) {
   const dom = {
@@ -198,38 +236,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
   const events = new window.AbortController();
   const claimsControl = claimsFilter.bind(dom.claim, () => renderGrid());
   let disposed = false, acceptingScope = false, targetGeneration = 0, lookupContext = null;
-  const gridAccessibility = new window.MutationObserver(() => {
-    const wrapper = dom.grid.querySelector('.gridjs-wrapper');
-    if (!wrapper || disposed) return;
-    wrapper.tabIndex = 0;
-    wrapper.setAttribute('role', 'region');
-    wrapper.setAttribute('aria-label', 'Title requests');
-    for (const header of wrapper.querySelectorAll('thead th')) {
-      const button = header.querySelector('button.gridjs-sort');
-      if (!button) continue;
-      const label = header.querySelector('.gridjs-th-content').textContent.trim();
-      const ascending = button.classList.contains('gridjs-sort-asc');
-      const descending = button.classList.contains('gridjs-sort-desc');
-      header.setAttribute('aria-sort', ascending ? 'ascending' : descending ? 'descending' : 'none');
-      const action = `Sort ${label} ${ascending ? 'descending' : 'ascending'}`;
-      button.setAttribute('aria-label', action);
-      button.title = action;
-    }
-  });
-  gridAccessibility.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-
-  root.addEventListener('keydown', event => {
-    if (!['Enter', ' '].includes(event.key)) return;
-    const header = event.target.closest('thead th');
-    const button = header?.querySelector('button.gridjs-sort');
-    if (!button || !dom.grid.contains(header) || event.target !== header && event.target !== button) return;
-    // Grid handles Enter on the header, including events bubbling from its
-    // native sort button. Own this key once so the button's default click
-    // cannot immediately undo that sort. Keep Shift's multi-sort semantics.
-    event.preventDefault();
-    event.stopPropagation();
-    button.dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: event.shiftKey }));
-  }, { capture: true, signal: events.signal });
+  const gridAccessibility = bindGridAccessibility(root, () => dom.grid, events.signal, 'Title requests');
 
   function closeLookup() { if (lookupContext) polarisLookup?.close(lookupContext); lookupContext = null; }
   function invalidate() {
@@ -469,9 +476,8 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
       directActions: ['suggestion', 'outstanding_purchase'].includes(request.status) &&
         request.capabilities?.allowedActions?.includes('catalogFound') &&
         request.capabilities.canChangeBib === true && request.capabilities.canEditIdentifier === true,
-      onCommitted: async result => {
+      onCommitted: async () => {
         if (!sessionIdentity.isCurrent(owner)) return false;
-        onCatalogCommitted(result);
         const refreshed = await refresh({ silent: true });
         if (sessionIdentity.isCurrent(owner) && getContext().activeView === 'queue' &&
             getContext().scope === context.scope && getContext().status === context.status) dom.refresh.focus();
@@ -596,7 +602,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     if (selection && !selection.isCollapsed && row.contains(selection.anchorNode)) return;
     if (request && liveRow({ currentTarget: link }, sessionIdentity.preferences(), request)) onOpen(request.id, link);
   }, { signal: events.signal });
-  dom.refresh.addEventListener('click', () => { void refresh(); }, { signal: events.signal });
+  dom.refresh.addEventListener('click', () => { onExplicitRefresh(); void refresh(); }, { signal: events.signal });
   dom.scope.addEventListener('change', async () => {
     const scope = dom.scope.value;
     dom.scope.value = getContext().scope;
@@ -644,6 +650,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
 }
 
 export function createCopyQueue({ root, sessionIdentity, claimsFilter, getContext, announce,
+  onExplicitRefresh = () => {},
   onOpen, onScopeIntent, onStatusIntent, onScopeAccepted, onLibraries, onRefreshed, onRendered, recovery,
   resolveScope = () => getContext().scope,
   request = authorizedJson }) {
@@ -666,6 +673,7 @@ export function createCopyQueue({ root, sessionIdentity, claimsFilter, getContex
   const events = new window.AbortController();
   const claimsControl = claimsFilter.bind(dom.additionalCopyClaim, () => renderAdditionalCopyGrid());
   const openers = new WeakMap();
+  const gridAccessibility = bindGridAccessibility(root, () => dom.additionalCopyGrid, events.signal);
   let disposed = false, acceptingScope = false, targetGeneration = 0, renderGeneration = 0;
   const columns = [
     { name: 'Title / Author', kind: 'title', width: '32%', value: task => task.title || '' },
@@ -917,7 +925,7 @@ export function createCopyQueue({ root, sessionIdentity, claimsFilter, getContex
     const opener = row.querySelector('.additional-copy-open');
     if (opener) openCopy(opener);
   }, { signal: events.signal });
-  dom.additionalCopyRefresh.addEventListener('click', () => { void refresh(); }, { signal: events.signal });
+  dom.additionalCopyRefresh.addEventListener('click', () => { onExplicitRefresh(); void refresh(); }, { signal: events.signal });
   dom.additionalCopyScope.addEventListener('change', async () => {
     const scope = dom.additionalCopyScope.value;
     dom.additionalCopyScope.value = getContext().scope;
@@ -949,6 +957,6 @@ export function createCopyQueue({ root, sessionIdentity, claimsFilter, getContex
     preferencesChanged() { if (disposed) return; claimsControl.sync(); if (state.loadedContext) renderAdditionalCopyGrid(); },
     clear: retireProjection,
     signedOut() { if (disposed) return; claimsControl.setStaff(null); retireProjection(); dom.additionalCopyCreateReview.hidden = true; },
-    dispose() { if (disposed) return; disposed = true; claimsControl.dispose(); events.abort(); invalidate(); state.additionalCopyGrid?.destroy?.(); state.additionalCopyGrid = null; dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid); state.additionalCopies = []; }
+    dispose() { if (disposed) return; disposed = true; claimsControl.dispose(); gridAccessibility.disconnect(); events.abort(); invalidate(); state.additionalCopyGrid?.destroy?.(); state.additionalCopyGrid = null; dom.additionalCopyGrid = detachGridContainer(dom.additionalCopyGrid); state.additionalCopies = []; }
   };
 }

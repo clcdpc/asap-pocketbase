@@ -1,5 +1,6 @@
 'use strict';
 const assert = require('node:assert/strict');
+const nextCopyCounts = require('./copy-counts.cjs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
@@ -182,7 +183,9 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
       'Close recovery returns focus to the original result.');
     await first().locator('.polaris-copy-button').click();
     await scan('polaris-uncertain-recovery');
+    const recoveredCounts = nextCopyCounts(page);
     await confirmation().getByRole('button', { name: 'Recover identical action', exact: true }).click();
+    await recoveredCounts();
     await lookup.waitFor({ state: 'hidden' });
     assert.equal(commands.length, 2); assert.deepEqual(commands[1], commands[0]); report.identicalRecovery = true;
     report.committed.push({ id: copyOff, ...(await getDetail(copyOff)) });
@@ -197,7 +200,9 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
         assert.doesNotMatch(await confirmation().textContent(), /This action will turn on automatic hold placement/);
         await confirmation().getByLabel('Email me a purchase reminder', { exact: true }).uncheck();
       } else if (id === useOff) assert.match(await confirmation().textContent(), /close the request without placing a hold/);
+      const createdCounts = copy && nextCopyCounts(page);
       await confirmation().getByRole('button', { name: copy ? 'Confirm additional copy and queue' : 'Confirm use BIB', exact: true }).click();
+      if (createdCounts) await createdCounts();
       await lookup.waitFor({ state: 'hidden' }); await page.locator('#refresh-queue:not([disabled])').waitFor();
       report.committed.push({ id, ...(await getDetail(id)) });
     }

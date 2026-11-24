@@ -13,6 +13,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   beforeOpen, isNavigationCurrent, getNavigationGeneration, getScope, onAlign, onOpened, onUpdated = () => {}, beforeClose, onClosed,
   getFocusReturn, refreshQueue, queueSequence, rememberOpened, forgetUnavailable, onReceipt, clearReceipt,
   refreshCurrentStaff = async () => null,
+  onCopyChanged = () => {},
   onNewSuggestion = null,
   onOpenEmailOperation = null,
   request: send = authorizedJson }) {
@@ -402,6 +403,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       }
       if (receiptRecovery && !purchaseTaskOperation) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
+      if (purchaseTaskId) onCopyChanged(attempt.owner);
       let detail = result.request || (result.id ? result : null);
       const status = detail?.status || result.finalStatus;
       const label = body.action === 'reject' ? 'Rejection email' : path.endsWith('/assign') ? 'Assignment notification'
@@ -469,6 +471,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       const purchaseTaskResolved = receiptRecovery && !recordedProviderOutcome && !uncertain &&
         (definiteNoCommit || ['stale_version', 'additional_copy_exists'].includes(error.response?.code));
       attempt.outcome = recordedProviderOutcome ? 'provider_recorded' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
+      if (uncertain && body.action === 'purchase' && body.operationId) onCopyChanged(attempt.owner);
       if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 && error.response?.code === 'duplicate_open_request') {
         if (body.action === 'purchase' && body.operationId) workflows?.clearPurchaseTaskOperation(body.operationId, body);
         if (attempt.isCurrent()) await showDuplicateRecovery(attempt, error.response.duplicate, retained); return;

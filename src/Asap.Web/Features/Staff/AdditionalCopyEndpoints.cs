@@ -9,6 +9,7 @@ public static class AdditionalCopyEndpoints
     {
         var group = endpoints.MapGroup("/api/asap/staff/additional-copies").RequireAuthorization();
         group.MapGet("", ListAsync);
+        group.MapGet("/counts", CountsAsync);
         group.MapGet("/{id}", GetAsync);
         group.MapPost("/{id:long}/claim", ClaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
         group.MapPost("/{id:long}/unclaim", UnclaimAsync).AddEndpointFilter<StaffAntiforgeryFilter>();
@@ -40,6 +41,17 @@ public static class AdditionalCopyEndpoints
         return result is null
             ? Results.BadRequest(new { code = "invalid_scope_or_status" })
             : Results.Json(result);
+    }
+
+    private static async Task<IResult> CountsAsync(HttpContext context, string? scope,
+        AdditionalCopyService service, CancellationToken cancellationToken)
+    {
+        if (!LibraryScope.TryParse(scope, LibraryScope.All, out var parsedScope))
+        {
+            return Results.BadRequest(new { code = "invalid_scope" });
+        }
+        var result = await service.CountsAsync(Current(context), parsedScope, cancellationToken);
+        return result is null ? Results.BadRequest(new { code = "invalid_scope" }) : Results.Json(result);
     }
 
     private static async Task<IResult> GetAsync(

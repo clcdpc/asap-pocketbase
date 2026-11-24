@@ -1,5 +1,6 @@
 'use strict';
 const assert = require('node:assert/strict');
+const nextCopyCounts = require('./copy-counts.cjs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
@@ -916,7 +917,9 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
         const actionsBefore = report.actions.length;
         const acceptedResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
           new URL(response.url()).pathname.endsWith(`/title-requests/${optoutId}/action`) && response.status() === 200);
+        const purchasedCounts = nextCopyCounts(page);
         await panel.getByRole('button', { name: 'Create purchasing task', exact: true }).press('Enter');
+        await purchasedCounts();
         const accepted = await (await acceptedResponse).json();
         assert.equal(accepted.committed, true);
         assert.equal(accepted.status, 'closed');

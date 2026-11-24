@@ -76,6 +76,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       overflow: document.documentElement.scrollWidth > innerWidth,
       countStateMatches: (() => {
         const node = document.querySelector('#status-count-state'), state = node.textContent.trim();
+        if (document.querySelector('#queue-view').hidden) return node.getClientRects().length === 0;
         return state ? node.getClientRects().length > 0 : getComputedStyle(node).display === 'none' && node.getBoundingClientRect().height === 0;
       })(),
       danglingDescriptions: [...document.querySelectorAll('[aria-describedby]')].flatMap(node =>
@@ -91,6 +92,88 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     if (visible) await visible.scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(artifacts, `${name}.png`), fullPage: true });
   };
+  async function checkHeaders(page, selector, name) {
+    const headers = page.locator(selector + ' th[aria-sort]');
+    await headers.first().waitFor();
+    const geometry = await headers.evaluateAll(nodes => nodes.map(node => {
+      const label = node.querySelector('.gridjs-th-content'), sort = node.querySelector('.gridjs-sort');
+      const cell = node.getBoundingClientRect(), text = label.getBoundingClientRect(), button = sort.getBoundingClientRect();
+      return { label: label.textContent, height: cell.height, textHeight: text.height, line: parseFloat(getComputedStyle(label).lineHeight), buttonHeight: button.height,
+        buttonWidth: button.width, centers: Math.abs((text.top + text.bottom - button.top - button.bottom) / 2),
+        contained: text.left >= cell.left && button.right <= cell.right + 1 && text.right <= button.left + 1 &&
+          text.top >= cell.top && text.bottom <= cell.bottom && button.top >= cell.top && button.bottom <= cell.bottom &&
+          label.scrollHeight <= label.clientHeight + 1 && label.scrollWidth <= label.clientWidth + 1 };
+    }));
+    await fs.writeFile(path.join(artifacts, `${name}-headers.json`), JSON.stringify(geometry));
+    const contentHeight = Math.max(28, ...geometry.map(cell => cell.textHeight));
+    for (const cell of geometry) {
+      assert.ok(cell.contained && cell.centers <= 1 && cell.height <= contentHeight + 11,
+        `${name}: aligned labels, no clipping and compact padding: ${JSON.stringify(cell)}`);
+      assert.ok(cell.buttonHeight >= 24 && cell.buttonWidth >= 24);
+    }
+    if (name === 'desktop-copies') assert.ok(geometry.some(cell => cell.textHeight >= cell.line * 1.9), 'Long label wraps at desktop grid width.');
+    const sorted = headers.first(), button = sorted.locator('button');
+    const direction = await sorted.getAttribute('aria-sort') === 'ascending' ? 'descending' : 'ascending';
+    await button.focus(); await page.keyboard.press('Space');
+    await page.waitForFunction(({ selector, direction }) => document.querySelector(selector + ' th[aria-sort]').getAttribute('aria-sort') === direction,
+      { selector, direction });
+    assert.ok((await button.getAttribute('aria-label')).endsWith(direction === 'ascending' ? 'descending' : 'ascending'));
+    assert.equal(await button.evaluate(node => node === document.activeElement && node.matches(':focus-visible') &&
+      getComputedStyle(node).outlineStyle !== 'none'), true);
+  }
+  async function checkCopyWorkspace(page, name) {
+    await checkHeaders(page, '#request-grid', name + '-requests');
+    const nav = page.getByRole('button', { name: 'Additional copies (26)', exact: true });
+    await nav.click();
+    const open = page.getByRole('tab', { name: 'Open (26)', exact: true });
+    const closed = page.getByRole('tab', { name: 'Closed (3)', exact: true });
+    await open.waitFor(); await closed.waitFor();
+    const filterReads = [];
+    const observeCount = req => {
+      if (new URL(req.url()).pathname.endsWith('/additional-copies/counts')) filterReads.push(req.url());
+    };
+    page.on('request', observeCount);
+    await checkHeaders(page, '#additional-copy-grid', name + '-copies');
+    if (name === 'desktop') {
+      await page.locator('#additional-copy-grid').getByRole('button', { name: 'Next', exact: true }).click();
+      await page.waitForFunction(() => document.querySelectorAll('#additional-copy-grid .additional-copy-open').length === 1);
+      await page.locator('#additional-copy-search').fill('Counted copy 01');
+      await page.waitForFunction(() => document.querySelector('#additional-copy-summary').textContent === '1 open task');
+      await open.waitFor(); await closed.waitFor(); await nav.waitFor();
+      await page.locator('#additional-copy-search').fill('');
+      await page.locator('#additional-copy-claim-filter').selectOption('mine');
+      await page.waitForFunction(() => document.querySelector('#additional-copy-summary').textContent === '0 open tasks');
+      await open.waitFor(); await closed.waitFor();
+      await page.locator('#additional-copy-claim-filter').selectOption('all');
+      assert.deepEqual(filterReads, [], 'Sort, pagination, search and claims operate on the list without fetching totals.');
+      await page.locator('#additional-copy-library-scope').selectOption(fixture.otherLibrary);
+      await page.getByRole('button', { name: 'Additional copies (0)', exact: true }).waitFor();
+      await page.getByRole('tab', { name: 'Open (0)', exact: true }).waitFor();
+      await page.getByRole('tab', { name: 'Closed (0)', exact: true }).waitFor();
+      await page.locator('#additional-copy-library-scope').selectOption(fixture.library);
+    }
+    page.off('request', observeCount);
+    await open.focus(); await page.keyboard.press('End');
+    await page.locator('[data-copy-status="closed"][aria-selected="true"]').waitFor();
+    await nav.waitFor();
+    assert.equal(await closed.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
+    await scan(page, name + '-copy-totals', closed);
+    const countPath = '**/api/asap/staff/additional-copies/counts?*';
+    await page.route(countPath, route => route.fulfill({ json: { scope: fixture.library, openCount: 123456, closedCount: 987654 } }));
+    await page.locator('#refresh-additional-copies').click();
+    for (const [role, label] of [['button', 'Additional copies (123456)'], ['tab', 'Open (123456)'], ['tab', 'Closed (987654)']]) {
+      const control = page.getByRole(role, { name: label, exact: true });
+      await control.scrollIntoViewIfNeeded();
+      assert.ok(await control.evaluate(node => {
+        const box = node.getBoundingClientRect(), count = node.querySelector('[data-copy-count]').getBoundingClientRect();
+        return node.scrollWidth <= node.clientWidth + 1 && count.left >= box.left && count.right <= box.right &&
+          count.top >= box.top && count.bottom <= box.bottom && document.documentElement.scrollWidth <= innerWidth;
+      }), `${name}: complete large count fits within ${label}`);
+    }
+    await page.unroute(countPath);
+    await page.locator('#refresh-additional-copies').click(); await nav.waitFor();
+    await page.locator('[data-view="queue"]').click();
+  }
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers(fixture.super) });
     await guard(context);
@@ -118,8 +201,14 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     });
     const holdRead = mode => (nextRead = { mode, started: deferred(), release: deferred(), completed: deferred() });
     const page = await context.newPage();
+    let copyReads = 0;
+    page.on('request', request => {
+      if (new URL(request.url()).pathname === '/api/asap/staff/additional-copies/counts') copyReads++;
+    });
     await page.goto(`${baseURL}/staff/?stage=suggestion&scope=${fixture.library}`);
     await counts(page, fixture.libraryCounts);
+    await page.getByRole('button', { name: 'Additional copies (26)', exact: true }).waitFor();
+    assert.equal(await page.locator('#additional-copy-grid table').count(), 0, 'Navigation totals load independently of the copy list.');
     assert.equal(await page.locator('#queue-title').evaluate(node => document.activeElement === node), false, 'Startup counts preserve native initial focus.');
     const search = page.locator('#request-search'), claim = page.locator('#claim-filter');
     const tag = page.locator('#tag-filter'), similarity = page.locator('#similar-filter');
@@ -201,8 +290,10 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await counts(page, fixture.libraryCounts);
     await page.locator('#request-search').fill('');
     await scan(page, 'counts-desktop');
+    await checkCopyWorkspace(page, 'desktop');
+    await counts(page, fixture.libraryCounts);
 
-    const beforeTabs = report.reads.length;
+    const beforeTabs = report.reads.length, beforeCopyReads = copyReads;
     const suggestion = page.locator('#status-tabs [data-status="suggestion"]');
     await suggestion.focus(); await page.keyboard.press('End');
     const closed = page.getByRole('tab', { name: 'Closed (3)', exact: true });
@@ -218,6 +309,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     }
     assert.deepEqual(await page.locator('#status-tabs [data-status]').evaluateAll(tabs => tabs.map(tab => tab.tabIndex)), [0, -1, -1, -1, -1]);
     assert.equal(report.reads.length, beforeTabs, 'Tab selection uses the already complete dataset.');
+    assert.equal(copyReads, beforeCopyReads, 'Title stage changes leave the copy totals alone.');
 
     const held = holdRead('hold');
     await page.locator('#refresh-queue').click(); await held.started.promise; await unknown(page, true);
@@ -240,6 +332,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     const obsolete = holdRead('hold');
     await page.locator('#refresh-queue').click(); await obsolete.started.promise;
     await page.locator('#library-scope').selectOption(fixture.otherLibrary); await counts(page, fixture.otherCounts);
+    await page.getByRole('button', { name: 'Additional copies (0)', exact: true }).waitFor();
     obsolete.release.resolve(); await obsolete.completed.promise; await counts(page, fixture.otherCounts);
     const target = holdRead('hold');
     await page.locator('#library-scope').selectOption(fixture.library); await target.started.promise; await unknown(page, true);
@@ -269,6 +362,8 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await page.locator('#status-tabs [data-status="suggestion"]').click();
     await page.setViewportSize({ width: 390, height: 844 }); await scan(page, 'counts-mobile');
     await counts(page, updated);
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await checkCopyWorkspace(page, 'mobile-dark');
     const ordinaryContext = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers(fixture.ordinary) });
     await guard(ordinaryContext);
     const ordinaryPage = await ordinaryContext.newPage();
@@ -321,6 +416,21 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
         const png = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
         await fs.writeFile(path.join(artifacts, `counts-native-200-${width}-viewport.png`), Buffer.from(png.data, 'base64'));
         report.nativeZoom.push({ physicalWidth: width, zoom: metrics.visualViewport.zoom, keyboardTab }); await cdp.detach();
+        await checkCopyWorkspace(zoomPage, `native-200-${width}`);
+        if (width === 1440) {
+          await zoomPage.locator('[data-view="additional-copies"]').click();
+          await zoomPage.getByRole('tab', { name: 'Closed (3)', exact: true }).waitFor();
+          await zoomPage.locator('#bulk-delete-closed-copies').click();
+          await zoomPage.locator('#bulk-delete-scope').selectOption(fixture.library);
+          await zoomPage.locator('#bulk-delete-preview').click();
+          await zoomPage.locator('#bulk-delete-items').getByText(/Additional-copy task/).first().waitFor();
+          await zoomPage.locator('#bulk-delete-confirmation').fill('DELETE');
+          await zoomPage.locator('#bulk-delete-execute').click();
+          await zoomPage.locator('#bulk-delete-summary').filter({ hasText: 'Both Closed views were refreshed' }).waitFor();
+          await zoomPage.keyboard.press('Escape');
+          await zoomPage.getByRole('tab', { name: 'Closed (0)', exact: true }).waitFor();
+          await zoomPage.getByRole('button', { name: 'Additional copies (26)', exact: true }).waitFor();
+        }
       } finally { await zoomContext.close(); }
     }
     assert.deepEqual(report.external, []); assert.deepEqual(report.errors, []);
