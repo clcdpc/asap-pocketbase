@@ -271,7 +271,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       }
       if (url.endsWith('/bib-lookup') && options.method === 'POST') {
         const detail = { bibId: 9001, title: 'Original title', author: null };
-        return response(200, JSON.parse(options.body).mode === 'bib' ? detail : { results: [detail] });
+        const body = JSON.parse(options.body);
+        return response(200, body.mode === 'bib' ? detail : { ...body, totalMatches: 1,
+          pageSize: 10, hasPreviousPage: false, hasNextPage: false, results: [detail] });
       }
       if (url.includes('/api/asap/config?')) return response(200, configuration);
       if (url.includes('/research-configuration')) return response(200, { externalSearchProviders: [] });

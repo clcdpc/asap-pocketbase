@@ -177,7 +177,9 @@ async function fixture(route, journey, options = {}) {
       if (pathname.endsWith('/research-configuration')) return response(200, {});
       if (pathname.endsWith('/bib-lookup')) {
         const detail = { bibId: 9001, title: request.title, author: null };
-        return response(200, JSON.parse(init.body).mode === 'bib' ? detail : { results: [detail] });
+        const body = JSON.parse(init.body);
+        return response(200, body.mode === 'bib' ? detail : { ...body, totalMatches: 1,
+          pageSize: 10, hasPreviousPage: false, hasNextPage: false, results: [detail] });
       }
       if (pathname.endsWith('/additional-copy') && init.method === 'GET') return response(200, {
         version: request.version, bibid: request.bibid, openCount: 0, emailPurchaseReminderDefault: false });

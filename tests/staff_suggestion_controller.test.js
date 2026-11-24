@@ -138,7 +138,8 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     const lookup = createPolarisLookup({ announce() {}, isAbortError: error => error.name === 'AbortError',
       authorizedJson: async (path, init) => init.body.mode === 'bib'
         ? new Promise(resolve => { finishVerification = resolve; })
-        : { results: [{ bibId: 9001, title: 'Catalog title', author: 'Catalog author', identifier: 'Catalog identifier' }] } });
+        : { ...init.body, pageSize: 10, totalMatches: 1, hasPreviousPage: false, hasNextPage: false,
+          results: [{ bibId: 9001, title: 'Catalog title', author: 'Catalog author', identifier: 'Catalog identifier' }] } });
     const root = get('#staff-suggestion-dialog');
     const controller = createSuggestionController({ root, trigger: get('#new-suggestion'), sessionIdentity: session,
       polarisLookup: lookup, announce() {}, getLibraries: () => [{ id: '2', name: 'A' }],
