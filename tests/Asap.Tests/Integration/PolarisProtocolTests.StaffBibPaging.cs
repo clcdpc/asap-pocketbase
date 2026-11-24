@@ -27,14 +27,8 @@ public sealed partial class PolarisProtocolTests
     [TestMethod]
     [DataRow("title", "  Books   & music  ", "", "", "/search/bibs/keyword/TI", "Books & music", "RELEVANCE")]
     [DataRow("author", "O’Toole, Tim", "", "", "/search/bibs/keyword/AU", "O’Toole, Tim", "AU")]
-    [DataRow("title_author", "", "French-\"cooking\" OR\\NOT", "O'Toole, J. K.", "/search/bibs/boolean",
-        "(TI=\"French\" AND TI=\"cooking\" AND TI=\"OR\" AND TI=\"NOT\") AND (AU=\"*O'Toole*\" AND AU=\"J*\" AND AU=\"K*\")", "PDTI")]
-    [DataRow("title_author", "", "#MeToo: $100, 99% & C++", "Row", "/search/bibs/boolean",
-        "(TI=\"MeToo\" AND TI=\"$100\" AND TI=\"99%\" AND TI=\"C++\") AND (AU=\"*Row*\")", "PDTI")]
-    [DataRow("title_author", "", "𠮷野", "𠮷", "/search/bibs/boolean",
-        "(TI=\"𠮷野\") AND (AU=\"𠮷*\")", "PDTI")]
-    [DataRow("title_author", "", "a b c d e f g h i j k", "Lee", "/search/bibs/boolean",
-        "(TI=\"a\" AND TI=\"b\" AND TI=\"c\" AND TI=\"d\" AND TI=\"e\" AND TI=\"f\" AND TI=\"g\" AND TI=\"h\" AND TI=\"i\" AND TI=\"j\") AND (TI=\"k\") AND (AU=\"*Lee*\")", "PDTI")]
+    [DataRow("title_author", "", "The Shining", "Stephen King", "/search/bibs/boolean",
+        "TI=\"The Shining\" AND (AU=\"Stephen King\" OR AU=\"King, Stephen\")", "PDTI")]
     public async Task StaffSearchKeepsNativeOrderAndSortAcrossPages(string mode, string query, string title,
         string author, string path, string term, string sort)
     {
@@ -51,6 +45,49 @@ public sealed partial class PolarisProtocolTests
         Assert.AreEqual(2, handler.RequestCount);
         AssertSearchRequest(handler.RequestUris[0], path, term, sort, 1);
         AssertSearchRequest(handler.RequestUris[1], path, term, sort, 2);
+        Assert.AreEqual(handler.RequestUris[0].PathAndQuery,
+            handler.RequestUris[1].PathAndQuery.Replace("page=2&", "page=1&", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    [DataRow("The Shining", "King, Stephen", "TI=\"The Shining\" AND (AU=\"King, Stephen\" OR AU=\"Stephen King\")")]
+    [DataRow("Harry Potter and the Chamber of Secrets", "J. K. Rowling",
+        "TI=\"Harry Potter and the Chamber of Secrets\" AND (AU=\"J. K. Rowling\" OR AU=\"Rowling, J. K.\")")]
+    [DataRow("Nighttime", "Mary H. Clark", "TI=\"Nighttime\" AND (AU=\"Mary H. Clark\" OR AU=\"Clark, Mary H.\")")]
+    [DataRow("Cien años de soledad", "García Márquez, Gabriel",
+        "TI=\"Cien años de soledad\" AND (AU=\"García Márquez, Gabriel\" OR AU=\"Gabriel García Márquez\")")]
+    [DataRow("𠮷野", "𠮷", "TI=\"𠮷野\" AND AU=\"𠮷\"")]
+    [DataRow("A specific title", "Madonna", "TI=\"A specific title\" AND AU=\"Madonna\"")]
+    [DataRow("One", "Anne Marie Smith", "TI=\"One\" AND AU=\"Anne Marie Smith\"")]
+    [DataRow("Two", "Library of Congress", "TI=\"Two\" AND AU=\"Library of Congress\"")]
+    [DataRow("Three", "King, Martin Luther, Jr.", "TI=\"Three\" AND AU=\"King, Martin Luther, Jr.\"")]
+    [DataRow("Four", "Bombeck, 1927–1996", "TI=\"Four\" AND AU=\"Bombeck, 1927–1996\"")]
+    [DataRow("Five", " Lee \t lEE ", "TI=\"Five\" AND AU=\"Lee lEE\"")]
+    [DataRow("French-\"cooking\" OR\\NOT", "O'Toole, J. K.",
+        "TI=\"French-\\\"cooking\\\" OR\\\\NOT\" AND (AU=\"O'Toole, J. K.\" OR AU=\"J. K. O'Toole\")")]
+    [DataRow("C++: $100, 99% & more", "A\\\" OR TI=\"B",
+        "TI=\"C++: $100, 99% & more\" AND AU=\"A\\\\\\\" OR TI=\\\"B\"")]
+    [DataRow("a b c d e f g h i j k", "Lee", "TI=\"a b c d e f g h i j k\" AND AU=\"Lee\"")]
+    public async Task StaffPairedSearchSendsCompletePhrasesWithoutFallback(string title, string author, string term)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK, PageResponse(0, []));
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.SearchBibsAsync("title_author", "", title, author, 2, 1, CancellationToken.None);
+        Assert.AreEqual(0, result.TotalMatches);
+        AssertSearchRequest(handler.RequestUris.Single(), "/search/bibs/boolean", term, "PDTI", 1);
+    }
+
+    [TestMethod]
+    [DataRow("A title?", "An author")]
+    [DataRow("A title", "An* author")]
+    [DataRow("#MeToo", "An author")]
+    public async Task StaffPairedSearchRejectsWildcardsBeforeSending(string title, string author)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK, PageResponse(0, []));
+        var provider = await CreatePolarisProviderAsync(handler);
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+            provider.SearchBibsAsync("title_author", "", title, author, 2, 1, CancellationToken.None));
+        Assert.AreEqual(0, handler.RequestCount);
     }
 
     [TestMethod]

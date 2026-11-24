@@ -91,8 +91,8 @@ public sealed partial class PolarisProtocolTests
         await provider.SearchBibsAsync("title_author", "", "A title", "An author", 2, 1, CancellationToken.None);
         CollectionAssert.AreEqual(new[] { "TI", "AU", "boolean" },
             handler.RequestUris.Select(uri => uri.AbsolutePath.Split('/').Last()).ToArray());
-        StringAssert.Contains(Uri.UnescapeDataString(handler.RequestUris[2].Query),
-            "q=(TI=\"A\" AND TI=\"title\") AND (AU=\"*An*\" AND AU=\"*author*\")");
+        AssertSearchRequest(handler.RequestUris[2], "/search/bibs/boolean",
+            "TI=\"A title\" AND (AU=\"An author\" OR AU=\"author, An\")", "PDTI", 1);
     }
 
     [TestMethod]

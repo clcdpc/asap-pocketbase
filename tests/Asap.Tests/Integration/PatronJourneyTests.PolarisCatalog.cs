@@ -189,6 +189,9 @@ public sealed partial class PatronJourneyTests
             ("author", new string('a', 251), "", "", 2, "search_query_too_long"),
             ("title_author", "", "Catalog", "", 2, "search_query_required"),
             ("title_author", "", "Catalog", "?!", 2, "search_query_required"),
+            ("title_author", "", "#MeToo", "Author", 2, "search_wildcard_unsupported"),
+            ("title_author", "", "Catalog", "Row*", 2, "search_wildcard_unsupported"),
+            ("title_author", "", "What now?", "Author", 2, "search_wildcard_unsupported"),
             ("identifier", "00", "", "", 3, "library_scope_mismatch")
         })
         {

@@ -23,7 +23,7 @@ public sealed partial class PolarisPatronProvider
         {
             "identifier" => (BibSearchTypes.boolean, SearchQualifiers.KW, IdentifierSearch(query), SearchSortOptions.PDTI),
             "title_author" => (BibSearchTypes.boolean, SearchQualifiers.KW,
-                $"{KeywordConditions("TI", title)} AND {KeywordConditions("AU", author)}", SearchSortOptions.PDTI),
+                PairedSearch(title, author), SearchSortOptions.PDTI),
             "title" => (BibSearchTypes.keyword, SearchQualifiers.TI, title.Length > 0 ? title : query, SearchSortOptions.RELEVANCE),
             "author" => (BibSearchTypes.keyword, SearchQualifiers.AU, author.Length > 0 ? author : query, SearchSortOptions.AU),
             _ => throw new ArgumentException("Invalid Polaris search mode.", nameof(mode))
@@ -335,35 +335,52 @@ public sealed partial class PolarisPatronProvider
 
     private static string CleanSearch(string? value) => Regex.Replace(value ?? string.Empty, "\\s+", " ").Trim();
 
-    // Title words may occur in any order. Search author fragments anywhere in a name word,
-    // except single initials which match the start. Only these application-owned stars enter CCL.
-    private static string KeywordConditions(string field, string text)
+    internal static bool HasPairedSearchWildcard(string title, string author) =>
+        title.AsSpan().ContainsAny('*', '?', '#') || author.AsSpan().ContainsAny('*', '?', '#');
+
+    private static string PairedSearch(string title, string author)
     {
-        var terms = new StringBuilder(text.Length);
-        foreach (var rune in text.EnumerateRunes())
+        if (HasPairedSearchWildcard(title, author))
         {
-            var indexed = Rune.IsLetterOrDigit(rune) || Rune.GetUnicodeCategory(rune) is
-                UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark ||
-                rune.Value is '\'' or '’' or '+' or '%' or '$';
-            terms.Append(indexed ? rune.ToString() : " ");
+            throw new ArgumentException("Title and author phrases cannot contain Polaris wildcards.");
         }
 
-        var conditions = new List<string>();
-        foreach (var term in terms.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        var condition = $"AU={QuoteSearch(author)}";
+        if (AlternateAuthor(author) is { } alternate)
         {
-            var word = term.Trim('\'', '’');
-            if (!word.EnumerateRunes().Any(Rune.IsLetterOrDigit))
-            {
-                continue;
-            }
-            if (field == "AU")
-            {
-                word = word.EnumerateRunes().Count() == 1 ? $"{word}*" : $"*{word}*";
-            }
-            conditions.Add($"{field}=\"{word}\"");
+            condition = $"({condition} OR AU={QuoteSearch(alternate)})";
         }
-        // Polaris documents a ten-term limit for ungrouped power searches.
-        return string.Join(" AND ", conditions.Chunk(10).Select(group => $"({string.Join(" AND ", group)})"));
+        return $"TI={QuoteSearch(title)} AND {condition}";
+    }
+
+    private static string? AlternateAuthor(string author)
+    {
+        var parts = author.Split(',', StringSplitOptions.TrimEntries);
+        if (parts.Length > 2 || parts.Any(part => part.Length == 0))
+        {
+            return null;
+        }
+        // Reorder only name words and initials. Leave dates, qualifiers and other punctuation in the original phrase.
+        var words = parts.SelectMany(part => part.Split(' ')).ToArray();
+        if (!words.All(IsNameWord) || words.Length < 2)
+        {
+            return null;
+        }
+        if (parts.Length == 2)
+        {
+            return Swap(parts[0], parts[1], " ");
+        }
+        return words[1..^1].All(IsInitial) ? Swap(string.Join(' ', words[..^1]), words[^1], ", ") : null;
+
+        static string? Swap(string first, string second, string separator) =>
+            first.Equals(second, StringComparison.OrdinalIgnoreCase) ? null : second + separator + first;
+
+        static bool IsInitial(string word) => Rune.TryGetRuneAt(word, 0, out var rune) &&
+            Rune.IsLetter(rune) && word[rune.Utf16SequenceLength..] is "" or ".";
+
+        static bool IsNameWord(string word) => IsInitial(word) || word.EnumerateRunes().Any(Rune.IsLetter) &&
+            word.EnumerateRunes().All(r => Rune.IsLetter(r) || r.Value is '\'' or '’' or '-' ||
+                Rune.GetUnicodeCategory(r) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark);
     }
 
     private static string IdentifierSearch(string text)

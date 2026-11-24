@@ -23,18 +23,23 @@ Each non-exact search issues one Polaris BIB search for the submitted page.
 | `title` | `query`, keyword TI | Relevance |
 | `author` | `query`, keyword AU | Author |
 | `identifier` | `query`, Boolean `ISBN="…" OR UPC="…" OR LCCN="…"` | Publication date descending, then title |
-| `title_author` | `title` and `author`, e.g. `(TI="French" AND TI="cooking") AND (AU="*Child*")` | Publication date descending, then title |
+| `title_author` | `TI="French cooking" AND (AU="Julia Child" OR AU="Child, Julia")` | Publication date descending, then title |
 | `bib` | Exact lookup by positive `bibId` | Single record, outside pagination |
 
-Paired searches quote each keyword separately so intervening words and name order
-can vary. Parentheses group up to ten conditions at a time. Initials and punctuation delimit words, internal apostrophes stay with
-their word, and operator words remain quoted literals. The paired author condition
-adds native wildcards around name fragments (`AU="*Row*"`) or after a single
-initial (`AU="J*"`). As in the previous author substring filter, a fragment can
-match more than one name. User quotes, wildcards and backslashes cannot delimit
-a clause. A number sign is a wildcard in Polaris power searches, so the paired
-mode treats it as punctuation. Adjacent plus, percent and dollar signs are retained.
-The package URL-encodes the query. [Polaris wildcard semantics](https://documentation.iii.com/polaris/7.8/PolarisStaffHelp/Polaris_Basics/PIfindrec/Doing_Power_Searches.htm) [Polaris CQL access points and matching](https://documentation.iii.com/polaris/8.0/PolarisStaffHelp/Public_Access_Admin/PDOccl/PAC_CQL_Commands_Access_Points.htm)
+Paired search favors precision for a known request. Each page uses one native
+Boolean query with the complete title and author as quoted phrases. The title
+words stay in order, and a catalog field may contain additional text.
+Two-part names and names with middle initials get a surname-first alternative
+(`Mary H. Clark` → `Clark, Mary H.`). An explicit surname separator preserves
+both components (`García Márquez, Gabriel` → `Gabriel García Márquez`).
+The original author comes first. A distinct alternative joins it with a
+parenthesized OR. A single name, ambiguous multiword name, or qualified heading
+uses just the original phrase. This heuristic does not classify organizations.
+
+Whitespace is normalized. The provider escapes embedded quotes and backslashes,
+and the package URL-encodes the complete expression. Paired mode rejects
+`*`, `?`, and `#` because Polaris uses them as wildcards and literal handling
+has not been established. [Polaris wildcard semantics](https://documentation.iii.com/polaris/7.8/PolarisStaffHelp/Polaris_Basics/PIfindrec/Doing_Power_Searches.htm) · [Polaris phrase matching](https://documentation.iii.com/polaris/8.0/PolarisStaffHelp/Public_Access_Admin/PDOccl/PAC_CQL_Commands_Access_Points.htm)
 
 Identifiers stay strings. The ISBN/UPC clauses compact formatting separators and
 preserve leading zeros and ISBN check letters. For LCCNs the LCCN clause also
@@ -61,10 +66,18 @@ specify 1-based paging and publish no fixed maximum navigable result count for
 these routes. [BibBooleanSearch](https://documentation.iii.com/polaris/PAPI/current/PAPIService/PAPIServiceBibBooleanSearch.htm)
 [BibKeywordSearch](https://knowledge.ag-software.clarivate.com/polaris/PAPI/PAPIService/PAPIServiceBibKeywordSearch.htm)
 
-Controlled HTTP tests exercise the pinned package and actual serialized requests.
-Live acceptance still requires comparing known ISBN, UPC and LCCN records and
-title/author variants against the deployed indexes, including initials, punctuation,
-partial names, stop words, and the installation's last navigable page and empty-page response.
+The maintainer compared 839,995 simple two-part MARC 100$a BIB/name combinations
+with the deployed `Polaris.Z3950_AP_BR_AU_S` author index. Of the 699,086 with
+index entries, 608,121 had both phrases and 90,965 had only the surname-first
+phrase. The other 140,909 had no author index entry. Manual Polaris searches
+for `AU="Erma Bombeck"`, `AU="Bombeck, Erma"`, and their OR returned an
+additional distinct result with the combined query. SQL identified BIB 1270
+as a surname-first-only example.
+
+Controlled HTTP tests verify the pinned package's request serialization.
+Remaining live checks include known ISBN, UPC and LCCN records, title stop words
+and punctuation, author formats outside the verified example, and the deployed
+catalog's deepest navigable page, site-specific limits and out-of-range response.
 
 Each result retains `bibId`, `title`, `author`, `publication`, `identifier`, and
 `format`, with additive `materialTypeId`, `materialTypeSearchCode`, and
