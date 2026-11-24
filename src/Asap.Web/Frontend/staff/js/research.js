@@ -121,10 +121,7 @@ export function renderResearchLinks(container, request, research, draft = {}) {
 }
 
 function materialIconUrl(id) {
-  if (Number.isInteger(id) && ((id >= 1 && id <= 28) || (id >= 33 && id <= 54) || id === 64 || id === 65)) {
-    return `/formats/${String(id).padStart(2, '0')}.svg`;
-  }
-  return '';
+  return id > 0 ? `/formats/${String(id).padStart(2, '0')}.svg` : '';
 }
 
 export function catalogActionReason(reason) {

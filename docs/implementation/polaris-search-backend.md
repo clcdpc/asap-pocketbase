@@ -107,16 +107,16 @@ Catalog material types never set ASAP Material formats.
 
 Search and exact-BIB results use the Polaris MARC material-type ID to select a
 decorative SVG from `src/Asap.Web/Frontend/formats/`. All libraries share the
-same artwork. IDs 1–28, 33–54 and 64–65 map to two-digit filenames such as
-`/formats/02.svg` and `/formats/64.svg`. The ID remains usable when the
-description lookup fails. A missing or unsupported ID or a failed image load
-leaves the generic document icon beside the readable format label.
+same artwork. Each positive ID maps to its numbered filename, padded to at
+least two digits (for example, `/formats/02.svg`). The ID remains usable when
+the description lookup fails. An absent ID or a failed image load leaves the
+generic document icon beside the readable format label. A request for missing
+artwork returns a normal HTTP 404 visible in IIS access logs.
 
-To replace artwork, inspect the SVG for active content and external references,
-then replace the numbered source file. For a new ID, also extend the supported
-IDs in `staff/js/research.js` and the artwork inventory test. Update the source
-artwork digest after reviewing the changes. The frontend build fingerprints and
-publishes these files.
+To add or replace artwork, inspect the SVG for active content and external
+references, then save it under its numbered filename. For a new ID, update
+the artwork inventory test. Update the source artwork digest after reviewing
+the changes. The frontend build fingerprints and publishes these files.
 
 The schema-13 DACPAC discards the retired library artwork table and system
 artwork columns. Protected publishes remove the columns after verifying schema

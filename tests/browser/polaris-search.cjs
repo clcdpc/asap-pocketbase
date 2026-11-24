@@ -104,7 +104,11 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
       await releaseArtwork.promise;
       await route.continue();
     }, { times: 1 });
-    await openSearch(copyOff);
+    const [missingArtwork] = await Promise.all([
+      page.waitForResponse(`${baseURL}/formats/29.svg`),
+      openSearch(copyOff)
+    ]);
+    assert.equal(missingArtwork.status(), 404);
     await lookup.getByText('Holdings unavailable', { exact: true }).waitFor();
     assert.equal(await cards.count(), 10);
     assert.equal(await lookup.locator('#polaris-status').textContent(), 'Page 1 · 10 results shown · 12 catalog matches.');
@@ -126,7 +130,9 @@ const [baseURL, artifacts, staffId, tenantId, email, copyOff, copyOn, useOff, us
     }
     await cards.nth(1).locator('img').waitFor({ state: 'detached' });
     assert.equal(await cards.nth(1).locator('.polaris-format-fallback').isVisible(), true);
+    await cards.nth(2).locator('img').waitFor({ state: 'detached' });
     assert.equal(await cards.nth(2).locator('.polaris-format-fallback').isVisible(), true);
+    assert.equal(await cards.nth(2).locator('.polaris-format-label').textContent(), 'Book');
     assert.equal(await cards.nth(1).locator('.polaris-format-label').textContent(), 'Large print with full provider description');
     await lookup.locator('#polaris-ownership-status').filter({ hasText: 'Ownership checks complete.' }).waitFor();
     const posts = [];

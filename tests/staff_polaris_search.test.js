@@ -30,7 +30,7 @@ const { JSDOM } = require('jsdom');
     dialog.showModal = () => { dialog.open = true; }; dialog.close = () => { dialog.open = false; };
     const query = document.querySelector('#polaris-query'), mode = document.querySelector('#polaris-mode');
     const resultPane = document.querySelector('#polaris-results'), panel = document.querySelector('#polaris-confirmation');
-    const materialIds = [2, undefined, 53, 64, 65, 0, 29, -1, 1.5, '2'];
+    const materialIds = [2, undefined, 53, 64, 65, 0, 29, -1, 123, null];
     const rows = Array.from({ length: 12 }, (_, index) => ({ bibId: 9001 + index, title: `Catalog <unsafe> ${index}`,
       author: 'Catalog author', publication: '2026', format: index === 1 ? '33181604' : 'Book',
       materialTypeId: materialIds[index], identifier: `ID-${index}` }));
@@ -89,7 +89,9 @@ const { JSDOM } = require('jsdom');
     assert.match(resultPane.textContent, /Checking ownership/);
     assert.equal(resultPane.querySelector('button').disabled, true);
     const paths = [...resultPane.children].map(card => card.querySelector('img')?.getAttribute('src') ?? null);
-    assert.deepEqual(paths, ['/formats/02.svg', null, '/formats/53.svg', '/formats/64.svg', '/formats/65.svg', null, null, null, null, null]);
+    assert.deepEqual(paths, ['/formats/02.svg', null, '/formats/53.svg', '/formats/64.svg', '/formats/65.svg', null, '/formats/29.svg', null, '/formats/123.svg', null]);
+    assert.equal(resultPane.children[1].querySelector('.polaris-format-fallback').hidden, false);
+    assert.equal(resultPane.children[1].querySelector('.polaris-format-label').textContent, 'Material type unavailable');
     const image = resultPane.querySelector('img');
     assert.equal(image.alt, '');
     image.dispatchEvent(new dom.window.Event('error'));
