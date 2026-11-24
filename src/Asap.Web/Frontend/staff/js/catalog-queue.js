@@ -31,7 +31,7 @@ export function decodeCatalogQueue(raw, actor) {
 // lost response (including a reload) can recover its receipt without a new task.
 export function createCatalogQueue({ dialog, panel, searchForm, results, sessionIdentity,
   authorizedJson, isAbortError, announce, onReceipt = () => {}, clearReceipt = () => {},
-  storage = () => window.sessionStorage, isCurrent, onCommitted, onReturnToSearch }) {
+  storage = () => window.sessionStorage, isCurrent, onCommitted, onCopyChanged = () => {}, onReturnToSearch }) {
   let decision = null, pending = null, retained = null;
 
   function recovery(current) {
@@ -169,6 +169,7 @@ export function createCatalogQueue({ dialog, panel, searchForm, results, session
       if (!isCommittedRequestResponse(result, record.requestId) || result.operationId !== record.body.operationId ||
           record.body.action === 'additionalCopy' && !validRequestId(result.additionalCopyRequestId)) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
+      if (record.body.action === 'additionalCopy') onCopyChanged(record.owner);
       clear(record);
       const notification = notificationOutcome(result.notificationStatus, result.notificationReason, 'Purchase reminder');
       const finalState = result.status || result.request?.status || result.finalStatus;
@@ -189,6 +190,7 @@ export function createCatalogQueue({ dialog, panel, searchForm, results, session
         ['bib_validation_unavailable', 'holdings_unavailable', 'notification_dependency_unavailable'].includes(error.response?.code);
       const uncertain = !rejected && (error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error));
       attempt.outcome = uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
+      if (uncertain && record.body.action === 'additionalCopy') onCopyChanged(record.owner);
       if (!uncertain) clear(record);
       if (uncertain) onReceipt('The catalog action could not be confirmed. Recover the identical action before retrying.', record.owner, attempt);
       if (!isCurrent(current)) return;

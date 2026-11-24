@@ -3769,6 +3769,10 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         var seeded = await SeedAdditionalCopyLegacySourceAsync(initialActor.Id, "workflow");
         var actor = await ReadConfiguredSuperAdminAsync();
         var service = factory.Services.GetRequiredService<AdditionalCopyService>();
+        using var client = await CreateAuthenticatedStaffClientAsync(factory, actor);
+        const string countsUrl = "/api/asap/staff/additional-copies/counts?scope=2";
+        var baseline = await client.GetFromJsonAsync<AdditionalCopyCounts>(countsUrl);
+        Assert.IsNotNull(baseline);
 
         var preview = await service.PreviewAsync(actor, seeded.SourceRequestId, CancellationToken.None);
         Assert.AreEqual("loaded", preview.Code);
@@ -3784,6 +3788,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
         Assert.AreEqual("created", created.Code);
         Assert.AreEqual(0, created.OpenCountBefore);
         Assert.AreEqual(1, created.OpenCountAfter);
+        Assert.AreEqual(baseline with { OpenCount = baseline.OpenCount + 1 }, await client.GetFromJsonAsync<AdditionalCopyCounts>(countsUrl));
         Assert.IsTrue(created.DispatchOutboxId.HasValue);
         CollectionAssert.Contains(dispatcher!.EnqueuedIds, created.DispatchOutboxId.Value);
 
@@ -3817,6 +3822,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             CancellationToken.None);
         Assert.AreEqual("updated", closed.Code);
         task = await service.GetAsync(actor, task.Id, null, CancellationToken.None);
+        Assert.AreEqual(baseline with { ClosedCount = baseline.ClosedCount + 1 }, await client.GetFromJsonAsync<AdditionalCopyCounts>(countsUrl));
         var reopened = await service.SetClosedAsync(
             actor,
             created.RequestId.Value,
@@ -3825,6 +3831,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             CancellationToken.None);
         Assert.AreEqual("updated", reopened.Code);
         Assert.IsNull(reopened.ClaimClearedReason);
+        Assert.AreEqual(baseline with { OpenCount = baseline.OpenCount + 1 }, await client.GetFromJsonAsync<AdditionalCopyCounts>(countsUrl));
         task = await service.GetAsync(actor, task.Id, null, CancellationToken.None);
         Assert.AreEqual("legacy", task!.ClaimType);
         Assert.AreEqual(seeded.HistoricalRuleId.ToString(), task.ClaimRuleId);
@@ -3865,6 +3872,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
             CancellationToken.None);
         Assert.AreEqual("deleted", deleted.Code);
 
+        Assert.AreEqual(baseline, await client.GetFromJsonAsync<AdditionalCopyCounts>(countsUrl));
         await using var verify = new SqlConnection(databaseConnectionString);
         await verify.OpenAsync();
         await using var command = verify.CreateCommand();

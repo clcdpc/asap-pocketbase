@@ -294,8 +294,19 @@ table.gridjs-table { width: 100%; min-width: 920px; max-width: none; table-layou
 #additional-copy-grid th[data-copy-column="library"] { width: calc((100cqw - 150px) * .15) !important; }
 #additional-copy-grid th[data-copy-column="staff"] { width: calc((100cqw - 150px) * .20) !important; }
 #additional-copy-grid th[data-copy-column="timing"] { width: calc((100cqw - 150px) * .21) !important; }
-#additional-copy-grid td.gridjs-td, #additional-copy-grid th.gridjs-th { padding: 10px 8px; }
-#additional-copy-grid .gridjs-th-content { white-space: normal; text-overflow: clip; }
+#additional-copy-grid td.gridjs-td { padding: 10px 8px; }
+/* Grid.js floats the label and sort button at the top of the cell. Keep them
+   on a centered line that can grow with wrapped text or a larger font. */
+:is(#request-grid, #additional-copy-grid) th.gridjs-th { padding: 4px 8px; line-height: 1.2; }
+:is(#request-grid, #additional-copy-grid) .gridjs-th-content {
+  display: inline-block; float: none; vertical-align: middle; white-space: normal; text-overflow: clip;
+}
+:is(#request-grid, #additional-copy-grid) .gridjs-th-sort .gridjs-th-content { width: calc(100% - 26px); }
+:is(#request-grid, #additional-copy-grid) button.gridjs-sort {
+  float: none; vertical-align: middle; width: 26px; min-height: 28px;
+}
+:is(#request-grid, #additional-copy-grid) button.gridjs-sort::before,
+:is(#request-grid, #additional-copy-grid) button.gridjs-sort::after { left: calc(50% - 4px); }
 #additional-copy-grid tbody tr:has(.additional-copy-open) { cursor: pointer; }
 #additional-copy-grid tbody tr:has(.additional-copy-open):hover td { background: var(--hover); }
 .additional-copy-cell { display: grid; gap: 4px; min-width: 0; }
@@ -334,7 +345,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .claim-label.mine { color: var(--success); font-weight: 700; }
 #queue-view .status-count-state { margin: 4px 0 0; color: var(--muted); font-size: .84rem; }
 #queue-view .status-count-state:empty { display: none; }
-#request-grid td.gridjs-td, #request-grid th.gridjs-th { padding: 9px 8px; }
+#request-grid td.gridjs-td { padding: 9px 8px; }
 #request-grid tbody tr { cursor: pointer; }
 #request-grid tbody tr:hover td { background: var(--hover); }
 .request-patron-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }

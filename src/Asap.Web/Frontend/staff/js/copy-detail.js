@@ -8,6 +8,7 @@ import { unconfirmedResponseError, notificationOutcome, isCommittedRequestRespon
 import { element, icon, commandButton, statusLabel, dateTime, timeoutLabel, addDetail, labeledInput } from './ui.js';
 
 export function createCopyDetailController({ host, sessionIdentity, announce, beforeOpen, isNavigationCurrent,
+  onCopyChanged = () => {},
   onAlign, onOpened, onUpdated = () => {}, beforeClose, onClosed, getFocusReturn, refreshQueue, onReceipt, clearReceipt,
   getNavigationGeneration = () => 0, refreshCurrentStaff = async () => null, request: send = authorizedJson }) {
   const reads = createLatestLoad();
@@ -123,6 +124,7 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
     const mounted = lease, owner = sessionIdentity.preferences();
     const generation = getNavigationGeneration();
     const attempt = { owner, snapshot, operation, outcome: 'pending', pending: true };
+    const changesTotals = ['close', 'reopen', 'delete'].includes(operation);
     activeAttempt = attempt;
     const restoreControls = disableControls(mounted);
     const body = Object.freeze({ version: snapshot.version, ...(operation === 'delete' ? { actorVersion: owner.version } : {}), ...extra });
@@ -134,6 +136,7 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
       });
       if (operation === 'delete' ? result?.deleted !== true : !isCommittedRequestResponse(result, snapshot.id)) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
+      if (changesTotals) onCopyChanged(owner);
       const notification = notificationOutcome(result.notificationStatus, result.notificationReason, operation === 'assign' ? 'Assignment notification' : 'Notification');
       const resultStatus = result.status || result.finalStatus || result.request?.status;
       let message = `${successMessage}${resultStatus ? ` Final state: ${statusLabel(resultStatus)}.` : ''}${notification.text}`;
@@ -177,6 +180,7 @@ export function createCopyDetailController({ host, sessionIdentity, announce, be
       const definiteNoCommit = error.status === 503 && error.response?.code === 'notification_dependency_unavailable';
       const uncertain = !definiteNoCommit && (error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error));
       attempt.outcome = uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
+      if (uncertain && changesTotals || error.status === 409 || error.status === 404) onCopyChanged(owner);
       const message = uncertain ? 'The additional-copy action outcome could not be confirmed. Reload before trying again.'
         : error.message || 'The task changed. Review the refreshed version before trying again.';
       if (uncertain) onReceipt(`${message} Sign in again to check the authoritative result before retrying.`, owner, attempt);

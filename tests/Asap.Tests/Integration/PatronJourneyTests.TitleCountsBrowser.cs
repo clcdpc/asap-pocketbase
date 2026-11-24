@@ -65,6 +65,14 @@ public sealed partial class PatronJourneyTests
             mutation.PreferredPickupBranchName = "Tab count branch";
             await setup.SaveChangesAsync();
             mutationId = mutation.Id;
+            var now = timeProvider!.GetUtcNow().UtcDateTime;
+            setup.AdditionalCopyRequests.AddRange(Enumerable.Range(0, 29).Select(index => new AdditionalCopyRequest
+            {
+                LibraryOrganizationId = library, BibId = 527000 + index, Title = $"Counted copy {index:00}",
+                Status = index < 26 ? "open" : "closed", CreatedUtc = now, UpdatedUtc = now,
+                ClosedUtc = index < 26 ? null : now
+            }));
+            await setup.SaveChangesAsync();
             var populations = await setup.TitleRequests.GroupBy(item => item.Status)
                 .Select(group => new { Status = group.Key, Count = group.Count() }).ToListAsync();
             allCounts = stages.Select(stage => populations.SingleOrDefault(item => item.Status == stage)?.Count ?? 0).ToArray();
@@ -101,6 +109,7 @@ public sealed partial class PatronJourneyTests
         {
             await DeactivateCorrectiveStaffAsync(ordinary.Id);
             await using var cleanup = await contexts.CreateDbContextAsync();
+            await cleanup.AdditionalCopyRequests.Where(item => item.LibraryOrganizationId == library).ExecuteDeleteAsync();
             await cleanup.TitleRequestEvents.Where(item => item.TitleRequestId == mutationId).ExecuteDeleteAsync();
             await cleanup.TitleRequests.Where(item => item.LibraryOrganizationId == library || item.LibraryOrganizationId == otherLibrary).ExecuteDeleteAsync();
             await cleanup.Organizations.Where(item => item.Id == library || item.Id == otherLibrary || item.Id == branch)

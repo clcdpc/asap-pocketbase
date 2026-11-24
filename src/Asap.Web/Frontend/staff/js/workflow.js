@@ -7,6 +7,7 @@ import { createRouter, readInitialSignInFailure } from './router.js';
 import { createNavigationController } from './navigation.js';
 import { createDetailHost } from './detail-host.js';
 import { createTitleQueue, createCopyQueue } from './queues.js';
+import { createCopyCounts } from './copy-counts.js';
 import { createTitleDetailController } from './title-detail.js';
 import { createCopyDetailController } from './copy-detail.js';
 import { createCopyCreationController } from './copy-creation.js';
@@ -31,7 +32,14 @@ export function createWorkflowApp() {
     onViewIntent: name => navigation.switchView(name), onSignOutIntent: () => session.signOut()
   });
   const announce = shell.announce, onReceipt = shell.recordReceipt, clearReceipt = shell.clearReceipt;
-  const polarisLookup = createPolarisLookup({ authorizedJson, isAbortError, announce, sessionIdentity, onReceipt, clearReceipt });
+  const copyCounts = createCopyCounts({ root: document, sessionIdentity, getScope: () => navigation.context().scope });
+  function copyCreatedOrUnconfirmed(owner) {
+    if (!sessionIdentity.isCurrent(owner)) return;
+    copyQueue.markStale();
+    void copyCounts.refresh(owner);
+  }
+  const polarisLookup = createPolarisLookup({ authorizedJson, isAbortError, announce, sessionIdentity, onReceipt, clearReceipt,
+    onCopyChanged: copyCreatedOrUnconfirmed });
   const analytics = createAnalyticsController({ root: get('#analytics-container'), sessionIdentity });
   const navigation = createNavigationController({ router, sessionIdentity, detailHost, announce,
     beforeDeparture: () => search.dismissForNavigation(),
@@ -46,6 +54,7 @@ export function createWorkflowApp() {
       if (suggestion.isOpen()) suggestion.close({ guarded: true, navigation: true, focusButton: false });
     },
     onContextChanged: (next, previous) => {
+      if (!get('#workspace').hidden) copyCounts.contextChanged(next, previous);
       titleQueue.contextChanged(next, previous); copyQueue.contextChanged(next, previous);
       bulk.contextChanged(next); shell.contextChanged(next, previous);
     },
@@ -100,7 +109,7 @@ export function createWorkflowApp() {
   });
 
   const titleQueue = createTitleQueue({ root: get('#queue-view'), sessionIdentity, claimsFilter, announce, polarisLookup,
-    onCatalogCommitted: result => { if (result.additionalCopyRequestId) copyQueue.markStale(); },
+    onExplicitRefresh: copyCounts.refresh,
     getContext: navigation.context, onOpen: (id, opener, options = {}) => titleDetail.open(id, opener, { history: 'push', ...options }),
     onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) }),
     onScopeIntent: scope => navigation.changeQueueContext('queue', { scope }),
@@ -114,10 +123,12 @@ export function createWorkflowApp() {
       if (!sessionIdentity.isCurrent(change.owner)) return;
       if (change.committed || change.restored) copyQueue.markStale();
       if (change.uncertain) { copyQueue.invalidate(); copyQueue.render(); }
+      if (change.committed || change.uncertain) void copyCounts.refresh(change.owner);
     },
     onParentChanged: (parent, opener) => parent.refresh(opener)
   });
   const copyDetail = createCopyDetailController({ host: detailHost, sessionIdentity, announce, onReceipt, clearReceipt,
+    onCopyChanged: copyCounts.refresh,
     beforeOpen: navigation.beforeDetailOpen, isNavigationCurrent: ticket => navigation.generation() === ticket,
     getNavigationGeneration: navigation.generation, onAlign: navigation.alignCopy,
     onOpened: (request, options) => navigation.detailOpened(request, true, options),
@@ -128,6 +139,7 @@ export function createWorkflowApp() {
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner)
   });
   const copyQueue = createCopyQueue({ root: get('#additional-copy-view'), sessionIdentity, claimsFilter, announce,
+    onExplicitRefresh: copyCounts.refresh,
     getContext: navigation.context, onOpen: (id, opener) => copyDetail.open(id, opener, { history: 'push' }),
     onScopeIntent: scope => navigation.changeQueueContext('additional-copies', { scope }),
     onStatusIntent: additionalCopyStatus => navigation.changeQueueContext('additional-copies', { additionalCopyStatus }),
@@ -138,6 +150,7 @@ export function createWorkflowApp() {
       acknowledge: () => copyCreation.review.acknowledge(navigation.context()) }
   });
   const titleDetail = createTitleDetailController({ host: detailHost, sessionIdentity, polarisLookup, copyCreation, announce, onReceipt, clearReceipt,
+    onCopyChanged: copyCreatedOrUnconfirmed,
     beforeOpen: navigation.beforeDetailOpen, isNavigationCurrent: ticket => navigation.generation() === ticket,
     getNavigationGeneration: navigation.generation, getScope: () => navigation.context().scope, onAlign: navigation.alignTitle,
     onOpened: (request, options) => navigation.detailOpened(request, false, options),
@@ -164,6 +177,7 @@ export function createWorkflowApp() {
     openCreatedTitle: navigation.openCreatedTitle, openExistingTitle: navigation.openExistingTitle, onReceipt, clearReceipt
   });
   const bulk = createBulkDeleteController({ root: get('#bulk-delete-dialog'), titleTrigger: get('#bulk-delete-closed'), copyTrigger: get('#bulk-delete-closed-copies'),
+    onCopyChanged: copyCounts.refresh,
     sessionIdentity, getLibraries: titleQueue.libraries, beforeOpen: () => navigation.allow(), beforeExecute: () => navigation.allow({ bulk: false }),
     captureReview: navigation.captureClosedReview, reviewClosed: navigation.reviewClosed, onReceipt, clearReceipt,
     onSessionLost: () => session.lose(), onAccessUnavailable: () => session.accessUnavailable()
@@ -202,6 +216,7 @@ export function createWorkflowApp() {
     onStaffAccessCommitted: owner => {
       if (!sessionIdentity.isCurrent(owner)) return;
       titleQueue.markStale(); copyQueue.markStale();
+      void copyCounts.refresh(owner);
     },
     onOrganizationCatalogCommitted: organizationCatalogCommitted,
     onCommitted: (message, owner, attempt) => shell.recordReceipt(`${message} Sign in again to review the current values.`, owner, attempt, { feature: 'settings' }),
@@ -211,6 +226,7 @@ export function createWorkflowApp() {
       if (sessionIdentity.isCurrent(owner) && review.kind === 'settings') titleDetail.invalidateConfiguration(review.scope);
       if (sessionIdentity.isCurrent(owner) && review.kind === 'staff' && review.changed) {
         titleQueue.markStale(); copyQueue.markStale();
+        void copyCounts.refresh(owner);
       }
       if (sessionIdentity.isCurrent(owner) && review.kind === 'settings' && review.changed) {
         titleQueue.markStale(review.scope); copyQueue.markStale(review.scope); shell.configurationCommitted(review.scope);
@@ -226,7 +242,7 @@ export function createWorkflowApp() {
     canOpen: () => ![session, polarisLookup, titleDetail, copyDetail, suggestion, settings, operations].some(feature => feature.inspectDeparture?.().blocked),
     openResult: navigation.openSearchResult, openAll: () => navigation.switchView('search') });
   const features = [search, bulk, suggestion, titleDetail, copyCreation, copyDetail, detailHost, polarisLookup,
-    operations, titleQueue, copyQueue, profile, settings, analytics];
+    operations, titleQueue, copyQueue, copyCounts, profile, settings, analytics];
   const session = createSessionCoordinator({ identity: sessionIdentity, shell, navigation, getFeatures: () => features,
     initialSignInFailure: readInitialSignInFailure(),
     onAccepted: staff => navigation.align({ scope: staff.role === 'super_admin' ? 'all' : String(staff.organizationId) }),
@@ -239,11 +255,18 @@ export function createWorkflowApp() {
     if (!sessionIdentity.isCurrent(owner)) return;
     titleQueue.markStale(); copyQueue.markStale();
     populateScopes([]); operations.retireCatalog();
+    const previousScope = navigation.context().scope;
     navigation.organizationCatalogChanged(change);
+    if (previousScope === navigation.context().scope) void copyCounts.refresh(owner);
   }
   let started = false, disposed = false;
   return {
-    async start() { if (started || disposed) return; started = true; settings.bind(); navigation.start(); await session.start(); },
+    async start() {
+      if (started || disposed) return;
+      started = true; settings.bind(); navigation.start(); await session.start();
+      // A rejected initial detail link can leave the authorized default queue active.
+      copyCounts.ensureScope();
+    },
     dispose() { if (disposed) return; disposed = true; session.dispose(); shell.dispose(); navigation.dispose(); for (const feature of features) feature.dispose?.(); disposeConfirmations(); }
   };
 }

@@ -68,7 +68,13 @@ async function until(predicate, message) {
     let staleCopyRead = null;
     let staleCopyFetchStarted = false;
     let staleRecentRead = null;
+    let countReply, countReads = 0;
     global.fetch = async (url) => {
+      if (url.includes('/additional-copies/counts?')) {
+        countReads++;
+        return countReply || response(200, { scope: '2', openCount: 123456, closedCount: 0 });
+      }
+      if (url.endsWith('/sign-out')) return response(200, {});
       if (url.endsWith('/session')) return response(200, { authenticated: true, accessAllowed: true, antiforgeryToken: 'token', staff });
       if (url.includes('/additional-copies?')) {
         const status = new URL(url, 'https://localhost').searchParams.get('status');
@@ -94,9 +100,41 @@ async function until(predicate, message) {
     app = workflow.createWorkflowApp();
     await app.start();
     const copyTabs = [...document.querySelectorAll('[data-copy-status]')];
+    const nav = document.querySelector('[data-view="additional-copies"]');
+    const openCount = nav.querySelector('[data-copy-count]');
+    await until(() => openCount.textContent.trim() === '(123456)', 'multi-digit nav count');
+    assert.deepEqual(copyTabs.map(node => node.textContent), ['Open (123456)', 'Closed (0)']);
+    for (const lateFailure of [false, true]) {
+      const slow = deferred(), previousReads = countReads;
+      countReply = slow.promise;
+      document.querySelector('#refresh-additional-copies').click();
+      await until(() => countReads > previousReads, 'slow count request started');
+      assert.equal(openCount.textContent, '');
+      await until(() => !document.querySelector('#refresh-additional-copies').disabled, 'queue usable during pending count');
+      countReply = response(200, { scope: '2', openCount: 13, closedCount: 4 });
+      document.querySelector('#refresh-additional-copies').click();
+      nav.focus();
+      await until(() => openCount.textContent.trim() === '(13)', 'newer refresh accepted');
+      if (lateFailure) slow.reject(new Error('old count failed'));
+      else slow.resolve(response(200, { scope: '2', openCount: 9, closedCount: 9 }));
+      await settle();
+      assert.equal(openCount.textContent.trim(), '(13)');
+      assert.equal(document.activeElement, nav);
+    }
+    countReply = response(200, { scope: '3', openCount: 300, closedCount: 400 });
+    document.querySelector('#refresh-additional-copies').click();
+    await until(() => document.querySelector('#copy-count-state').textContent.includes('unavailable') &&
+      !document.querySelector('#refresh-additional-copies').disabled, 'wrong response scope is unavailable');
+    assert.deepEqual(copyTabs.map(node => node.textContent), ['Open', 'Closed']);
+    countReply = response(503, { message: 'Count fixture unavailable' });
+    document.querySelector('#refresh-additional-copies').click();
+    await until(() => document.querySelector('#copy-count-state').textContent.includes('unavailable') &&
+      !document.querySelector('#refresh-additional-copies').disabled, 'a failed aggregate leaves the queue usable');
+    countReply = null;
     staleCopyRead = deferred();
     document.getElementById('refresh-additional-copies').click();
     await until(() => staleCopyFetchStarted, 'old Open fetch starts');
+    await until(() => openCount.textContent.trim() === '(123456)', 'explicit refresh recovers counts independently of the list');
     copyTabs.find(tab => tab.dataset.copyStatus === 'closed').click();
     await until(() => copyTabs.find(tab => tab.dataset.copyStatus === 'closed').getAttribute('aria-selected') === 'true',
       'Closed tab becomes current');
@@ -126,6 +164,18 @@ async function until(predicate, message) {
     assert.match(document.getElementById('recent-request-list').textContent, new RegExp(firstId),
       'stale 404 must not forget a recent item after another detail takes ownership');
     assert.equal(document.getElementById('request-dialog-title').textContent, 'Second title');
+    const signingOut = deferred(), priorReads = countReads;
+    document.querySelector('#close-request').click();
+    await until(() => !document.querySelector('#request-dialog').open, 'detail closed');
+    countReply = signingOut.promise;
+    document.querySelector('#refresh-queue').click();
+    await until(() => countReads > priorReads, 'explicit title refresh requests copy counts');
+    document.querySelector('#sign-out').click();
+    await until(() => document.querySelector('#workspace').hidden, 'sign-out retires workspace');
+    signingOut.resolve(response(200, { scope: '2', openCount: 987, closedCount: 654 }));
+    await settle();
+    assert.equal(openCount.textContent, '');
+    assert.deepEqual(copyTabs.map(node => node.textContent), ['Open', 'Closed']);
     console.log('Staff stale additional-copy error and recent-detail 404 UI checks passed');
   } finally {
     app?.dispose();

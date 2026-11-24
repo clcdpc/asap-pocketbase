@@ -66,6 +66,8 @@ public sealed record AdditionalCopyScopeResult(
     string Status,
     IReadOnlyList<OrganizationChoice> AvailableLibraries);
 
+public sealed record AdditionalCopyCounts(string Scope, int OpenCount, int ClosedCount);
+
 public sealed record AdditionalCopyPreview(
     int Bibid,
     int OpenCount,
@@ -111,22 +113,18 @@ public sealed class AdditionalCopyService(
         }
 
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var organizations = await context.Organizations.AsNoTracking()
-            .Where(item => item.Id > LibraryScope.SystemOrganizationId &&
-                           item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive)
+        var organizations = await OperationalLibraries(context)
             .OrderBy(item => item.DisplayName)
             .ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
-        var resolved = ResolveScope(actor, scope, organizations);
+        var resolved = ResolveScope(actor, scope, organizations.Any(item => item.Id == scope.OrganizationId));
         if (!resolved.IsValid)
         {
             return null;
         }
 
-        var requests = await context.AdditionalCopyRequests.AsNoTracking()
-            .Where(item => item.Status == normalizedStatus &&
-                           (!resolved.OrganizationId.HasValue ||
-                            item.LibraryOrganizationId == resolved.OrganizationId.Value))
+        var requests = await ScopedRequests(context, resolved)
+            .Where(item => item.Status == normalizedStatus)
             .OrderByDescending(item => item.CreatedUtc)
             .ThenByDescending(item => item.Id)
             .ToListAsync(cancellationToken);
@@ -135,6 +133,26 @@ public sealed class AdditionalCopyService(
             resolved.Scope,
             normalizedStatus,
             organizations.Select(item => new OrganizationChoice(item.Id, item.DisplayName)).ToList());
+    }
+
+    public async Task<AdditionalCopyCounts?> CountsAsync(CurrentStaff actor, LibraryScope scope,
+        CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var available = actor.Role == StaffRole.SuperAdmin && scope.Kind == LibraryScopeKind.Library &&
+            await OperationalLibraries(context).AnyAsync(item => item.Id == scope.OrganizationId, cancellationToken);
+        var resolved = ResolveScope(actor, scope, available);
+        if (!resolved.IsValid)
+        {
+            return null;
+        }
+
+        // The status constraint allows two values. Classify them with the same SQL
+        // collation as ListAsync, including case-equivalent stored values.
+        var totals = await ScopedRequests(context, resolved).GroupBy(item => item.Status == "open")
+            .Select(group => new { IsOpen = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(item => item.IsOpen, item => item.Count, cancellationToken);
+        return new AdditionalCopyCounts(resolved.Scope, totals.GetValueOrDefault(true), totals.GetValueOrDefault(false));
     }
 
     public async Task<AdditionalCopyDto?> GetAsync(
@@ -1021,10 +1039,19 @@ public sealed class AdditionalCopyService(
     private static string SafeNoteValue(string? value) =>
         Clean(value)?.Replace('\r', ' ').Replace('\n', ' ') ?? "unknown";
 
+    private static IQueryable<Organization> OperationalLibraries(AsapDbContext context) =>
+        context.Organizations.AsNoTracking().Where(item => item.Id > LibraryScope.SystemOrganizationId &&
+            item.OrganizationCodeId == OrganizationAuthority.LibraryOrganizationCodeId && item.IsActive);
+
+    private static IQueryable<AdditionalCopyRequest> ScopedRequests(AsapDbContext context, ScopeResolution scope) =>
+        scope.OrganizationId is int id
+            ? context.AdditionalCopyRequests.AsNoTracking().Where(item => item.LibraryOrganizationId == id)
+            : context.AdditionalCopyRequests.AsNoTracking();
+
     private static ScopeResolution ResolveScope(
         CurrentStaff actor,
         LibraryScope scope,
-        IReadOnlyCollection<Organization> organizations)
+        bool libraryAvailable)
     {
         if (actor.Role != StaffRole.SuperAdmin)
         {
@@ -1034,7 +1061,7 @@ public sealed class AdditionalCopyService(
         {
             return new ScopeResolution(true, null, "all");
         }
-        return scope.Kind == LibraryScopeKind.Library && organizations.Any(item => item.Id == scope.OrganizationId)
+        return scope.Kind == LibraryScopeKind.Library && libraryAvailable
             ? new ScopeResolution(true, scope.OrganizationId, scope.ToTransportValue())
             : new ScopeResolution(false, null, string.Empty);
     }

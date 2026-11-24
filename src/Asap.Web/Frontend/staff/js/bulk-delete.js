@@ -31,6 +31,7 @@ function failureOutcome(error) {
 // The preview is disposable. A submitted runner keeps its captured ledger until
 // its outstanding DELETE settles, even when the preview and session disappear.
 export function createBulkDeleteController({ root, titleTrigger, copyTrigger, sessionIdentity,
+  onCopyChanged = () => {},
   getLibraries, beforeOpen, beforeExecute, captureReview, reviewClosed, onReceipt, clearReceipt,
   onSessionLost, onAccessUnavailable, request = authorizedJson, sessionRequest = loadStaffSession }) {
   const dom = Object.fromEntries(['close', 'scope', 'preview', 'summary', 'items', 'confirmation', 'execute', 'results']
@@ -182,6 +183,9 @@ export function createBulkDeleteController({ root, titleTrigger, copyTrigger, se
       batch.currentItem = null; recordLedger(batch);
     }
     batch.submitting = false; batch.finished = true; if (runner === batch) runner = null;
+    if (batch.ledger.some(item => item.type === 'additional_copy' && item.outcome !== 'not_attempted')) {
+      onCopyChanged(batch.owner);
+    }
     recordLedger(batch);
     if (!owns(batch)) return;
     dom.summary.textContent = 'Deletion finished. Review the ledger and refresh Closed work before retrying.';

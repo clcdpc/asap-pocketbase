@@ -139,10 +139,15 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     const mutationPayloads = [];
     let purchaseTaskReceipt = null;
     let purchaseTaskCount = 0;
+    let countReads = 0;
     let purchaseTaskRecoveryAttempts = 0;
     let purchaseTaskRecoveryUncommitted = false;
     let duplicateRejected = false;
     global.fetch = async (url, options = {}) => {
+      if (url.includes('/additional-copies/counts?')) {
+        countReads++;
+        return response(200, { scope: new URL(url, 'http://localhost').searchParams.get('scope'), openCount: purchaseTaskCount, closedCount: 0 });
+      }
       if (url.endsWith('/session')) {
         return response(200, { authenticated: true, accessAllowed: true, antiforgeryToken: 'token', staff });
       }
@@ -908,6 +913,7 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           'A 403 before receipt lookup retains the exact Purchase body and OperationId.');
         assert.deepEqual(mutationPayloads[1], original, 'The denied replay uses the exact stored command.');
       }
+      const readsBeforeReplay = countReads;
       recoveryButton.click();
       const expectedRecoveryPosts = scenarioOptions.purchaseTaskRecoveryForbidden ? 3 : 2;
       await until(() => mutationPayloads.length === expectedRecoveryPosts && !document.querySelector('.purchase-task-recovery'),
@@ -915,6 +921,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       assert.ok(document.querySelector('.related-additional-copy a'), 'The authoritative request links the recovered task.');
       assert.deepEqual(mutationPayloads.at(-1), original);
       assert.equal(purchaseTaskCount, 1, 'The replay recovers the original task without creating another.');
+      await until(() => countReads > readsBeforeReplay && document.querySelector('[data-view="additional-copies"] [data-copy-count]').textContent === ' (1)',
+        'Replaying the committed receipt re-reads the aggregate while Requests remains active.');
       const storageKeys = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index));
       assert.equal(storageKeys.some(key => key?.includes('.purchaseTask.')), false,
         `The browser clears its Purchase receipt only after the committed task is confirmed: ${JSON.stringify(storageKeys)}`);
