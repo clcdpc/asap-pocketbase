@@ -480,7 +480,7 @@ public sealed partial class TitleRequestMutationService
                 input.Action == "alreadyOwn"
                     ? "Closed without hold because Already Own was selected and automatic hold placement was disabled."
                     : purchaseTask
-                        ? "Closed with a linked purchasing task because automatic hold placement was disabled."
+                        ? "Closed with a linked additional-copy task because automatic hold placement was disabled."
                         : "Closed without hold because a BIB ID was supplied and automatic hold placement was disabled.");
         }
         if (rejectionTemplateId.HasValue)

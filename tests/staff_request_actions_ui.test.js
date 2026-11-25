@@ -6,6 +6,7 @@ const { pathToFileURL } = require('node:url');
 const { JSDOM } = require('jsdom');
 
 const frontend = path.join(__dirname, '..', 'src', 'Asap.Web', 'Frontend');
+const purchaseTaskDescription = 'A matching BIB exists, and the patron does not want a hold. ASAP will create a task in Additional copies to purchase another copy of this title, then close this request without placing a hold.';
 const response = (status, body) => ({
   ok: status < 400,
   status,
@@ -109,6 +110,9 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           actorName: 'Named <img src=x onerror=alert(1)>', message: 'Second', created: '2026-01-01T00:00:00Z' }
       ]
     };
+    if (scenarioOptions.openTaskOutsideScope) {
+      request.hasOpenAdditionalCopy = true;
+    }
     if (scenarioOptions.serverDeniesActions) request.capabilities.allowedActions = [];
     if (scenarioOptions.historicalFormat) {
       request.format = 'ebook';
@@ -294,6 +298,11 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (url.endsWith(`/title-requests/${id}/action`) && options.method === 'POST') {
         payload = JSON.parse(options.body);
         mutationPayloads.push(payload);
+        if (scenarioOptions.concurrentPurchase) {
+          currentRequest = { ...currentRequest, status: 'closed', version: 'v2', hasOpenAdditionalCopy: true,
+            closeReason: 'purchased_no_hold', openAdditionalCopyRequestId: '75', additionalCopyRequestId: '76' };
+          return response(409, { code: 'stale_version', message: 'The request changed.' });
+        }
         if (scenarioOptions.purchaseTaskRecoveryStale && payload.action === 'purchase' && !purchaseTaskRecoveryUncommitted) {
           purchaseTaskRecoveryUncommitted = true;
           throw new TypeError('Connection lost before Purchase task commit');
@@ -364,7 +373,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
           : action === 'alreadyOwn' || scenarioOptions.purchaseVerifiedBib ? 'pending_hold' : 'outstanding_purchase';
         currentRequest = { ...currentRequest, version: scenarioOptions.duplicateRecovery ? 'v3' : 'v2',
           status: scenarioOptions.serverAdvancedStatus ? 'closed' : finalStatus,
-          ...(createsPurchaseTask ? { closeReason: 'purchased_no_hold', additionalCopyRequestId: '9007199254740999' } : {}),
+          ...(createsPurchaseTask ? { closeReason: 'purchased_no_hold', additionalCopyRequestId: '9007199254740999',
+            hasOpenAdditionalCopy: true, openAdditionalCopyRequestId: '9007199254740999' } : {}),
           activity: [...currentRequest.activity, {
           id: '9007199254740999', eventType: 'status_changed', actorType: 'staff',
           actorName: 'Staff', message: 'Committed', created: '2026-01-02T00:00:00Z'
@@ -481,8 +491,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       if (reviewAction === 'purchase') {
         if (!nextAutoHold && scenarioOptions.purchaseVerifiedBib) {
           assert.equal(review.querySelector('h3').textContent, 'Purchase an additional copy');
-          assert.match(review.textContent, /A matching BIB exists and the patron does not want a hold\./);
-          assert.equal(review.querySelector('button[type="submit"]').textContent, 'Create purchasing task');
+          assert.equal(review.querySelector('p').textContent, purchaseTaskDescription);
+          assert.equal(review.querySelector('button[type="submit"]').textContent, 'Create additional-copy task');
         } else {
           assert.match(review.textContent, nextAutoHold ? /Pending hold for automatic hold placement/ : /Automatic hold is off/);
         }
@@ -819,7 +829,16 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
       select.value = templateId;
     } else if (scenarioOptions.purchaseVerifiedBib && !scenarioOptions.purchaseAutohold) {
       assert.equal(choice.querySelector('h3').textContent, 'Purchase an additional copy');
-      assert.match(choice.textContent, /A matching BIB exists and the patron does not want a hold\./);
+      if (scenarioOptions.openTaskOutsideScope) {
+        assert.match(choice.textContent, /An open task already exists in Additional copies/);
+        assert.equal(choice.querySelector('a, input, button[type="submit"]'), null);
+        assert.equal(document.activeElement.textContent.trim(), 'Cancel');
+        document.activeElement.click();
+        assert.equal(document.activeElement, button);
+        assert.equal(payload, null);
+        return;
+      }
+      assert.equal(choice.querySelector('p').textContent, purchaseTaskDescription);
       const checkbox = choice.querySelector('input[type="checkbox"]');
       assert.ok(checkbox, 'The Purchase task uses the additional-copy reminder choice.');
       assert.equal(checkbox.checked, profileDefault);
@@ -844,13 +863,23 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
     }
     if (action === 'reject') assert.equal(choice.querySelector('button[type="submit"]').textContent, 'Reject and close');
     else assert.equal(choice.querySelector('button[type="submit"]').textContent,
-      scenarioOptions.purchaseVerifiedBib && !scenarioOptions.purchaseAutohold ? 'Create purchasing task' : 'Confirm purchase');
+      scenarioOptions.purchaseVerifiedBib && !scenarioOptions.purchaseAutohold ? 'Create additional-copy task' : 'Confirm purchase');
     choice.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     choice.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     await until(() => payload !== null, 'action submitted');
     if (action === 'reject') assert.equal(payload.rejectionTemplateId, templateId);
     else assert.equal(payload.emailPurchaseReminder,
       scenarioOptions.purchaseVerifiedBib && scenarioOptions.purchaseAutohold ? false : explicitChoice);
+    if (scenarioOptions.concurrentPurchase) {
+      await until(() => document.querySelector('.action-choice a'), 'conflict refresh links the open task');
+      const blocked = document.querySelector('.action-choice');
+      assert.equal(blocked.querySelector('a').getAttribute('href'), '/staff/?request=75&stage=additional_copies');
+      assert.equal(blocked.querySelector('button[type="submit"]'), null);
+      assert.equal(document.querySelector('.purchase-task-recovery'), null);
+      assert.match(document.querySelector('#app-status').textContent, /Purchase was not completed/);
+      assert.equal(mutationPayloads.length, 1);
+      return;
+    }
     if (scenarioOptions.purchaseTaskResponseLost || scenarioOptions.purchaseTaskRecoveryStale) {
       assert.equal(payload.action, 'purchase');
       assert.equal(payload.requestType, 'title_request');
@@ -1162,6 +1191,8 @@ async function scenario(action, profileDefault, explicitChoice, options = {}) {
   await scenario('purchase', false, true, { serverAdvancedStatus: true });
   await scenario('purchase', false, true, { serverAdvancedStatus: true, refreshConcurrentStatus: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, openTaskOutsideScope: true });
+  await scenario('purchase', true, true, { purchaseVerifiedBib: true, concurrentPurchase: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true, purchaseTaskResponseLost: true });
   await scenario('purchase', true, true, { purchaseVerifiedBib: true, purchaseTaskResponseLost: true,
     purchaseTaskRecoveryDraftBlocked: true });

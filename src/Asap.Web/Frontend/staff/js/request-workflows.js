@@ -5,7 +5,7 @@ import { positivePolarisId } from './research.js';
 import { eligibleRowActions } from './request-row-actions.js';
 import { actorKey } from './session-identity.js';
 import { validRequestId } from './recent-requests.js';
-import { element, icon, commandButton, statusLabel, labeledInput } from './ui.js';
+import { element, icon, commandButton, additionalCopyLink, statusLabel, labeledInput } from './ui.js';
 
 const purchaseTaskOperationId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -125,7 +125,9 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
   function invalidateAutomaticHoldReview(choice, changed) {
     if (!choice || !dependsOnAutomaticHold(choice.action, choice.request)) return;
     choice.automaticHoldChanged = changed;
-    choice.submit.disabled = changed || !choice.ready || choice.refreshRequired;
+    if (choice.submit) {
+      choice.submit.disabled = changed || !choice.ready || choice.refreshRequired;
+    }
     let explanation = choice.panel.querySelector('.automatic-hold-review-invalidated');
     if (changed) {
       if (!explanation) {
@@ -168,7 +170,9 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     const choice = actionChoice;
     if (!choice?.panel.isConnected) return;
     choice.refreshRequired = true;
-    choice.submit.disabled = true;
+    if (choice.submit) {
+      choice.submit.disabled = true;
+    }
     choice.panel.querySelector('.automatic-hold-review-refresh')?.remove();
     const retryButton = commandButton('Retry current request', 'refresh', async () => {
       if (retryButton.disabled || actionChoice !== choice || !isCurrentDialogRequest()) return;
@@ -272,7 +276,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       }
     });
     panel.append(element('h3', { id: 'purchase-task-recovery-title', text: 'Purchase result unconfirmed' }),
-      element('p', { text: 'A previous Purchase may have created a purchasing task. Recover the original result before starting another action.' }),
+      element('p', { text: 'A previous Purchase may have created a task in Additional copies. Recover the original result before starting another action.' }),
       element('div', { className: 'form-actions' }, recover));
     const workflowPanel = root.querySelector('.request-workflow-panel');
     if (!workflowPanel) return false;
@@ -298,15 +302,36 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     await mutateRequest(request, path, { version: request.version }, messages[operation]);
   }
 
+  function showOpenPurchaseTask(returnFocus = null) {
+    const panel = element('section', { className: 'action-choice', 'aria-labelledby': 'open-purchase-task-title' });
+    const link = request.openAdditionalCopyRequestId ? additionalCopyLink(request.openAdditionalCopyRequestId) : null;
+    const cancel = commandButton('Cancel', 'times', dismissActionChoice);
+    const opener = returnFocus || [...root.querySelectorAll('.action-bar button:not(:disabled)')]
+      .find(button => button.textContent.trim() === 'Purchase') || root.querySelector('.request-detail-close');
+    actionChoice = { request, action: 'purchase', panel, returnFocus: opener };
+    const reason = element('p', { id: 'open-purchase-task-reason',
+      text: 'An open task already exists in Additional copies for this request. A new task cannot be created.' });
+    const focusTarget = link || cancel;
+    focusTarget.setAttribute('aria-describedby', reason.id);
+    panel.append(element('h3', { id: 'open-purchase-task-title', text: 'Purchase an additional copy' }), reason,
+      element('div', { className: 'form-actions' }, [link, cancel]));
+    showForm(panel, dismissActionChoice);
+    focusTarget.focus();
+  }
+
   function showActionChoice(request, action, returnFocus, preserved = null) {
     if (context.hasInlineAction() || !allowRequestMutation(request, { consumes: null })) return;
     cancelActionChoiceLoad();
     root.querySelector('.action-choice')?.remove();
     const createsPurchaseTask = action === 'purchase' && purchaseTask(request);
+    if (createsPurchaseTask && request.hasOpenAdditionalCopy) {
+      showOpenPurchaseTask(returnFocus);
+      return;
+    }
     const panel = element('form', { className: 'action-choice', 'aria-label': createsPurchaseTask ? 'Purchase an additional copy options' : `${action} options` });
     const heading = element('h3', { text: action === 'reject' ? 'Reject suggestion' : createsPurchaseTask ? 'Purchase an additional copy' : 'Purchase suggestion' });
     const submit = element('button', { type: 'submit', className: action === 'reject' ? 'danger-button' : 'primary-button',
-      disabled: action === 'reject' }, action === 'reject' ? 'Reject and close' : createsPurchaseTask ? 'Create purchasing task' : 'Confirm purchase');
+      disabled: action === 'reject' }, action === 'reject' ? 'Reject and close' : createsPurchaseTask ? 'Create additional-copy task' : 'Confirm purchase');
     const cancel = commandButton('Cancel', 'times', dismissActionChoice);
     let input;
     if (action === 'purchase') {
@@ -315,7 +340,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
         ? element('input', { type: 'checkbox', checked: actor.additionalCopyReminderDefault })
         : entersPendingHold ? null : element('input', { type: 'checkbox', checked: actor.purchaseReminderDefault });
       const explanation = createsPurchaseTask
-        ? 'A matching BIB exists and the patron does not want a hold. A purchasing task will be created and this request will close without placing a hold.'
+        ? 'A matching BIB exists, and the patron does not want a hold. ASAP will create a task in Additional copies to purchase another copy of this title, then close this request without placing a hold.'
         : request.bibid
           ? `${request.autohold ? 'Purchase moves this verified BIB to Pending hold for automatic hold placement' : 'Automatic hold is off. Purchase closes this request without placing a hold'} after server verification. A purchase reminder does not apply. The final state comes from the server.`
           : 'Purchase moves this request to Outstanding purchase. A reminder is optional.';
@@ -483,7 +508,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
       }
     }
     const result = await mutateRequest(request, `/api/asap/staff/title-requests/${request.id}/action`, body,
-      createsPurchaseTask ? 'Purchasing task created.' : 'Workflow action completed.', draft);
+      createsPurchaseTask ? 'Additional-copy task created.' : 'Workflow action completed.', draft);
     if (action === 'alreadyOwn' && ['bib_not_found', 'invalid_bib', 'bib_unverified', 'bib_required'].includes(result?.code)) {
       dismissActionChoice();
       editor.beginBibLink(returnFocus, result.message);
@@ -766,6 +791,7 @@ export function createRequestWorkflows({ context, editor, announce, request: sen
     buildActions: () => buildActionBar(request),
     buildHold: () => request.holdOperation ? buildHoldOperation(request, request.holdOperation) : null,
     mountPurchaseTaskRecovery,
+    showOpenPurchaseTask,
     clearPurchaseTaskOperation,
     editorAutomaticHoldDraftChanged,
     preservedDraftsForEditorSave,

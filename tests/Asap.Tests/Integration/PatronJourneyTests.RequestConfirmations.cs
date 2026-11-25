@@ -48,6 +48,13 @@ public sealed partial class PatronJourneyTests
             staff.AdditionalCopyReminderDefault = true;
             staff.NotificationEmail = "synthetic.staff@example.org";
             setup.EmailTemplates.Add(template);
+            var now = timeProvider!.GetUtcNow().UtcDateTime;
+            setup.AdditionalCopyRequests.Add(new AdditionalCopyRequest
+            {
+                SourceTitleRequestId = optout.Source.Id, LibraryOrganizationId = optout.Source.LibraryOrganizationId,
+                BibId = 9001, Title = "Historical copy task", Status = "closed",
+                CreatedUtc = now, UpdatedUtc = now, ClosedUtc = now
+            });
             await setup.SaveChangesAsync();
         }
         try
@@ -86,9 +93,9 @@ public sealed partial class PatronJourneyTests
             var rejectionKey = $"rejection:{rejection.Source.Id}:";
             Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(value => value.BusinessKey!.StartsWith(reminderKey)));
             Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(value => value.BusinessKey!.StartsWith(rejectionKey)));
-            var optoutTaskId = await verify.AdditionalCopyRequests.AsNoTracking()
-                .Where(task => task.SourceTitleRequestId == optout.Source.Id)
-                .Select(task => task.Id).SingleAsync();
+            var optoutTasks = verify.AdditionalCopyRequests.Where(task => task.SourceTitleRequestId == optout.Source.Id);
+            Assert.AreEqual(2, await optoutTasks.CountAsync());
+            var optoutTaskId = await optoutTasks.Where(task => task.Status == "open").Select(task => task.Id).SingleAsync();
             Assert.AreEqual(1, await verify.EmailOutbox.CountAsync(value => value.BusinessKey ==
                 $"additional-copy-reminder:{optoutTaskId.ToString(CultureInfo.InvariantCulture)}"));
             foreach (var item in new[] { savedBib, untouched })

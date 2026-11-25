@@ -6,6 +6,7 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const { decideConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
 const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rejectionId, savedBibId, optoutId, untouchedId, missingBibId] = process.argv.slice(2);
+const purchaseTaskDescription = 'A matching BIB exists, and the patron does not want a hold. ASAP will create a task in Additional copies to purchase another copy of this title, then close this request without placing a hold.';
 
 (async () => {
   await fs.mkdir(artifacts, { recursive: true });
@@ -169,6 +170,55 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     await target.goto(`${baseURL}/staff/?scope=2&request=${id}`, { waitUntil: 'networkidle' });
     await dialog(target).waitFor({ state: 'visible' }); await bar(target).waitFor();
   };
+  async function verifyOpenTaskConflict(zoomPage) {
+    await footerClose(zoomPage).press('Enter');
+    const row = zoomPage.locator(`#request-grid tr:has([data-request-id="${optoutId}"])`);
+    await row.getByRole('button', { name: `More actions for request ${optoutId}`, exact: true }).press('Enter');
+    await row.locator('.request-table-menu:popover-open [data-request-action="purchase"]').press('Enter');
+    const panel = review(zoomPage), source = await getDetail(optoutId);
+    await panel.getByText(purchaseTaskDescription, { exact: true }).waitFor();
+    await scan('purchase-task-native-200', zoomPage, true);
+    const taskUrl = `${baseURL}/api/asap/staff/additional-copies/${source.additionalCopyRequestId}`;
+    const historical = await (await context.request.get(taskUrl)).json();
+    assert.equal(historical.status, 'closed');
+    const session = await (await context.request.get(`${baseURL}/api/asap/staff/session`)).json();
+    const changeTask = async (action, version) => {
+      const result = await context.request.post(`${taskUrl}/${action}`, {
+        headers: { 'X-ASAP-Antiforgery': session.antiforgeryToken }, data: { version }
+      });
+      assert.equal(result.status(), 200);
+      return result.json();
+    };
+    const reopened = await changeTask('reopen', historical.version);
+    const posts = report.actions.length;
+    const conflict = zoomPage.waitForResponse(r => r.request().method() === 'POST' &&
+      new URL(r.url()).pathname.endsWith(`/${optoutId}/action`));
+    await panel.getByRole('button', { name: 'Create additional-copy task' }).press('Enter');
+    const rejected = await conflict;
+    assert.equal(rejected.status(), 409);
+    assert.equal((await rejected.json()).code, 'additional_copy_exists');
+    const message = 'An open task already exists in Additional copies for this request. A new task cannot be created.';
+    await panel.getByText(message, { exact: true }).waitFor();
+    assert.equal(await panel.locator('button[type=submit], input').count(), 0);
+    await panelState(panel, zoomPage);
+    assert.equal(await zoomPage.locator('#app-status').textContent(), 'Purchase was not completed. An open additional-copy task already exists.');
+    assert.equal((await getDetail(optoutId)).version, source.version);
+    await scan('purchase-task-already-open-native-200', zoomPage, true);
+    await cancel(panel, 'Purchase', true, zoomPage);
+
+    await open(optoutId);
+    await opener('Purchase').press('Enter');
+    await review().getByText(message, { exact: true }).waitFor();
+    await scan('purchase-task-already-open');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scan('purchase-task-already-open-mobile');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await review().getByRole('link', { name: `Task ${historical.id}`, exact: true }).press('Enter');
+    await page.waitForURL(url => url.searchParams.get('request') === historical.id && url.searchParams.get('stage') === 'additional_copies');
+    await dialog().getByRole('heading', { name: historical.title, exact: true }).waitFor();
+    assert.equal(report.actions.length, posts + 1, 'Opening or dismissing the blocked confirmation never retries Purchase.');
+    return changeTask('close', reopened.version);
+  }
   async function verifyBibPrerequisite(target = page, nativeZoom = false, name = 'request-bib-prerequisite', alreadyOpen = false) {
     if (!alreadyOpen) await open(missingBibId, target);
     const before = await getDetail(missingBibId), actionsBefore = report.actions.length, requests = [];
@@ -771,11 +821,11 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
       return decision.accept();
     });
     await preferenceOff;
-    await page.waitForFunction(() => document.querySelector('.action-choice')?.textContent.includes('A matching BIB exists and the patron does not want a hold'));
+    await holdReview.getByText(purchaseTaskDescription, { exact: true }).waitFor();
     holdReview = review(); await panelState(holdReview);
     assert.equal(await holdReview.getByRole('heading', { name: 'Purchase an additional copy', exact: true }).count(), 1);
     assert.equal(await holdReview.getByRole('checkbox', { name: 'Email me a purchase reminder', exact: true }).isChecked(), true);
-    assert.equal(await holdReview.getByRole('button', { name: 'Create purchasing task', exact: true }).count(), 1);
+    assert.equal(await holdReview.getByRole('button', { name: 'Create additional-copy task', exact: true }).count(), 1);
     const restoredReviewViewport = await middle.evaluate(node => {
       const focused = document.activeElement;
       const focusBounds = focused.getBoundingClientRect();
@@ -824,6 +874,7 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
     assert.equal(refreshedSavedBib.autohold, true, 'Both saved preference directions return to the original fixture state.');
     await cancel(holdReview, 'Purchase');
 
+    let historicalTask;
     const extension = path.join(__dirname, 'native-zoom-extension');
     const zoomContext = await chromium.launchPersistentContext(path.join(artifacts, 'zoom-profile'), {
       channel: 'chromium', headless: true, viewport: null, extraHTTPHeaders: headers,
@@ -861,6 +912,7 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
         const zoomPanel = await choose(name, zoomPage); await scan(`${name.toLowerCase()}-native-200`, zoomPage, true);
         await cancel(zoomPanel, name, true, zoomPage);
       }
+      historicalTask = await verifyOpenTaskConflict(zoomPage);
     } finally { await zoomContext.close(); }
 
     for (const [name, id, expected] of [['Purchase', purchaseId, 'Outstanding purchase'], ['Reject', rejectionId, 'Closed']]) {
@@ -910,7 +962,7 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
         await opener('Purchase').press('Enter');
         panel = review(); await panel.waitFor(); await panelState(panel);
         assert.equal(await panel.getByRole('heading', { name: 'Purchase an additional copy', exact: true }).count(), 1);
-        assert.match(await panel.textContent(), /A matching BIB exists and the patron does not want a hold\./);
+        assert.equal(await panel.getByText(purchaseTaskDescription, { exact: true }).count(), 1);
         const reminder = panel.getByRole('checkbox', { name: 'Email me a purchase reminder', exact: true });
         assert.equal(await reminder.isChecked(), true, 'The saved staff reminder default populates the Purchase task choice.');
         await scan('purchase-task-confirmation');
@@ -918,7 +970,7 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
         const acceptedResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
           new URL(response.url()).pathname.endsWith(`/title-requests/${optoutId}/action`) && response.status() === 200);
         const purchasedCounts = nextCopyCounts(page);
-        await panel.getByRole('button', { name: 'Create purchasing task', exact: true }).press('Enter');
+        await panel.getByRole('button', { name: 'Create additional-copy task', exact: true }).press('Enter');
         await purchasedCounts();
         const accepted = await (await acceptedResponse).json();
         assert.equal(accepted.committed, true);
@@ -926,6 +978,9 @@ const [baseURL, artifacts, staffId, tenantId, email, templateId, purchaseId, rej
         assert.equal(accepted.finalStatus, 'closed');
         assert.equal(accepted.notificationStatus, 'queued');
         assert.match(accepted.additionalCopyRequestId, /^[1-9]\d{0,18}$/);
+        assert.notEqual(accepted.additionalCopyRequestId, historicalTask.id);
+        const historicalAfter = await context.request.get(`${baseURL}/api/asap/staff/additional-copies/${historicalTask.id}`);
+        assert.equal((await historicalAfter.json()).version, historicalTask.version);
         assert.match(accepted.operationId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
         assert.equal(report.actions.length, actionsBefore + 1);
         assert.deepEqual(Object.keys(report.actions.at(-1)).filter(key => key !== 'url').sort(),

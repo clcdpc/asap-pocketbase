@@ -41,7 +41,7 @@ public sealed partial class PatronJourneyTests
         Assert.IsFalse(result.Replayed);
         Assert.IsFalse(string.IsNullOrWhiteSpace(result.AdditionalCopyRequestId));
         Assert.AreEqual(reminderChoice ? "queued" : "not_requested", result.NotificationStatus);
-        Assert.IsNull(result.PatronNotificationStatus, "A purchasing task must not send the Purchase approved patron email.");
+        Assert.IsNull(result.PatronNotificationStatus, "An additional-copy task must not send the Purchase approved patron email.");
         Assert.AreEqual(0, fixture.Provider.CreateCommands.Count);
         Assert.AreEqual(0, fixture.Provider.ReplyCommands.Count);
         Assert.AreEqual(0, fixture.Provider.Calls.Count(call => call.Operation is
@@ -62,7 +62,7 @@ public sealed partial class PatronJourneyTests
         Assert.AreEqual(source.LibraryOrganizationId, task.LibraryOrganizationId);
         Assert.AreEqual(source.BibId, task.BibId);
         Assert.AreEqual("Verified purchase title", task.Title,
-            "The purchasing task uses the authoritative verified Polaris BIB title.");
+            "The additional-copy task uses the authoritative verified Polaris BIB title.");
         Assert.AreEqual(source.MaterialFormatId, task.MaterialFormatId);
         Assert.AreEqual(source.Identifier, task.Identifier);
         Assert.AreEqual(fixture.Actor.Id, task.CreatedByStaffUserId);
@@ -108,6 +108,68 @@ public sealed partial class PatronJourneyTests
             .GetAsync(fixture.Actor, source.Id.ToString(), CancellationToken.None);
         Assert.IsNotNull(view);
         Assert.AreEqual(task.Id.ToString(), view.AdditionalCopyRequestId);
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task PurchaseTaskConflictUsesOpenTaskAndScopesItsLink(bool sameLibrary)
+    {
+        await using var fixture = await SeedPolarisQueueAsync();
+        await SetSavedPurchaseBibAsync(fixture, autoHold: false);
+        var views = factory!.Services.GetRequiredService<TitleRequestViewService>();
+        var review = await views.GetAsync(fixture.Actor, fixture.Source.Id.ToString(), CancellationToken.None);
+        Assert.IsNotNull(review);
+        Assert.IsFalse(review.HasOpenAdditionalCopy);
+        var command = PurchaseTaskCommand(fixture.Source, reminder: true);
+
+        await using var context = await fixture.Contexts.CreateDbContextAsync();
+        if (!sameLibrary && !await context.Organizations.AnyAsync(item => item.Id == 3))
+        {
+            context.Organizations.Add(new Organization
+            {
+                Id = 3, DisplayName = "Other purchase library", OrganizationCodeId = 2, IsActive = true
+            });
+            await context.SaveChangesAsync();
+        }
+        var now = timeProvider!.GetUtcNow().UtcDateTime;
+        var open = new AdditionalCopyRequest
+        {
+            SourceTitleRequestId = fixture.Source.Id, LibraryOrganizationId = sameLibrary ? 2 : 3,
+            BibId = 9001, Title = "Existing open task", Status = "open", CreatedUtc = now, UpdatedUtc = now
+        };
+        context.AdditionalCopyRequests.Add(open);
+        await context.SaveChangesAsync();
+        var closed = new AdditionalCopyRequest
+        {
+            SourceTitleRequestId = fixture.Source.Id, LibraryOrganizationId = 2, BibId = 9001,
+            Title = "Newer closed task", Status = "closed", CreatedUtc = now, UpdatedUtc = now, ClosedUtc = now
+        };
+        context.AdditionalCopyRequests.Add(closed);
+        await context.SaveChangesAsync();
+
+        var before = await ReadPurchaseSideEffectCountsAsync(fixture);
+        var result = await QueueService().ActionAsync(fixture.Actor, fixture.Source.Id, command, CancellationToken.None);
+        Assert.AreEqual("additional_copy_exists", result.Code);
+        Assert.IsNull(result.AdditionalCopyRequestId);
+        Assert.AreEqual(before, await ReadPurchaseSideEffectCountsAsync(fixture));
+        var refreshed = await views.GetAsync(fixture.Actor, review.Id, CancellationToken.None);
+        Assert.IsNotNull(refreshed);
+        Assert.AreEqual(review.Version, refreshed.Version);
+        Assert.AreEqual("suggestion", refreshed.Status);
+        Assert.AreEqual(closed.Id.ToString(), refreshed.AdditionalCopyRequestId);
+        Assert.IsTrue(refreshed.HasOpenAdditionalCopy);
+        Assert.AreEqual(sameLibrary ? open.Id.ToString() : null, refreshed.OpenAdditionalCopyRequestId);
+        if (!sameLibrary)
+        {
+            var admin = await ReadConfiguredSuperAdminAsync();
+            var all = await views.GetAsync(admin, review.Id, CancellationToken.None, LibraryScope.All);
+            var scoped = await views.GetAsync(admin, review.Id, CancellationToken.None, LibraryScope.ForLibrary(2));
+            Assert.IsNotNull(all);
+            Assert.IsNotNull(scoped);
+            Assert.AreEqual(open.Id.ToString(), all.OpenAdditionalCopyRequestId);
+            Assert.IsNull(scoped.OpenAdditionalCopyRequestId);
+        }
     }
 
     [TestMethod]
