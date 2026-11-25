@@ -62,22 +62,9 @@ public sealed class SystemSettings
     public string? StaffApplicationUrl { get; set; }
     public string? LeapBibUrlPattern { get; set; }
     public string? LeapPatronUrlPattern { get; set; }
-    public string? MaterialTypeIconUrlPattern { get; set; }
-    public string? PacBaseUrl { get; set; }
     public string? SystemNotEnabledMessage { get; set; }
     public string? MisconfiguredMessage { get; set; }
     public DateTime UpdatedUtc { get; set; }
-    public byte[] RowVersion { get; set; } = [];
-}
-
-public sealed class LibraryCatalogSettings
-{
-    public int OrganizationId { get; set; }
-    // Null inherits; an empty string deliberately disables the effective value.
-    public string? PacBaseUrl { get; set; }
-    public string? MaterialTypeIconUrlPattern { get; set; }
-    // PAC context identity is library-owned, independent of operational Polaris IDs.
-    public int? PacOrganizationId { get; set; }
     public byte[] RowVersion { get; set; } = [];
 }
 

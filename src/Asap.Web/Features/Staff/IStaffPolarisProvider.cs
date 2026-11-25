@@ -55,8 +55,6 @@ public sealed record BibValidationResult(
     string? Format = null, string? Identifier = null, string? Publisher = null)
 {
     public int? MaterialTypeId { get; init; }
-    public string? MaterialTypeSearchCode { get; init; }
-    public string? FormatIconUrl { get; init; }
 }
 
 public sealed record StaffBibSearchRow(
@@ -64,8 +62,6 @@ public sealed record StaffBibSearchRow(
 {
     public string? Publisher { get; init; }
     public int? MaterialTypeId { get; init; }
-    public string? MaterialTypeSearchCode { get; init; }
-    public string? FormatIconUrl { get; init; }
 }
 
 public sealed record StaffBibSearchResult(IReadOnlyList<StaffBibSearchRow> Results, int TotalMatches)

@@ -1,5 +1,5 @@
 'use strict';
-const { decideConfirmation, rejectNativeDialogs } = require('./confirmation.cjs');
+const { rejectNativeDialogs } = require('./confirmation.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -305,17 +305,6 @@ module.exports = async function verifyStaffNativeZoom({ baseURL, artifacts, head
       await scan('workflow-picker');
       await picker.press('Escape');
       assert.equal(await picker.evaluate(node => node === document.activeElement), true);
-      await page.locator('#settings-nav-start').click();
-      await page.locator('#pac-base-url').fill(`${baseURL}/polaris`);
-      await page.locator('#format-icon-url-pattern').fill('/jpl.png?type={id2}');
-      await page.locator('#catalog-preview-button').focus(); await page.keyboard.press('Enter');
-      await page.locator('#catalog-preview').getByText('Resolved example icon URL: /jpl.png?type=01', { exact: true }).waitFor();
-      await page.locator('#catalog-preview img').evaluate(image => image.decode());
-      await page.locator('#catalog-preview').scrollIntoViewIfNeeded();
-      await scan('catalog-preview');
-      await decideConfirmation(page, () => page.locator('#settings-discard').click(), dialog => dialog.accept());
-      await page.waitForFunction(() => document.querySelector('#settings-version').value && !document.querySelector('#settings-form').inert &&
-        !document.querySelector('#settings-refresh').disabled && document.querySelector('#settings-save').disabled);
       await page.locator('#settings-nav-patron').click();
       await materialFormatsLayout(page);
       await page.locator('#material-formats-editor').scrollIntoViewIfNeeded();

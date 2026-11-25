@@ -369,14 +369,6 @@ public sealed partial class AdministrationService
             context.EmailSettings.Remove(email);
         }
 
-        var catalog = await context.LibraryCatalogSettings.SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
-        if (catalog is not null)
-        {
-            catalog.PacBaseUrl = null;
-            catalog.MaterialTypeIconUrlPattern = null;
-            // PAC organization is library-owned mapping, not an inherited override.
-        }
-
         var publication = await context.PublicationOptionSets.SingleOrDefaultAsync(item => item.OrganizationId == organizationId, cancellationToken);
         if (publication is not null)
         {

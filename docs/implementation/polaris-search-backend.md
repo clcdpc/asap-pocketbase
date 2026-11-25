@@ -91,9 +91,8 @@ Remaining live checks include known ISBN, UPC and LCCN records, title stop words
 and punctuation, author formats outside the verified example, and the deployed
 catalog's deepest navigable page, site-specific limits and out-of-range response.
 
-Each result retains `bibId`, `title`, `author`, `publication`, `identifier`, and
-`format`, with additive `materialTypeId`, `materialTypeSearchCode`, and
-`formatIconUrl`. Format labels resolve through Polaris MARC material definitions,
+Each result retains `bibId`, `title`, `author`, `publication`, `identifier`,
+`materialTypeId` and `format`. Format labels resolve through Polaris MARC material definitions,
 using a bounded, serialized reference read and an in-memory cache for the host
 and library (24 hours; one minute before retrying failed reference reads).
 Existing textual labels are a fallback; unresolved numeric codes display
@@ -104,64 +103,26 @@ a left rail, bibliographic/holdings details in the center, and aligned BIB
 actions in a separate right column. Actions stack below at narrow widths.
 Catalog material types never set ASAP Material formats.
 
-### Catalog presentation configuration
+### Bundled material artwork
 
-Settings → Getting started → Polaris catalog and material icons edits **PAC base
-URL** and **material-type icon URL pattern** as system defaults with library
-overrides (`catalog.pacBaseUrl`, `catalog.formatIconUrlPattern`). The system icon
-default remains `SystemSettings.MaterialTypeIconUrlPattern`; its existing
-`systemSettings.formatIconUrlPattern` API write name remains supported. No
-stored icon patterns are migrated or discarded. LEAP remains system-only.
+Search and exact-BIB results use the Polaris MARC material-type ID to select a
+decorative SVG from `src/Asap.Web/Frontend/formats/`. All libraries share the
+same artwork. Each positive ID maps to its numbered filename, padded to at
+least two digits (for example, `/formats/02.svg`). The ID remains usable when
+the description lookup fails. An absent ID or a failed image load leaves the
+generic document icon beside the readable format label. A request for missing
+artwork returns a normal HTTP 404 visible in IIS access logs.
 
-For either field, SQL/API `null` means inherit; an explicit empty string means
-disabled at that scope. An omitted write leaves the value untouched. The editor
-shows effective values and marks ownership; **Use system value** clears that
-field's override. **Reset inherited overrides** clears both catalog overrides
-while preserving the library-owned **PAC organization ID** mapping.
+To add or replace artwork, inspect the SVG for active content and external
+references, then save it under its numbered filename. For a new ID, update
+the artwork inventory test. Update the source artwork digest after reviewing
+the changes. The frontend build fingerprints and publishes these files.
 
-PAC base URLs are absolute HTTP(S) catalog application roots, optionally with a
-path, without query, fragment, credentials or placeholders. Example:
-`https://catalog.example.org/polaris`. Icon patterns accept HTTP(S) URLs or
-existing single-slash local paths, without credentials. Supported tokens are:
-
-| Token | Substitution / requirement |
-| --- | --- |
-| `{pacBaseUrl}` | Effective PAC base, without trailing slash; only at the pattern's start, followed by `/`. |
-| `{pacOrgId}` | Explicit positive library PAC organization ID. Required only when referenced. Never inferred from ASAP, requesting or pickup IDs. |
-| `{id}`, `{MARCTypeOfMaterialID}` | Provider material-type ID. |
-| `{id2}`, `{MARCTypeOfMaterialID2}` | Same ID padded to at least two digits. |
-| `{SearchCode}` | Provider definition's search code, URL-encoded. Required only when referenced. |
-
-Tokens cannot form a URL scheme or host. Unsupported/unresolved placeholders
-and unsafe URLs are rejected. Existing literal and absolute/local patterns
-remain usable without a PAC base. A blank PAC base disables only patterns that
-reference it. Preview uses the same server resolution/substitution code with
-synthetic IDs and the current selected settings scope/drafts; it never queries
-Polaris or saves settings. An inherited system pattern using `{pacOrgId}` can
-only render in a library context with that explicit mapping.
-
-Read-only inspection of the supplied public catalog on November 13, 2026 found
-`/polaris/themes/shared/formats/formatid01.gif` and `formatid50.gif`. The
-[Polaris material-type documentation](https://documentation.iii.com/polaris/7.6/PolarisStaffHelp/Public_Access_Admin/PDOpower/Type%20of%20Material%20Filters.htm)
-describes `themes/shared/formats/formatidNN.gif`; a suitable pattern is
-`{pacBaseUrl}/themes/shared/formats/formatid{id2}.gif`. These shared icons do not
-consume PAC context. The
-[PAC customization guide](https://documentation.iii.com/polaris/PolarisPDFGuides/PolarisPACCustomizationGuide_7.3.pdf)
-(page 29) identifies `ctx` as organization, language, then three unused legacy
-components: in `27.1033.0.0.12`, 27 is PAC organization and 1033 is English.
-Operators must confirm any library-specific mapping; ASAP supplies no guessed
-context values. Context-specific paths may use `{pacOrgId}` with literal
-language/legacy components as required by that catalog's configured convention.
-
-Runtime resolves presentation per lookup using the already authorized request
-library or specific servicing library, including exact-BIB lookup and ownership
-enrichment. An All libraries queue does not supply catalog scope. Missing
-configuration, required mappings/identifiers, unavailable definitions and failed
-images preserve useful labels and a decorative generic icon. No image-sync job
-or server image cache is used; browsers cache artwork. The existing host/library
-material-definition cache stores provider reference data only; URLs are rebuilt
-from current SQL configuration on each lookup, preventing stale cross-library
-presentation after edits.
+The schema-13 DACPAC discards the retired library artwork table and system
+artwork columns. Protected publishes remove the columns after verifying schema
+identity and before generating their executable plan. The DACPAC removes the
+table during postdeployment. LEAP links and operational organization IDs keep
+their existing settings.
 
 ## Holdings and action preview
 
@@ -178,7 +139,7 @@ and yields disabled mutation descriptors.
 
 Exact lookup retains bibliographic fields, `holdingsSummary`,
 `holdingsUnavailable`, and optional `patronHasHold`. It adds request/version and
-library context, material/icon fields when available, `holdingsStatus`,
+library context, material ID and label when available, `holdingsStatus`,
 `holdingsErrorCode`, and `queueActions`.
 
 | Holdings status | Meaning |

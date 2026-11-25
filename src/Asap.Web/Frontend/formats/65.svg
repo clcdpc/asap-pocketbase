@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 34 34"><g stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="4.2" width="21" height="23.9" rx="2.4" fill="#3299cc" stroke="#207ba7" stroke-width=".5"/>
+<path d="M23.4 7H28V27.2Q28 29.2 25.9 29.2H7.9V25.6H23.4Z" fill="#bcbdbd"/>
+<path d="M24.8 8.4V26.2M26.3 8.4V25.7M9.6 27.7H25.9" stroke="#f0f2f2" stroke-width=".7"/>
+<rect x="4.5" y="5.5" width="21.3" height="23.9" rx="2.6" fill="#f0f2f2" stroke="#3299cc" stroke-width="1.5"/>
+<rect x="4.5" y="5.5" width="3" height="23.9" rx="1.2" fill="#3299cc"/>
+<circle cx="11.4" cy="13.5" r="2.55" fill="#bcbdbd"/><circle cx="20.0" cy="13.5" r="2.55" fill="#bcbdbd"/>
+<circle cx="15.7" cy="17.5" r="6.1" fill="#bcbdbd"/><ellipse cx="15.7" cy="19.5" rx="3.2" ry="2.25" fill="#f0f2f2"/>
+<circle cx="13.3" cy="16.5" r=".65" fill="#207ba7"/><circle cx="18.1" cy="16.5" r=".65" fill="#207ba7"/>
+<path d="M14.9 18.7Q15.7 18.2 16.5 18.7L15.7 19.6Z" fill="#207ba7"/><path d="M15.7 19.5V20.3M14.5 20.3Q15.7 21.4 16.9 20.3" fill="none" stroke="#207ba7" stroke-width=".5"/></g></svg>

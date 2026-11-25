@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 34 34"><g stroke-linecap="round" stroke-linejoin="round"><g transform="translate(1.1 5.1) scale(0.993750 0.965385)">
+    <path d="M0 4H3.4V1.8H28.6V4H32V24.3H18.1L16 26L13.9 24.3H0Z" fill="#3299cc"/>
+    <path d="M2 2.7L5.3 1.0Q11.2 1.1 16 4Q20.8 1.1 26.7 1L30 2.7V22.4H26.8Q20.8 22 16 25Q11.2 22 5.2 22.4H2Z" fill="#bcbdbd"/>
+    <path d="M5.1 1.2Q10.3 .5 15.65 4V23.1Q10.7 20.6 5.1 21.5Z" fill="#f0f2f2" stroke="#75bedf" stroke-width=".65"/>
+    <path d="M16.35 4Q21.7 .5 26.9 1.2V21.5Q21.3 20.6 16.35 23.1Z" fill="#f0f2f2" stroke="#75bedf" stroke-width=".65"/>
+    <path d="M5.1 21.5Q10.7 20.6 15.65 23.1L16 24.6L16.35 23.1Q21.3 20.6 26.9 21.5" fill="none" stroke="#75bedf" stroke-width=".8"/>
+    <path d="M16 4.1V24.6" stroke="#3299cc" stroke-width="1.15"/>
+    
+    <g stroke-linejoin="round" stroke-linecap="round">
+      <!-- Left page, upper panel: portrait with dialogue -->
+      <path d="M6.55 4.15Q10.3 4.1 14.25 6.0V12.1H6.55Z" fill="#75bedf" stroke="#207ba7" stroke-width=".65"/>
+      <path d="M7.15 11.7V10.85Q7.3 9.3 9.4 9.15Q11.5 9.3 11.7 10.85V11.7Z" fill="#207ba7"/>
+      <circle cx="9.4" cy="7.95" r="1.65" fill="#f0f2f2" stroke="#207ba7" stroke-width=".4"/>
+      <path d="M7.8 7.75Q7.55 6.45 9.1 6.2Q10.7 6 11.02 7.6L10.25 7.3L9.4 6.9L8.55 7.7Z" fill="#207ba7"/>
+      <path d="M8.65 8H8.72M9.95 8H10.02" stroke="#207ba7" stroke-width=".46"/>
+      <path d="M8.95 8.85Q9.4 9.12 9.85 8.85" fill="none" stroke="#207ba7" stroke-width=".32"/>
+      <path d="M10.6 5.2Q11.8 4.75 13.3 5.55Q14.1 6.0 13.7 6.85Q13.3 7.6 12.25 7.4L11.1 8.0L11.3 7.15Q10.35 6.6 10.6 5.2Z" fill="#f0f2f2" stroke="#207ba7" stroke-width=".38"/>
+      <!-- Left page, lower panel: comic action and speed lines -->
+      <path d="M6.55 13.65H14.25V20.5Q10.4 18.75 6.55 19.4Z" fill="#e2e5e6" stroke="#207ba7" stroke-width=".65"/>
+      <path d="M7.5 14.45L9.2 16.0M7.2 16.75L9.0 16.95M7.3 18.55L9.25 17.9M13.45 14.5L12.25 15.65M13.6 19.2L12.2 18.2" fill="none" stroke="#75bedf" stroke-width=".65"/>
+      <path d="M10.9 14.05L11.6 15.75L13.35 15.5L12.45 17.1L13.3 18.75L11.55 18.45L10.6 19.55L10.05 17.95L8.55 17.35L10.1 16.5L9.85 14.75Z" fill="#3299cc"/>
+      <path d="M11.25 15.85L10.95 17.35M10.8 18.1H10.81" fill="none" stroke="#f0f2f2" stroke-width=".64"/>
+      <!-- Right page: large dialogue and character panel -->
+      <path d="M17.85 6.0Q21.7 4.1 25.45 4.15V19.4Q21.6 18.75 17.85 20.5Z" fill="#75bedf" stroke="#207ba7" stroke-width=".65"/>
+      <path d="M18.25 19.2V16.2Q18.25 13.6 21.6 13.45Q25.05 13.5 25.05 16.2V18.75Q21.7 18.35 18.25 19.2Z" fill="#207ba7"/>
+      <circle cx="21.6" cy="11.8" r="2.2" fill="#f0f2f2" stroke="#207ba7" stroke-width=".45"/>
+      <path d="M19.45 11.5Q19.2 9.7 21.0 9.4Q23.2 8.95 23.7 10.95L22.1 10.35L21.3 10.8L20.1 10.55Z" fill="#207ba7"/>
+      <path d="M20.6 12.75Q21.55 13.4 22.5 12.75" fill="none" stroke="#207ba7" stroke-width=".42"/>
+      <path d="M20.3 11.8H20.4M22.7 11.8H22.8" stroke="#207ba7" stroke-width=".65"/>
+      <path d="M18.35 6.4Q18.35 4.9 21.75 4.85Q24.95 4.8 24.95 6.7Q24.95 8.45 22.15 8.5L20.6 9.8L20.9 8.45Q18.35 8.1 18.35 6.4Z" fill="#f0f2f2" stroke="#207ba7" stroke-width=".55"/>
+      <path d="M19.8 6.65H23.55" stroke="#3299cc" stroke-width=".6" stroke-dasharray=".7 .85"/>
+    </g></g></g></svg>

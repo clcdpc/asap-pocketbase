@@ -526,7 +526,7 @@ async function runSourceComponents(artifacts) {
       for (const name of ['LEAP BIB record URL pattern', 'LEAP patron record URL pattern', 'Nonparticipating-library message', 'Misconfigured system message']) {
         assert.equal(await page.getByRole('textbox', { name, exact: true }).count(), 1, 'Visible field names omit their associated help.');
       }
-      for (const selector of ['#system-staff-url', '#leap-bib-url-pattern', '#format-icon-url-pattern']) {
+      for (const selector of ['#system-staff-url', '#leap-bib-url-pattern']) {
         const result = await contrast(page, selector, true); receipt.contrasts.push({ selector, ...result });
         assert.ok(result.ratios.every(value => value >= 3), `${selector}: ${JSON.stringify(result)}`);
       }

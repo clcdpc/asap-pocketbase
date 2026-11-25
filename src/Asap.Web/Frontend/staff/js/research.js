@@ -120,15 +120,8 @@ export function renderResearchLinks(container, request, research, draft = {}) {
   }
 }
 
-export function safeMaterialIconUrl(value) {
-  const text = String(value || '').trim();
-  if (/[\\\u0000-\u0020\u007f-\u009f]/.test(text)) return '';
-  if (text.startsWith('/')) return text.startsWith('//') ? '' : text;
-  if (!/^https?:\/\//i.test(text)) return '';
-  try {
-    const url = new URL(text);
-    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : '';
-  } catch { return ''; }
+function materialIconUrl(id) {
+  return id > 0 ? `/formats/${String(id).padStart(2, '0')}.svg` : '';
 }
 
 export function catalogActionReason(reason) {
@@ -339,7 +332,7 @@ export function createPolarisLookup({ authorizedJson, isAbortError, announce, se
       const artwork = node('div', { className: 'polaris-format-artwork', 'aria-hidden': 'true' });
       const fallback = node('span', { className: 'polaris-format-fallback fa fa-file-o' });
       artwork.append(fallback);
-      const iconUrl = safeMaterialIconUrl(row.formatIconUrl);
+      const iconUrl = materialIconUrl(row.materialTypeId);
       if (iconUrl) {
         const image = node('img', { src: iconUrl, alt: '', width: '64', height: '64' });
         image.hidden = true;

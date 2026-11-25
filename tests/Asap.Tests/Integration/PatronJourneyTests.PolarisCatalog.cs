@@ -4,10 +4,8 @@ using System.Text;
 using System.Text.Json;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
-using Asap.Web.Infrastructure.Data;
 using Asap.Web.Infrastructure.Testing;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Asap.Tests.Integration;
 
@@ -243,43 +241,4 @@ public sealed partial class PatronJourneyTests
         }
         Assert.IsFalse(fixture.Provider.Calls.Any(call => call.Operation == TestingPolarisOperation.BibSearch));
     }
-
-    [TestMethod]
-    [DataRow("https://catalog.example.org/icons/{id2}/{SearchCode}.png", "https://catalog.example.org/icons/53/lp.png")]
-    [DataRow("/icons/{MARCTypeOfMaterialID}.png", "/icons/53.png")]
-    [DataRow("javascript:alert(1)", null)]
-    [DataRow("data:image/svg+xml,<svg/>", null)]
-    [DataRow("//foreign.example.org/icon.png", null)]
-    [DataRow("https://user:password@example.org/icon.png", null)]
-    [DataRow("https://catalog.example.org/{unknown}.png", null)]
-    [DataRow("https://catalog.example.org/\\evil.png", null)]
-    public async Task PolarisCatalogMaterialDefinitionsResolveDescriptionsAndValidateIcons(string pattern, string? expected)
-    {
-        var provider = await CreatePolarisProviderAsync(new CatalogMaterialHandler());
-        var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
-        await using var context = await contexts.CreateDbContextAsync();
-        var settings = await context.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
-        var original = settings.MaterialTypeIconUrlPattern;
-        settings.MaterialTypeIconUrlPattern = pattern;
-        await context.SaveChangesAsync();
-        try
-        {
-            var result = await provider.SearchBibsAsync("title", "Title", "", "", 2, 1, CancellationToken.None);
-            var row = result.Results.Single(item => item.BibId == 9001);
-            Assert.AreEqual("Large print", row.Format);
-            Assert.AreEqual(53, row.MaterialTypeId);
-            Assert.AreEqual("lp", row.MaterialTypeSearchCode);
-            Assert.AreEqual(expected, row.FormatIconUrl);
-            Assert.AreEqual("Book", result.Results.Single(item => item.BibId == 9002).Format);
-            Assert.AreEqual("Unknown", result.Results.Single(item => item.BibId == 9003).Format);
-            Assert.AreEqual(2951, result.TotalMatches);
-        }
-        finally
-        {
-            settings.MaterialTypeIconUrlPattern = original;
-            await context.SaveChangesAsync();
-        }
-    }
-
-
 }

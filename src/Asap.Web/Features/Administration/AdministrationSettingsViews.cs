@@ -102,11 +102,7 @@ public sealed record SettingsScopeView(
     [property: JsonPropertyName("providers")] IReadOnlyList<SettingsProviderView> Providers,
     [property: JsonPropertyName("formats")] IReadOnlyList<SettingsFormatView> Formats,
     [property: JsonPropertyName("templates")] IReadOnlyList<EmailTemplateSettingsView> Templates,
-    [property: JsonPropertyName("branding")] BrandingSettingsView Branding)
-{
-    [JsonPropertyName("catalog")]
-    public Staff.CatalogPresentationValues? Catalog { get; init; }
-}
+    [property: JsonPropertyName("branding")] BrandingSettingsView Branding);
 
 public sealed record SystemSettingsView
 {
@@ -116,8 +112,6 @@ public sealed record SystemSettingsView
     public string? LeapBibUrlPattern { get; init; }
     [JsonPropertyName("leapPatronUrlPattern")]
     public string? LeapPatronUrlPattern { get; init; }
-    [JsonPropertyName("formatIconUrlPattern")]
-    public string? FormatIconUrlPattern { get; init; }
     [JsonPropertyName("systemNotEnabledMessage")]
     public string? SystemNotEnabledMessage { get; init; }
     [JsonPropertyName("misconfiguredMessage")]
