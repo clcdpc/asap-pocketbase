@@ -133,14 +133,14 @@ async function verifyStaffAppearance({ page, baseURL, library, staffIds, scan, r
       await goto(`stage=suggestion&scope=${library}`);
       await page.locator('#request-grid .request-title-link').first().waitFor();
       await check('direct-requests', { surfaces: ['#request-grid td', '#request-grid th', '#request-grid .gridjs-footer'],
-        text: ['#request-grid .request-title-link', '#request-grid .status-badge'], controls: ['#request-search'], actions: ['#new-suggestion'] });
+        text: ['#request-grid .request-title-link', '#request-grid td[data-request-column="identifier"] span'], controls: ['#request-search'], actions: ['#new-suggestion'] });
       await page.reload({ waitUntil: 'networkidle' });
       await check('requests-refresh', { surfaces: ['#request-grid td'], controls: ['#claim-filter'] }, false);
       for (const status of ['outstanding_purchase', 'pending_hold', 'hold_placed', 'closed', 'suggestion']) {
         await page.locator(`#status-tabs [data-status="${status}"]`).click();
         await page.locator('#request-grid .request-title-link').filter({ hasText: status === 'suggestion' ? 'Remediation title 0' : `Remediation ${status} title` }).waitFor();
         await page.waitForFunction(() => !document.querySelector('#refresh-queue').disabled);
-        await check(`requests-${status}`, { surfaces: ['#request-grid td'], text: ['#request-grid .status-badge', '#request-grid .request-title-link'] }, false);
+        await check(`requests-${status}`, { surfaces: ['#request-grid td'], text: ['#request-grid td[data-request-column="identifier"] span', '#request-grid .request-title-link'] }, false);
       }
       const more = page.locator('#request-grid .request-row-more').first();
       await more.click(); await page.locator('.request-table-menu:popover-open').waitFor();

@@ -84,10 +84,7 @@
 
       <section id="queue-view" aria-labelledby="queue-title">
         <div class="section-heading">
-          <div>
-            <h1 id="queue-title" tabindex="-1">Title requests</h1>
-            <p id="queue-summary">Loading authorized requests...</p>
-          </div>
+          <h1 id="queue-title" tabindex="-1">Title requests</h1>
           <div class="section-heading-actions">
             <button id="bulk-delete-closed" class="danger-button" type="button" hidden>Delete closed work...</button>
             <label id="scope-field" class="compact-field" hidden>
@@ -107,7 +104,7 @@
           <button type="button" role="tab" data-status="hold_placed" aria-selected="false">Placed holds</button>
           <button type="button" role="tab" data-status="closed" aria-selected="false">Closed</button>
         </div>
-        <p id="status-count-state" class="status-count-state" role="status" aria-live="polite">Counts unavailable. Refresh to load them.</p>
+        <p id="status-count-state" class="status-count-state" role="status" aria-live="polite">Loading authorized requests…</p>
 
         <div class="queue-filters" aria-label="Request filters">
           <label class="search-field">

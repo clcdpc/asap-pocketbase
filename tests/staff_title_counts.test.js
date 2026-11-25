@@ -44,7 +44,7 @@ const records = totals => totals.flatMap((total, index) => Array.from({ length: 
       assert.deepEqual(tabs().map(tab => tab.getAttribute('aria-label')),
         labels.map(label => `${label} (count ${loading ? 'loading' : 'unavailable'})`));
       assert.deepEqual(tabs().map(tab => tab.querySelector('.status-count').textContent), stages.map(() => loading ? '(…)' : '(—)'));
-      assert.match(get('#status-count-state').textContent, loading ? /Counts loading/ : /Counts unavailable/);
+      assert.match(get('#status-count-state').textContent, loading ? /Counts loading/ : /requests unavailable/i);
     };
     const reply = (totals, scope = context.scope, call = calls.at(-1)) => call.resolve({ scope, items: records(totals), organizations: [] });
     try {

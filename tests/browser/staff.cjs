@@ -3356,10 +3356,11 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       ['unique', suggestions.filter(item => item.relatedRequests?.count === 0).length]
     ]) {
       await page.locator('#similar-filter').selectOption(filter);
-      await page.waitForFunction(count =>
-        Number(document.querySelector('#queue-summary')?.textContent.match(/^\d+/)?.[0]) === count,
-      expected);
-      assert.equal(Number((await page.locator('#queue-summary').textContent()).match(/^\d+/)[0]), expected);
+      if (expected === 0) {
+        await page.locator('#request-grid .gridjs-notfound').waitFor();
+      } else {
+        await page.locator('#request-grid .gridjs-summary').filter({ hasText: `of ${expected} results` }).waitFor();
+      }
     }
     let releaseScopedQueue;
     const scopedQueueGate = new Promise(resolve => { releaseScopedQueue = resolve; });
@@ -3379,7 +3380,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       await scopedQueueStarted;
       await page.waitForFunction(() => document.querySelectorAll('#request-grid a.grid-open').length === 0);
       assert.equal(await page.locator('#similar-filter').inputValue(), 'all');
-      assert.match(await page.locator('#queue-summary').textContent(), /Requests unavailable/);
+      assert.equal(await page.locator('#queue-empty').isVisible(), false, 'An outstanding scope read is not an empty stage.');
       assert.match(await page.locator('#status-count-state').textContent(), /Counts loading/,
         'The deliberately held scope read keeps count feedback in its loading state');
     } finally {

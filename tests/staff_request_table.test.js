@@ -151,6 +151,11 @@ async function until(predicate, message) {
       capabilities: { allowedActions: ['purchase', 'reject', 'alreadyOwn', 'silentClose'] },
       research: { patronId: index + 1, leapPatronUrlPattern: 'https://catalog.example.org/patron/{{patron-id}}' }
     })).reverse();
+    // Text order differs from numeric order, and one saved value includes punctuation.
+    data[0].identifier = '2';
+    data[1].identifier = '10';
+    data[2].identifier = '000-123';
+    data[3].identifier = null;
     const queue = createTitleQueue({ root: get('#queue-view'), sessionIdentity: session, claimsFilter: createClaimsFilter({ sessionIdentity: session }), getContext: () => context,
       announce() {}, onOpen: (...args) => opened.push(args), onNewSuggestion: (...args) => created.push(args),
       polarisLookup: { open: value => searches.push(value), close: value => closed.push(value) },
@@ -168,7 +173,7 @@ async function until(predicate, message) {
     const first = () => rows()[0];
     await until(() => first()?.querySelector('.request-title-link'), 'Real Grid.js renders request title links.');
     assert.deepEqual([...get('#request-grid').querySelectorAll('th')].map(node => node.querySelector('.gridjs-th-content').textContent),
-      ['Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Status', 'Actions']);
+      ['Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Identifier', 'Actions']);
     const headings = [...get('#request-grid').querySelectorAll('th')];
     const assertSort = (header, direction, next) => {
       const name = header.querySelector('.gridjs-th-content').textContent;
@@ -184,13 +189,17 @@ async function until(predicate, message) {
         header.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', which: 13, keyCode: 13, shiftKey, bubbles: true }));
         await until(() => header.getAttribute('aria-sort') === direction, `Keyboard sort exposes ${direction}`);
         assertSort(header, direction, next);
+        if (header.dataset.requestColumn === 'identifier' && direction === 'ascending') {
+          assert.deepEqual(rows().slice(0, 3).map(row => row.cells[6].textContent), ['000-123', '10', '2']);
+        }
         assert.equal(document.activeElement, header, 'Sorting retains its header focus');
       }
     }
     assert.equal(headings[7].hasAttribute('aria-sort'), false, 'Actions is unsortable');
     assert.equal(headings[7].querySelector('button'), null);
     assert.equal(first().cells.length, 8); assert.equal(rows().length, 25);
-    assert.match(get('#queue-summary').textContent, /55 suggestion requests/);
+    assert.equal(rows()[3].cells[6].textContent, 'Not recorded');
+    assert.match(get('#request-grid .gridjs-summary').textContent, /1 to 25 of 55 results/);
     const assertCounts = () => assert.deepEqual([...get('#status-tabs').querySelectorAll('[data-status]')].map(tab => tab.getAttribute('aria-label')),
       [`Suggestions (${data.length})`, 'Purchases (0)', 'Pending holds (0)', 'Placed holds (0)', 'Closed (0)']);
     assertCounts();
@@ -231,7 +240,7 @@ async function until(predicate, message) {
     await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 54'), 'The full accepted result renders before filtering.');
     get('#request-search').value = 'Author 03'; get('#request-search').dispatchEvent(new dom.window.Event('input'));
     await until(() => rows().length === 1 && first().textContent.includes('Title 03'), 'Author search resets paging and finds its request.');
-    assert.match(get('#queue-summary').textContent, /^1 suggestion request$/);
+    assert.match(get('#request-grid .gridjs-summary').textContent, /1 to 1 of 1 results/);
     assertCounts();
     get('#request-search').value = 'IDENTIFIER-4'; get('#request-search').dispatchEvent(new dom.window.Event('input'));
     await until(() => rows().length === 11 && get('#request-grid .gridjs-summary')?.textContent.includes('of 11'), 'Identifier search remains supported.');
@@ -282,10 +291,15 @@ async function until(predicate, message) {
       ['suggestion', null, { allowedActions: ['reject'] }, ['reject', 'claim', 'assign']]
     ]) {
       const previous = context; context = { ...context, status }; queue.contextChanged(context, previous);
-      data = [{ ...data[0], status, claimedByStaffUserId: claim, capabilities }];
+      data = [{ ...data[0], status, identifier: '001-234', closeReason: 'manual', claimedByStaffUserId: claim, capabilities }];
       await queue.refresh();
       await until(() => first()?.querySelectorAll('[data-request-action]').length === expected.length, 'Accepted status/capability projection replaces its commands');
       assert.deepEqual([...first().querySelectorAll('[data-request-action]')].map(n => n.dataset.requestAction), expected);
+      assert.equal(get('#request-grid th[data-request-column="identifier"] .gridjs-th-content').textContent, 'Identifier');
+      const identifier = first().querySelector('td[data-request-column="identifier"]');
+      assert.equal(identifier.querySelector('span').textContent, '001-234');
+      assert.equal(identifier.querySelector('small')?.textContent, status === 'closed' ? 'Closed by staff' : undefined);
+      assert.equal(first().querySelector('.status-badge'), null);
       assert.equal(first().querySelector('[data-request-action="edit"]'), null, 'Details remain a row/title path');
       if (!expected.length) assert.equal(first().querySelector('.request-row-more, [popover]'), null);
     }

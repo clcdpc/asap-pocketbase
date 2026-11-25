@@ -14,7 +14,7 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await page.locator('#claim-filter').selectOption('all');
   await page.waitForFunction(() => document.querySelectorAll('#request-grid tbody tr').length === 25);
   assert.deepEqual(await grid.locator('th .gridjs-th-content').allTextContents(),
-    ['Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Status', 'Actions']);
+    ['Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Identifier', 'Actions']);
   for (const header of await grid.locator('th').all().then(headers => headers.slice(0, 7))) {
     const name = await header.locator('.gridjs-th-content').textContent();
     await header.focus();
@@ -152,7 +152,7 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
     } catch (error) {
       throw new Error(`List action ${action}: ${JSON.stringify(await page.evaluate(() => ({
         url: location.href, search: document.querySelector('#request-search').value,
-        summary: document.querySelector('#queue-summary').textContent,
+        summary: document.querySelector('#request-grid .gridjs-summary')?.textContent,
         titles: [...document.querySelectorAll('#request-grid .request-title-link')].map(node => node.textContent)
       })))}`, { cause: error });
     }

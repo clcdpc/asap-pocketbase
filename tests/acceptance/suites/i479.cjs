@@ -35,10 +35,14 @@ async function rows(t, copy, scope, status, choice, actor) {
   const expected = [...ordered].sort();
   const grid = copy ? '#additional-copy-grid' : '#request-grid';
   const selector = grid + (copy ? ' .additional-copy-open' : ' .request-title-link');
-  const summary = copy ? '#additional-copy-summary' : '#queue-summary';
-  await t.page.waitForFunction(({ copy, summary, count }) =>
-    !document.querySelector(copy ? '#refresh-additional-copies' : '#refresh-queue').disabled &&
-    new RegExp('^' + count + ' ').test(document.querySelector(summary).textContent), { copy, summary, count: expected.length });
+  await t.page.locator(copy ? '#refresh-additional-copies:enabled' : '#refresh-queue:enabled').waitFor();
+  if (copy) {
+    await t.page.locator('#additional-copy-summary').filter({ hasText: new RegExp('^' + expected.length + ' ') }).waitFor();
+  } else if (expected.length) {
+    await t.page.locator('#request-grid .gridjs-summary').filter({ hasText: `of ${expected.length} results` }).waitFor();
+  } else {
+    await t.page.locator('#request-grid .gridjs-notfound').waitFor();
+  }
   // Refresh intentionally preserves the current page. Reset before asserting
   // first-page cardinality, then collect every page for the exact-row oracle.
   // The controller summary becomes ready before asynchronous Grid.js mounting;

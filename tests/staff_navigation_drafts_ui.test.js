@@ -3087,7 +3087,7 @@ for (const copy of [false, true]) {
         await until(() => queueReads > before && /Queue review unavailable/.test(ui.get('#app-status').textContent), 'same-scope failed refresh presented');
         assert.equal(ui.get(`${grid} .grid-open`), null);
         assert.doesNotMatch(ui.get(grid).textContent, /Before configuration commit/);
-        assert.match(ui.get(copy ? '#additional-copy-summary' : '#queue-summary').textContent, /unavailable/i);
+        assert.match(ui.get(copy ? '#additional-copy-summary' : '#status-count-state').textContent, /unavailable/i);
         available = true; ui.get(copy ? '#refresh-additional-copies' : '#refresh-queue').click();
         await until(() => /Reviewed request/.test(ui.get(grid).textContent), 'explicit retry renders fresh data');
       }, { copyRequest: {} }));
