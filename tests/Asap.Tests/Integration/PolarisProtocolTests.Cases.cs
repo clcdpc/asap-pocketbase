@@ -571,6 +571,9 @@ public sealed partial class PolarisProtocolTests
 
     [TestMethod]
     [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"ControlNumber\":9999,\"BibGetRows\":[{\"ElementID\":1,\"Value\":\"Title\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"PrimaryTypeOfMaterial\":\"unknown\",\"BibGetRows\":[{\"ElementID\":1,\"Value\":\"Title\"}]}")]
+    [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":6,\"Label\":\"Title\",\"label\":\"ISBN\",\"Value\":\"9780306406157\"}]}")]
     [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"Value\":\"Catalog title\"}]}")]
     [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":35}]}")]
     [DataRow("{\"PAPIErrorCode\":0,\"BibGetRows\":[{\"ElementID\":0,\"Value\":\"Catalog title\"}]}")]

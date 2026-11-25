@@ -25,6 +25,13 @@ CREATE TABLE [asap].[TitleRequest]
     [CloseReason] nvarchar(64) NULL,
     [BibId] int NULL,
     [BibIdStaffVerified] bit NOT NULL CONSTRAINT [DF_TitleRequest_BibIdStaffVerified] DEFAULT (0),
+    [AutoVerifiedBibId] int NULL,
+    [AutoVerifiedIdentifier] nvarchar(100) NULL,
+    [HasTrustedBib] AS CONVERT(bit, CASE WHEN [BibId] > 0 AND
+        ([BibIdStaffVerified] = 1 OR ([AutoVerifiedBibId] = [BibId] AND DATALENGTH([Identifier]) > 0 AND
+         DATALENGTH([Identifier]) = DATALENGTH([AutoVerifiedIdentifier]) AND
+         CONVERT(varbinary(200), [AutoVerifiedIdentifier]) = CONVERT(varbinary(200), [Identifier])))
+        THEN 1 ELSE 0 END),
     [Notes] nvarchar(max) NULL,
     [ClaimedByStaffUserId] bigint NULL,
     [ClaimedByDisplayName] nvarchar(256) NULL,
@@ -32,6 +39,7 @@ CREATE TABLE [asap].[TitleRequest]
     [ClaimType] nvarchar(32) NULL,
     [ClaimRuleId] bigint NULL,
     [LastPromoterCheckUtc] datetime2(7) NULL,
+    [LastPromoterResult] nvarchar(256) NULL,
     [IsbnCheckStatus] nvarchar(32) NULL,
     [IsbnCheckResult] nvarchar(max) NULL,
     [IsbnCheckRetryCount] int NOT NULL CONSTRAINT [DF_TitleRequest_IsbnCheckRetryCount] DEFAULT (0),

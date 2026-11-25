@@ -122,6 +122,7 @@ public sealed record TitleRequestDto(
     string? PatronNotificationReason = null)
 {
     public bool CustomFieldsValid { get; init; } = true;
+    public string? LastPromoterResult { get; init; }
     public RelatedRequestSummary? RelatedRequests { get; init; }
     public RequestWorkflowContext? WorkflowContext { get; init; }
     public PickupOperationSummary? PickupOperation { get; init; }
@@ -515,6 +516,7 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
                     .ThenBy(item => long.Parse(item.Id, CultureInfo.InvariantCulture)).ToArray() : [])
             {
                 CustomFieldsValid = customFieldsValid,
+                LastPromoterResult = request.LastPromoterResult,
                 Research = research with { PatronId = request.PatronIdSnapshot is > 0 ? request.PatronIdSnapshot : null },
                 AdditionalCopyRequestId = latestCopy?.Id.ToString(CultureInfo.InvariantCulture),
                 HasOpenAdditionalCopy = copies.Any(item => item.IsOpen),

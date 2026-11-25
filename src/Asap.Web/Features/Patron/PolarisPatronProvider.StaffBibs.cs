@@ -32,14 +32,7 @@ public sealed partial class PolarisPatronProvider
         try
         {
             var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
-            var options = new BibSearchOptions
-            {
-                Branch = organizationId, SearchType = type, Qualifier = qualifier, Term = term, SortOption = sort,
-                Page = page, PageSize = StaffBibSearchResult.PageSize, NoTransaction = true
-            };
-            var response = await client.CallAsync(() => client.BibSearchAsync(options, cancellationToken), cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            var search = InspectStaffSearchResponse(response, page);
+            var search = await ReadCatalogPageAsync(client, organizationId, type, qualifier, term, sort, page, cancellationToken);
             var visible = search.Results.Where(row => row.MaterialTypeId is not (36 or 41))
                 .DistinctBy(row => row.BibId).ToArray();
             var presented = await PresentStaffMaterialsAsync(client, visible, organizationId, cancellationToken);
@@ -60,8 +53,17 @@ public sealed partial class PolarisPatronProvider
         }
     }
 
-    private static StaffBibSearchResult InspectStaffSearchResponse(IRestResponse<BibSearchResult> response, int page)
+    private static async Task<StaffBibSearchResult> ReadCatalogPageAsync(DispatchAwarePapiClient client,
+        int organizationId, BibSearchTypes type, SearchQualifiers qualifier, string term, SearchSortOptions sort,
+        int page, CancellationToken cancellationToken, bool purchaseDiscovery = false)
     {
+        var options = new BibSearchOptions
+        {
+            Branch = organizationId, SearchType = type, Qualifier = qualifier, Term = term, SortOption = sort,
+            Page = page, PageSize = StaffBibSearchResult.PageSize, NoTransaction = true
+        };
+        var response = await client.CallAsync(() => client.BibSearchAsync(options, cancellationToken), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (response.Response?.IsSuccessStatusCode != true || response.Data is null)
         {
             throw new PolarisOperationalException("polaris_bib_search_failed", "Polaris BIB search was unavailable.");
@@ -71,6 +73,7 @@ public sealed partial class PolarisPatronProvider
         var root = document.RootElement;
         var offset = (page - 1L) * StaffBibSearchResult.PageSize;
         if (root.ValueKind != JsonValueKind.Object ||
+            purchaseDiscovery && HasDuplicateProperties(root) ||
             !TryGetUniqueProperty(root, "PAPIErrorCode", out var codeElement) ||
             codeElement.ValueKind != JsonValueKind.Number || !codeElement.TryGetInt32(out var code) ||
             response.Data.PAPIErrorCode != code ||
@@ -82,7 +85,7 @@ public sealed partial class PolarisPatronProvider
             (rows.GetArrayLength() == 0 ? offset < total : offset + rows.GetArrayLength() > total) ||
             code < -1 || (code == -1 && (total != 0 || !HasNoSearchErrorMessage(root))) ||
             (code > 0 && code != rows.GetArrayLength()) ||
-            !TryReadStaffSearchRows(rows, response.Data, out var staffRows))
+            !TryReadStaffSearchRows(rows, response.Data, purchaseDiscovery, out var staffRows))
         {
             throw new PolarisOperationalException("polaris_bib_search_failed", "Polaris returned an inconsistent BIB search page.");
         }
@@ -114,6 +117,7 @@ public sealed partial class PolarisPatronProvider
     private static bool TryReadStaffSearchRows(
         JsonElement rows,
         BibSearchResult data,
+        bool purchaseDiscovery,
         out IReadOnlyList<StaffBibSearchRow> candidates)
     {
         candidates = [];
@@ -136,10 +140,19 @@ public sealed partial class PolarisPatronProvider
                 return false;
             }
 
+            if (purchaseDiscovery && (!TryGetUniqueProperty(row, "PrimaryTypeOfMaterial", out var primary) ||
+                !TryReadPositiveInt32(primary, out var materialId) || materialId != model.PrimaryTypeOfMaterial))
+            {
+                return false;
+            }
+
             result.Add(new StaffBibSearchRow(bibId, Clean(model.Title), Clean(model.Author), Clean(model.PublicationDate),
                 Clean(model.TypeOfMaterial), Clean(model.ISBN) ?? Clean(model.UPC))
             {
                 Publisher = Clean(model.Publisher),
+                SearchIdentifiers = purchaseDiscovery ? new[] { model.ISBN, model.UPC,
+                    TryGetUniqueProperty(row, "LCCN", out var lccn) && lccn.ValueKind == JsonValueKind.String
+                        ? lccn.GetString() : null } : [],
                 MaterialTypeId = model.PrimaryTypeOfMaterial ?? ParseMaterialTypeId(model.TypeOfMaterial)
             });
         }
@@ -391,6 +404,12 @@ public sealed partial class PolarisPatronProvider
 
     private static string IdentifierSearch(string text)
     {
+        var (identifier, lccn) = NormalizeCatalogIdentifier(text);
+        return $"ISBN=\"{identifier}\" OR UPC=\"{identifier}\" OR LCCN=\"{lccn}\"";
+    }
+
+    private static (string Identifier, string Lccn) NormalizeCatalogIdentifier(string text)
+    {
         // Build literals from identifier characters only. No user quote, wildcard or escape reaches CCL.
         var compact = Regex.Replace(text, @"[\s\-_.:/]+", "").ToUpperInvariant();
         var identifier = string.Concat(compact.EnumerateRunes()
@@ -405,7 +424,108 @@ public sealed partial class PolarisPatronProvider
         {
             lccn = identifier;
         }
-        return $"ISBN=\"{identifier}\" OR UPC=\"{identifier}\" OR LCCN=\"{lccn}\"";
+        return (identifier, lccn);
+    }
+
+    internal static bool SupportsPurchaseIdentifier(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || !Regex.IsMatch(text, @"^[a-zA-Z0-9\s./_:\-]+$"))
+        {
+            return false;
+        }
+        var (identifier, lccn) = NormalizeCatalogIdentifier(text);
+        return Regex.IsMatch(identifier, @"^(?:[0-9]{8}|[0-9]{9}[0-9X]|[0-9]{12,14})$") ||
+            Regex.IsMatch(lccn, @"^[a-z]{0,3}(?:[0-9]{8}|[0-9]{10})$", RegexOptions.IgnoreCase);
+    }
+
+    public async Task<IdentifierLookupResult> LookupPurchaseIdentifierAsync(string identifier,
+        int organizationId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!SupportsPurchaseIdentifier(identifier))
+        {
+            return OperationalResult("unsupported_identifier");
+        }
+        var normalized = NormalizeCatalogIdentifier(identifier);
+        bool ConfirmsIdentifier(string? value)
+        {
+            if (!SupportsPurchaseIdentifier(value))
+            {
+                return false;
+            }
+            var candidate = NormalizeCatalogIdentifier(value!);
+            return candidate.Identifier == normalized.Identifier ||
+                string.Equals(candidate.Lccn, normalized.Lccn, StringComparison.OrdinalIgnoreCase);
+        }
+
+        try
+        {
+            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
+            var term = IdentifierSearch(identifier);
+            StaffBibSearchRow? selected = null;
+            var corroborated = false;
+            var materials = new Dictionary<int, int?>();
+            int? total = null;
+            var examined = 0;
+            for (var page = 1; ; page++)
+            {
+                var result = await ReadCatalogPageAsync(client, organizationId, BibSearchTypes.boolean,
+                    SearchQualifiers.KW, term, SearchSortOptions.PDTI, page, cancellationToken, purchaseDiscovery: true);
+                total ??= result.TotalMatches;
+                if (result.TotalMatches != total || result.Results.Count != Math.Min(StaffBibSearchResult.PageSize, total.Value - examined))
+                {
+                    return OperationalResult("incomplete_catalog_search");
+                }
+                foreach (var row in result.Results)
+                {
+                    if (materials.TryGetValue(row.BibId, out var previousType) && previousType != row.MaterialTypeId)
+                    {
+                        return OperationalResult("inconsistent_catalog_material");
+                    }
+                    materials[row.BibId] = row.MaterialTypeId;
+                    if (row.MaterialTypeId is 36 or 41)
+                    {
+                        continue;
+                    }
+                    if (selected is not null && selected.BibId != row.BibId)
+                    {
+                        return new IdentifierLookupResult(IdentifierLookupOutcome.Found, MultipleMatches: true);
+                    }
+                    selected ??= row;
+                    corroborated |= row.SearchIdentifiers.Any(ConfirmsIdentifier);
+                }
+                examined += result.Results.Count;
+                if (examined == total)
+                {
+                    break;
+                }
+            }
+            if (selected is null)
+            {
+                return new IdentifierLookupResult(IdentifierLookupOutcome.DefinitiveNotFound, FilteredByMaterialType: examined > 0);
+            }
+            if (!corroborated)
+            {
+                // Search summaries can omit secondary identifiers and LCCNs.
+                var detail = await ValidateBibAsync(selected.BibId, organizationId, cancellationToken);
+                if (!detail.IsValid || (detail.PrimaryMaterialTypeId.HasValue && detail.PrimaryMaterialTypeId != selected.MaterialTypeId) ||
+                    !detail.CatalogIdentifiers.Any(ConfirmsIdentifier))
+                {
+                    return OperationalResult("unconfirmed_catalog_identifier");
+                }
+                selected = selected with { Title = detail.Title ?? selected.Title, Author = detail.Author ?? selected.Author };
+            }
+            return new IdentifierLookupResult(IdentifierLookupOutcome.Found, selected.BibId,
+                CatalogTitle: selected.Title, CatalogAuthor: selected.Author);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is PolarisOperationalException || IsExpectedProviderFailure(exception))
+        {
+            return OperationalResult("purchase_catalog_unavailable");
+        }
     }
 
     private static string QuoteSearch(string value) =>

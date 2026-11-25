@@ -9,7 +9,7 @@ public enum TestingPolarisOperation
 {
     Connection, Organizations, PatronCodes, Authenticate, Refresh, PatronId, PickupBranches,
     PickupUpdate, IdentifierLookup, BibValidation, BibSearch, PatronSearch, BibHoldings,
-    PatronHolds, PatronCheckouts, HoldCreate, HoldReply
+    PatronHolds, PatronCheckouts, HoldCreate, HoldReply, PurchaseIdentifierLookup
 }
 
 public sealed record TestingPolarisCall(
@@ -173,6 +173,12 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
 
     public Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken) =>
         Read<BibValidationResult>(new(TestingPolarisOperation.BibValidation, organizationId, NativeId: bibId), cancellationToken);
+
+    public void SetPurchaseIdentifierResult(string identifier, int organizationId, IdentifierLookupResult result) =>
+        Set(new(TestingPolarisOperation.PurchaseIdentifierLookup, organizationId, identifier), result);
+
+    public Task<IdentifierLookupResult> LookupPurchaseIdentifierAsync(string identifier, int organizationId, CancellationToken cancellationToken) =>
+        Read<IdentifierLookupResult>(new(TestingPolarisOperation.PurchaseIdentifierLookup, organizationId, identifier), cancellationToken);
 
     public Task<StaffBibSearchResult> SearchBibsAsync(string mode, string query, string title, string author,
         int organizationId, int page, CancellationToken cancellationToken) =>

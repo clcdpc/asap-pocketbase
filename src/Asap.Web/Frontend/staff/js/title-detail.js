@@ -840,6 +840,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     detailsPanel.append(element('p', { className: 'field-help request-metadata',
       text: [`Identifier check: ${text(request.isbnCheckStatus)}`, `Phase entered ${dateTime(request.phaseEnteredAt)}`,
         request.status === 'closed' ? `Close reason: ${closeReasonLabel(request.closeReason)}` : ''].filter(Boolean).join(' · ') }));
+    if (request.lastPromoterResult) {
+      detailsPanel.append(element('p', { className: 'field-help', text: request.lastPromoterResult }));
+    }
     if (request.additionalCopyRequestId) {
       detailsPanel.append(element('p', { className: 'related-additional-copy' }, [
         element('span', { text: 'Linked additional-copy task: ' }),
@@ -873,7 +876,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         text: request.status === 'suggestion'
           ? `Suggestion timeout: ${timeoutLabel(request.workflowContext.outstandingTimeoutEnabled, request.workflowContext.outstandingTimeoutDays)}`
           : request.status === 'outstanding_purchase'
-            ? `Auto promotion when a BIB is available: ${request.workflowContext.autoPromote ? 'On' : 'Off'}`
+            ? `Automatically check for an eligible catalog match: ${request.workflowContext.autoPromote ? 'On' : 'Off'}`
             : request.status === 'pending_hold'
               ? `Pending hold timeout: ${timeoutLabel(request.workflowContext.pendingHoldTimeoutEnabled, request.workflowContext.pendingHoldTimeoutDays)}`
               : `Hold pickup timeout: ${timeoutLabel(request.workflowContext.holdPickupTimeoutEnabled, request.workflowContext.holdPickupTimeoutDays)}`

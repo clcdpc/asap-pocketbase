@@ -103,6 +103,33 @@ public sealed partial class DatabaseBaselineTests
 
 
     [TestMethod]
+    public async Task PurchaseVerificationUpgradePreservesAssignedBibsWithoutBackfillingTrust()
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        await NonQuery(connection, """
+            ALTER TABLE [asap].[TitleRequest] DROP COLUMN [HasTrustedBib];
+            ALTER TABLE [asap].[TitleRequest] DROP COLUMN [AutoVerifiedBibId], [AutoVerifiedIdentifier], [LastPromoterResult];
+            INSERT INTO [asap].[Organization] ([Id],[DisplayName],[OrganizationCodeId],[ParentOrganizationId],[IsActive])
+                VALUES (543, N'Upgrade fixture', 2, 1, 1);
+            INSERT INTO [asap].[TitleRequest] ([LibraryOrganizationId], [Barcode], [Title], [AutoHold], [MaterialFormatId],
+                [Status], [BibId], [BibIdStaffVerified], [Identifier], [CreatedUtc], [UpdatedUtc])
+                SELECT 543, N'543', N'Existing purchase', 1, (SELECT TOP (1) Id FROM [asap].[MaterialFormat] ORDER BY Id),
+                    N'outstanding_purchase', 543, verified, N'001234567890', SYSUTCDATETIME(), SYSUTCDATETIME()
+                FROM (VALUES (0), (1)) flags(verified);
+            """);
+        new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+        Assert.AreEqual(2, await Scalar(connection, """
+            SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 543 AND [BibId] = 543
+                AND [HasTrustedBib] = [BibIdStaffVerified] AND [AutoVerifiedBibId] IS NULL AND [AutoVerifiedIdentifier] IS NULL;
+            """));
+        await NonQuery(connection, """
+            DELETE FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 543;
+            DELETE FROM [asap].[Organization] WHERE [Id] = 543;
+            """);
+    }
+
+    [TestMethod]
     public async Task RuntimeRoleCanAcquirePatronWriteIntentLocksWithoutSchemaPermissions()
     {
         await using var connection = new SqlConnection(_databaseConnectionString);

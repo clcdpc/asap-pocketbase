@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using Clc.Polaris.Api.Models;
 
 namespace Asap.Web.Infrastructure.Data;
@@ -380,6 +381,10 @@ public sealed class TitleRequest
     public string? CloseReason { get; set; }
     public int? BibId { get; set; }
     public bool BibIdStaffVerified { get; set; }
+    public int? AutoVerifiedBibId { get; set; }
+    public string? AutoVerifiedIdentifier { get; set; }
+    [DatabaseGenerated(DatabaseGeneratedOption.Computed)]
+    public bool HasTrustedBib { get; internal set; }
     public string? Notes { get; set; }
     public long? ClaimedByStaffUserId { get; set; }
     public string? ClaimedByDisplayName { get; set; }
@@ -387,6 +392,7 @@ public sealed class TitleRequest
     public string? ClaimType { get; set; }
     public long? ClaimRuleId { get; set; }
     public DateTime? LastPromoterCheckUtc { get; set; }
+    public string? LastPromoterResult { get; set; }
     public string? IsbnCheckStatus { get; set; }
     public string? IsbnCheckResult { get; set; }
     public int IsbnCheckRetryCount { get; set; }

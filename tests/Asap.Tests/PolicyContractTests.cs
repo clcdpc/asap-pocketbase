@@ -77,7 +77,8 @@ public sealed class PolicyContractTests
         Assert.IsNull(TitleRequestWorkflowPolicy.ResolveStatus("purchase", RequestStatus.HoldPlaced, request.Status, request.BibId));
         request.Status = RequestStatus.PendingHold;
         request.AutoHold = true;
-        request.BibIdStaffVerified = true;
+        Assert.IsFalse(TitleRequestWorkflowPolicy.Evaluate(request, false, false).CanPlaceHold);
+        request.HasTrustedBib = true; // SQL computes this input from the current BIB and its evidence.
         Assert.IsTrue(TitleRequestWorkflowPolicy.Evaluate(request, false, false).CanPlaceHold);
         Assert.IsFalse(TitleRequestWorkflowPolicy.Evaluate(request, false, true).CanPlaceHold);
         request.Status = RequestStatus.Closed;

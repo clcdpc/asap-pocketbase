@@ -9,7 +9,7 @@ public static class TitleRequestWorkflowPolicy
     private static readonly Func<TitleRequest, bool> IsHoldPlacementStage = HoldPlacementStage.Compile();
 
     public static bool CanPlaceHold(TitleRequest request) => IsHoldPlacementStage(request) &&
-        request.BibId is > 0 && request.BibIdStaffVerified;
+        request.HasTrustedBib;
 
     private static TitleRequestCapabilities EvaluateCapabilities(
         TitleRequest request,

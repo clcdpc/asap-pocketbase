@@ -582,7 +582,7 @@ public sealed partial class PolarisPatronProvider(
                     "Polaris could not complete BIB validation.");
             }
 
-            if (!TryReadUsableBibGetRows(rawContent, out var rawRowCount) ||
+            if (!TryReadUsableBibGetRows(rawContent, bibId, out var rawRowCount, out var primaryMaterial) ||
                 data.BibGetRows is null || data.BibGetRows.Count == 0 || data.BibGetRows.Count != rawRowCount ||
                 data.BibGetRows.Any(row => row is null || row.ElementID <= 0 || row.Value is null))
             {
@@ -607,7 +607,11 @@ public sealed partial class PolarisPatronProvider(
                 Clean(data.ISBN) ?? Clean(data.ISSN) ?? Clean(data.UPC?.FirstOrDefault()),
                 Clean(data.Publisher?.FirstOrDefault()))
             {
-                MaterialTypeId = material.MaterialTypeId
+                MaterialTypeId = material.MaterialTypeId,
+                PrimaryMaterialTypeId = primaryMaterial,
+                CatalogIdentifiers = data.BibGetRows.Where(row => row.Label?.Trim().ToUpperInvariant() is
+                        "ISBN" or "UPC" or "LCCN" or "LIBRARY OF CONGRESS CONTROL NUMBER")
+                    .Select(row => row.Value).ToArray()
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1860,23 +1864,37 @@ public sealed partial class PolarisPatronProvider(
         }
     }
 
-    private static bool TryReadUsableBibGetRows(string? content, out int rowCount)
+    private static bool TryReadUsableBibGetRows(string? content, int bibId, out int rowCount, out int? primaryMaterial)
     {
         rowCount = 0;
+        primaryMaterial = null;
         try
         {
             using var document = JsonDocument.Parse(content ?? string.Empty);
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
+            if (root.ValueKind != JsonValueKind.Object || HasDuplicateProperties(root) ||
                 !TryGetUniqueProperty(root, "BibGetRows", out var rows) ||
                 rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() == 0)
             {
                 return false;
             }
+            if (TryGetUniqueProperty(root, "ControlNumber", out var control) &&
+                (!TryReadPositiveInt32(control, out var returnedBib) || returnedBib != bibId))
+            {
+                return false;
+            }
+            if (TryGetUniqueProperty(root, "PrimaryTypeOfMaterial", out var primary) && primary.ValueKind != JsonValueKind.Null)
+            {
+                if (!TryReadPositiveInt32(primary, out var materialId))
+                {
+                    return false;
+                }
+                primaryMaterial = materialId;
+            }
 
             foreach (var row in rows.EnumerateArray())
             {
-                if (row.ValueKind != JsonValueKind.Object ||
+                if (row.ValueKind != JsonValueKind.Object || HasDuplicateProperties(row) ||
                     !TryGetUniqueProperty(row, "ElementID", out var elementId) ||
                     elementId.ValueKind != JsonValueKind.Number ||
                     !elementId.TryGetInt32(out var numericElementId) || numericElementId <= 0 ||

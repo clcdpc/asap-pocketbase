@@ -91,6 +91,29 @@ Remaining live checks include known ISBN, UPC and LCCN records, title stop words
 and punctuation, author formats outside the verified example, and the deployed
 catalog's deepest navigable page, site-specific limits and out-of-range response.
 
+## Approved purchase discovery
+
+When a library enables **Automatically promote approved purchases**, each purchase
+promotion cycle revisits its outstanding purchases, including those whose earlier
+suggestion lookup exhausted its retries. Discovery uses the identifier query above.
+It checks the reported total and every required page, excludes primary material
+types 36 and 41, and counts distinct BIB IDs. Two eligible IDs require staff
+selection. A single eligible BIB must carry matching identifier evidence in a
+search row or its exact BIB detail. Missing evidence and provider errors leave
+the purchase outstanding for a later cycle. The request detail shows the last
+promotion result.
+
+An existing assignment requires the same confirmation unless staff explicitly
+verified it. The promoter checks a staff selection directly for an eligible
+primary material type. A successful automatic match records its BIB ID and
+identifier together. SQL checks this pair against the current request at hold
+dispatch. Staff selection, BIB or identifier edits, and reopening clear the
+automatic evidence.
+
+An accepted match moves the request to Pending holds for normal journaled hold
+placement. A patron who opted out of a hold receives the purchased-without-hold
+closure. Both transitions use the existing workflow history.
+
 Each result retains `bibId`, `title`, `author`, `publication`, `identifier`,
 `materialTypeId` and `format`. Format labels resolve through Polaris MARC material definitions,
 using a bounded, serialized reference read and an in-memory cache for the host
