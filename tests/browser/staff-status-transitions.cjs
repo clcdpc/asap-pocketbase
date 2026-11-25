@@ -267,7 +267,10 @@ exports.verify = async ({ page, context, baseURL, library, scan }) => {
     const beforeReentry = requests.length;
     await page.goBack(); await settled(page, expected('suggestion'));
     assert.equal(await page.locator('#request-search').inputValue(), '');
-    assert.equal(requests.length, beforeReentry + 1, 'Returning from another view reloads the reset filters.');
+    assert.equal(await page.locator('#library-scope').inputValue(), library);
+    const suggestions = accepted.items.filter(item => item.status === 'suggestion').length;
+    await page.getByRole('button', { name: `Requests (${suggestions})`, exact: true }).waitFor();
+    assert.equal(requests.length, beforeReentry, 'Returning from Profile reuses the current scoped rows with reset filters.');
     report.crossViewHistory = true;
     return report;
   } finally {

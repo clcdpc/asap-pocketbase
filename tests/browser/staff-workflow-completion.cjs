@@ -136,6 +136,9 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     assert.equal(await dialog.getByLabel(/Identifier number/i).inputValue(), 'BROWSER-MATCH');
     await catalog.click(); assert.equal(await page.locator('#polaris-query').inputValue(), title); await page.keyboard.press('Escape');
     assert.equal(await dialog.getByLabel('Email patron confirmation (optional)', { exact: true }).isChecked(), false);
+    const queueBefore = await context.request.get(`${baseURL}/api/asap/staff/title-requests?scope=${library}`);
+    assert.equal(queueBefore.status(), 200);
+    const priorSuggestions = (await queueBefore.json()).items.filter(item => item.status === 'suggestion').length;
     const accepted = page.waitForResponse(response => response.url().endsWith('/staff/suggestions') && response.request().method() === 'POST');
     const detailLoaded = page.waitForResponse(response => /\/staff\/title-requests\/\d+$/.test(new URL(response.url()).pathname) && response.request().method() === 'GET')
       .then(response => ({ response }), error => ({ error }));
@@ -161,6 +164,7 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     assert.equal(await page.locator('#status-tabs [aria-selected="true"]').getAttribute('data-status'), 'suggestion');
     const claims = page.locator('#claim-filter');
     await claims.selectOption('all');
+    await page.getByRole('button', { name: `Requests (${priorSuggestions + 1})`, exact: true }).waitFor();
     const row = page.locator('#request-grid tr').filter({ has: page.getByRole('link', { name: `Open request ${created.id}:`, exact: false }) });
     await row.waitFor(); assert.match(await row.textContent(), /Browser claimant/); assert.match(await row.textContent(), /Duplicate suggestion/i);
     await claims.selectOption('mine_unclaimed');

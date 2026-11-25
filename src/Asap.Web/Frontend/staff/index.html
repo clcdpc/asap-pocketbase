@@ -50,8 +50,8 @@
     <div id="workspace" hidden>
       <p id="email-readiness-warning" class="email-readiness-warning" role="status" aria-live="polite" hidden></p>
       <nav class="view-tabs" aria-label="Staff views">
-        <button class="view-tab active" type="button" data-view="queue" aria-current="page">
-          <i class="fa fa-list" aria-hidden="true"></i> Requests
+        <button class="view-tab active" type="button" data-view="queue" aria-current="page" aria-describedby="requests-count-state">
+          <i class="fa fa-list" aria-hidden="true"></i> Requests<span id="requests-count"></span>
         </button>
         <button class="view-tab" type="button" data-view="additional-copies" aria-describedby="copy-count-state">
           <i class="fa fa-clone" aria-hidden="true"></i> Additional copies<span data-copy-count="open"></span>
@@ -66,6 +66,7 @@
           <i class="fa fa-sliders" aria-hidden="true"></i> Settings
         </button>
       </nav>
+      <span id="requests-count-state" class="sr-only"></span>
       <span id="copy-count-state" class="sr-only"></span>
 
       <section id="search-view" class="submission-search" aria-labelledby="search-title" hidden>

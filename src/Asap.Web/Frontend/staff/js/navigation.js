@@ -121,22 +121,24 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     }
   }
 
-  function resolveOperationalScope(owner) {
+  function resolveOperationalScope(owner, options) {
     if (disposed || !sessionIdentity.isCurrent(owner)) return null;
     if (!catalogStale || owner.role !== 'super_admin') return context.scope;
-    return reviewOperationalCatalog(owner);
+    return reviewOperationalCatalog(owner, options);
   }
 
-  async function reviewOperationalCatalog(owner) {
+  async function reviewOperationalCatalog(owner, { silent = false } = {}) {
     const load = reads.begin('operational-catalog');
+    const source = context, revision = departureRevision, ticket = generation;
+    const isCurrent = () => !disposed && source === context && revision === departureRevision &&
+      ticket === generation && sessionIdentity.isCurrent(owner);
     try {
       const result = await request('/api/asap/staff/organizations', { signal: load.signal });
-      if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner)) return null;
+      if (!load.isCurrent() || !isCurrent()) return null;
       const libraries = (result?.data ?? result).filter(item => Number(item.id) > 1 && item.organizationCodeId === 2 && item.isActive);
-      views.queue.setLibraries(libraries);
-      return libraries.some(item => String(item.id) === context.scope) ? context.scope : 'all';
+      return { libraries, isCurrent, scope: libraries.some(item => String(item.id) === source.scope) ? source.scope : 'all' };
     } catch (error) {
-      if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
+      if (!silent && !disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
         announce('Operational libraries could not be reviewed. Refresh to load current requests.', 'error');
       }
       return null;
@@ -156,6 +158,18 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     align({ activeView: name });
     present(name, { focusHeading });
     views[name]?.activate?.({ context, previous, panel: name === 'settings' ? router.requested().panel || undefined : undefined });
+  }
+
+  async function reviewCachedQueue(name, target, departure) {
+    if (name !== 'queue' || context.activeView === 'queue' || !views.queue.isReady(target)) return true;
+    try {
+      return Boolean(await views.queue.reviewSession(sessionIdentity.preferences()));
+    } catch (error) {
+      if (departure.isCurrent() && !isAbortError(error) && error.status !== 401) {
+        announce(error.message || 'The current staff session could not be verified.', 'error');
+      }
+      return false;
+    }
   }
 
   function writeStage(name, replace = false) {
@@ -187,7 +201,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       return enterReviewedQueue(name, previous, sessionIdentity.preferences(), departure || await prepareDeparture());
     }
     if (departure) {
-      if (!await departure.revalidate() || !departure.commit()) return false;
+      if (!await reviewCachedQueue(name, context, departure) || !await departure.revalidate() || !departure.commit()) return false;
       closeTransient(); invalidate();
     }
     activate(name);
@@ -198,10 +212,13 @@ export function createNavigationController({ router, sessionIdentity, detailHost
 
   async function enterReviewedQueue(name, previous, owner, departure) {
     if (!departure) return;
-    const scope = await resolveOperationalScope(owner);
-    if (!scope || !sessionIdentity.isCurrent(owner) || !await departure.revalidate() || !departure.commit()) return false;
+    // This departure now owns catalog review, including any outstanding hidden title read.
+    views.queue.markStale();
+    const review = await reviewOperationalCatalog(owner);
+    if (!review || !sessionIdentity.isCurrent(owner) || !await departure.revalidate() || !departure.commit()) return false;
     closeTransient(); invalidate();
-    queueScopeAccepted(scope);
+    queueScopeAccepted(review.scope);
+    views.queue.setLibraries(review.libraries);
     activate(name);
     if (previous !== name) writeStage(name);
     await views[name]?.refreshOnEntry?.({ context, previous });
@@ -275,7 +292,6 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       return false;
     }
     const requested = router.requested();
-    const previousView = context.activeView;
     const nextSettingsScope = requested.settingsScope || (owner.role === 'super_admin' ? 'system' : String(owner.organizationId));
     const options = { settings: context.activeView === 'settings' &&
       (requested.stage !== 'settings' || nextSettingsScope !== views.settings.currentScope()) };
@@ -295,16 +311,16 @@ export function createNavigationController({ router, sessionIdentity, detailHost
         if (!detail?.isCurrent() || !departure.isCurrent()) { router.reject(); return false; }
         if (target.name === 'queue') target.status = detail.request.status;
         else target.copyStatus = detail.request.status;
-        queue = await views[target.name].prepare({ ...context, scope: target.scope, status: target.status, additionalCopyStatus: target.copyStatus });
+        queue = await views[target.name].prepare({ ...context, scope: target.scope, status: target.status, additionalCopyStatus: target.copyStatus }, detail.request);
         if (!load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
         if (!queue?.isCurrent() || !detail.isCurrent()) { router.reject(); return false; }
         target.scope = queue.scope;
       }
       // The visible source stays mounted during validation. Newly created drafts
       // or commands must obtain fresh permission before any source is discarded.
-      const ready = await departure.revalidate();
+      const ready = (detail || await reviewCachedQueue(target.name, target, departure)) && await departure.revalidate();
       if (!load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
-      if (!ready || !departure.commit()) { router.reject(); return false; }
+      if (!ready || (queue && !queue.isCurrent()) || (detail && !detail.isCurrent()) || !departure.commit()) { router.reject(); return false; }
       closeTransient();
       const ticket = invalidate();
       if (target.replacement) target.replacement.accept();
@@ -325,9 +341,8 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       if (target.warning) announce(target.warning, 'error');
       if (queue) queue.accept();
       if (detail) views[target.name].presentDetail(detail, {}, ticket);
-      else if (target.name !== 'queue' || previousView !== 'queue' || !views.queue.isReady?.(context)) {
-        await views[target.name]?.refresh?.({ skipDeepLink: true });
-      }
+      else if (target.name === 'queue') { await views.queue.refreshOnEntry?.(); }
+      else { await views[target.name]?.refresh?.({ skipDeepLink: true }); }
       return true;
     } catch (error) {
       if (load.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
@@ -402,7 +417,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     const accepted = views.queue.find(request.id);
     return prepareDetailAlignment('queue', { ...context, scope,
       status: titleStages.includes(request.status) ? request.status : context.status }, owner, departure,
-      Boolean(options.align || options.fromRecent || options.searchScope), !accepted || accepted.status !== request.status);
+      Boolean(options.align || options.fromRecent || options.searchScope), request, accepted);
   }
   async function alignCopy(request, options, owner, departure) {
     if (!departure?.isCurrent() || !sessionIdentity.isCurrent(owner)) return null;
@@ -412,10 +427,11 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       additionalCopyStatus: ['open', 'closed'].includes(request.status) ? request.status : context.additionalCopyStatus }, owner, departure,
       Boolean(options.searchScope));
   }
-  async function prepareDetailAlignment(name, target, owner, departure, resetFilters = false, requireRefresh = false) {
-    const queue = !requireRefresh && views[name].isReady(target)
+  async function prepareDetailAlignment(name, target, owner, departure, resetFilters = false, detail, accepted) {
+    const matchesDetail = !detail || (accepted?.version === detail.version && accepted?.status === detail.status);
+    const queue = matchesDetail && views[name].isReady(target)
       ? { scope: target.scope, isCurrent: departure.isCurrent, accept() {} }
-      : await views[name].prepare(target);
+      : await views[name].prepare(target, detail);
     if (!queue?.isCurrent() || !departure.isCurrent() || !sessionIdentity.isCurrent(owner)) return null;
     return { scope: queue.scope,
       async commit() {

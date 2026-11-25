@@ -14,6 +14,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   getFocusReturn, refreshQueue, queueSequence, rememberOpened, forgetUnavailable, onReceipt, clearReceipt,
   refreshCurrentStaff = async () => null,
   onCopyChanged = () => {},
+  onTitleChanged = () => {},
   onNewSuggestion = null,
   onOpenEmailOperation = null,
   request: send = authorizedJson }) {
@@ -288,6 +289,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       const result = await send(`/api/asap/staff/requests/${encodeURIComponent(snapshot.id)}`, { method: 'DELETE', body: attempt.body });
       if (result?.deleted !== true) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
+      onTitleChanged(attempt.owner, snapshot.libraryOrgId);
       const message = `Title request ${snapshot.id} permanently deleted. Its deletion audit remains.`;
       recordReceipt(attempt, `${message} Sign in again to review Closed work.`);
       if (!attempt.isCurrent()) return;
@@ -299,6 +301,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       if (attempt.outcome === 'committed') return;
       const uncertain = error.outcomeUnknown === true || !error.status || isAbortError(error) || error.status === 408 || error.status >= 500;
       attempt.outcome = uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
+      if (uncertain) { onTitleChanged(attempt.owner, snapshot.libraryOrgId); }
       if (uncertain) recordReceipt(attempt, 'Title-request deletion could not be confirmed. Sign in again and refresh Closed work before retrying.');
       if (!attempt.isCurrent() || error.status === 401) return;
       if (error.response?.code === 'actor_changed_since_preview') {
@@ -406,6 +409,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       }
       if (receiptRecovery && !purchaseTaskOperation) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
+      onTitleChanged(attempt.owner, snapshot.libraryOrgId);
       if (purchaseTaskId) onCopyChanged(attempt.owner);
       let detail = result.request || (result.id ? result : null);
       const status = detail?.status || result.finalStatus;
@@ -476,6 +480,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       const purchaseTaskResolved = !recordedProviderOutcome && !uncertain &&
         (purchaseConflict || receiptRecovery && definiteNoCommit);
       attempt.outcome = recordedProviderOutcome ? 'provider_recorded' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
+      if (uncertain || recordedProviderOutcome) { onTitleChanged(attempt.owner, snapshot.libraryOrgId); }
       if (uncertain && body.action === 'purchase' && body.operationId) onCopyChanged(attempt.owner);
       if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 && error.response?.code === 'duplicate_open_request') {
         if (body.action === 'purchase' && body.operationId) workflows?.clearPurchaseTaskOperation(body.operationId, body);
@@ -563,6 +568,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       if (result?.committed !== true || !['updated', 'resolved'].includes(result.code) ||
           typeof result.operationId !== 'string' || result.operationId !== operation.id) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
+      onTitleChanged(attempt.owner, snapshot.libraryOrgId);
       const notification = notificationOutcome(result.notificationStatus, result.notificationReason, 'Hold notification');
       const finalState = result.finalStatus ? ` Final state: ${statusLabel(result.finalStatus)}.` : ' Review the refreshed request for final state.';
       const message = action === 'resolve' ? `Hold operation ${result.operationId} resolved as ${body.outcome.replaceAll('_', ' ')}.${finalState}${notification.text}`
@@ -582,6 +588,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       const uncertain = error.response?.code !== 'hold_resolution_dependency_unavailable' && (error.outcomeUnknown === true || !error.status || isAbortError(error) || error.status === 408 || error.status >= 500 ||
         ['hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code));
       attempt.outcome = provider ? 'provider_recorded' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
+      if (provider || uncertain) { onTitleChanged(attempt.owner, snapshot.libraryOrgId); }
       const message = provider ? 'Polaris returned a hold result, but request finalization was deferred after staff access changed. Review the hold operation with an authorized account.'
         : uncertain ? 'The hold recovery outcome could not be confirmed. Reload before trying again.'
           : error.message || 'The hold recovery changed. Review the refreshed request before trying again.';

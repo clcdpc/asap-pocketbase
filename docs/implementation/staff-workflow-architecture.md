@@ -89,6 +89,8 @@ controller API is introduced, without inventing an API in characterization.
 | `research.js` | Injected parent-bound Polaris dialog service and stateless verification/formatting helpers. |
 | `draft-scope.js`, `mutation-outcome.js`, `url-utils.js`, `recent-requests.js`, `ui.js` | Small local admission primitive and stateless contract, routing, serialization and rendering helpers. |
 
+The Requests navigation count uses the filtered Suggestions rows across all pages. Outside Suggestions it applies the shared Claims choice for the current library scope. The five stage tabs show unfiltered totals from the same authorized queue response.
+
 `workflow.js` locates roots, constructs services/controllers, wires named ports,
 fans out available-library information, and starts/disposes the application.
 It contains no endpoints, forms, recovery serialization, mutation error

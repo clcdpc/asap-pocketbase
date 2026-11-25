@@ -34,6 +34,8 @@ const records = totals => totals.flatMap((total, index) => Array.from({ length: 
     const activeElement = () => dom.window.document.activeElement;
     const tabs = () => [...get('#status-tabs').querySelectorAll('[data-status]')];
     const counts = expected => {
+      assert.equal(get('#requests-count').textContent, ` (${expected[0]})`);
+      assert.equal(get('#requests-count-state').textContent, '');
       assert.deepEqual(tabs().map(tab => tab.getAttribute('aria-label')), labels.map((label, i) => `${label} (${expected[i]})`));
       assert.deepEqual(tabs().map(tab => tab.querySelector('.status-count').textContent), expected.map(total => `(${total})`));
       assert.equal(get('#status-count-state').textContent, '');
@@ -41,6 +43,8 @@ const records = totals => totals.flatMap((total, index) => Array.from({ length: 
       assert.equal(get('#status-count-state').getAttribute('aria-live'), 'polite');
     };
     const unavailable = (loading = false) => {
+      assert.equal(get('#requests-count').textContent, '');
+      assert.match(get('#requests-count-state').textContent, loading ? /loading/ : /unavailable/);
       assert.deepEqual(tabs().map(tab => tab.getAttribute('aria-label')),
         labels.map(label => `${label} (count ${loading ? 'loading' : 'unavailable'})`));
       assert.deepEqual(tabs().map(tab => tab.querySelector('.status-count').textContent), stages.map(() => loading ? '(…)' : '(—)'));
@@ -91,15 +95,19 @@ const records = totals => totals.flatMap((total, index) => Array.from({ length: 
         assert.equal(await failed, false); unavailable();
       }
       refreshControl.focus();
-      const cancelled = queue.refresh(); const cancelledCall = calls.at(-1);
+      const shared = queue.refresh(); const sharedCall = calls.at(-1);
       assert.equal(activeElement(), focusAnchor);
       context = { ...context, activeView: 'profile' };
-      queue.deactivate(); unavailable(); assert.equal(cancelledCall.init.signal.aborted, true);
-      cancelledCall.resolve({ scope: '2', items: [] }); assert.equal(await cancelled, false); unavailable();
-      assert.equal(activeElement(), focusAnchor, 'Leaving Requests during loading does not restore its stale control.');
+      queue.deactivate(); unavailable(true); assert.equal(sharedCall.init.signal.aborted, false);
+      const readsBeforeEntry = calls.length;
+      assert.equal(queue.refreshOnEntry({ silent: true }), shared);
+      get('[data-view="queue"]').focus();
+      reply([3, 0, 0, 0, 0]); assert.equal(await shared, true); counts([3, 0, 0, 0, 0]);
+      assert.equal(activeElement(), get('[data-view="queue"]'), 'Accepting hidden data preserves navigation focus.');
       context = { ...context, activeView: 'queue' };
       queue.activate({ previous: 'profile' });
-      const entry = queue.refreshOnEntry(); reply([3, 0, 0, 0, 0]); assert.equal(await entry, true); counts([3, 0, 0, 0, 0]);
+      assert.equal(queue.refreshOnEntry(), undefined);
+      assert.equal(calls.length, readsBeforeEntry, 'Returning to Requests reuses the accepted load.');
 
       refreshControl.focus();
       const obsolete = queue.refresh(); const oldCall = calls.at(-1);

@@ -56,6 +56,10 @@ export function createWorkflowApp() {
     onContextChanged: (next, previous) => {
       if (!get('#workspace').hidden) copyCounts.contextChanged(next, previous);
       titleQueue.contextChanged(next, previous); copyQueue.contextChanged(next, previous);
+      if (!get('#workspace').hidden && next.activeView !== 'queue' &&
+          (next.scope !== previous.scope || next.activeView !== previous.activeView)) {
+        refreshHiddenTitleQueue();
+      }
       bulk.contextChanged(next); shell.contextChanged(next, previous);
     },
     getFeatures: () => [
@@ -74,8 +78,9 @@ export function createWorkflowApp() {
       queue: {
         activate: options => titleQueue.activate(options), deactivate: () => titleQueue.deactivate(),
         refresh: options => titleQueue.refresh(options), render: () => titleQueue.render(),
-        prepare: context => titleQueue.prepare(context),
+        prepare: (context, detail) => titleQueue.prepare(context, detail), markStale: () => titleQueue.markStale(),
         isReady: context => titleQueue.isReady(context),
+        reviewSession: owner => session.refreshCurrentStaff(owner, { ifChanged: true }),
         prepareDetail: (id, options) => titleDetail.prepare(id, options), presentDetail: (target, options, ticket) => titleDetail.present(target, null, options, ticket),
         refreshOnEntry: options => titleQueue.refreshOnEntry(options), setLibraries: libraries => populateScopes(libraries),
         find: id => titleQueue.find(id), libraryScope: id => titleQueue.libraryScope(id),
@@ -139,7 +144,7 @@ export function createWorkflowApp() {
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner)
   });
   const copyQueue = createCopyQueue({ root: get('#additional-copy-view'), sessionIdentity, claimsFilter, announce,
-    onExplicitRefresh: copyCounts.refresh,
+    onExplicitRefresh() { void copyCounts.refresh(); void titleQueue.refresh({ silent: true }); },
     getContext: navigation.context, onOpen: (id, opener) => copyDetail.open(id, opener, { history: 'push' }),
     onScopeIntent: scope => navigation.changeQueueContext('additional-copies', { scope }),
     onStatusIntent: additionalCopyStatus => navigation.changeQueueContext('additional-copies', { additionalCopyStatus }),
@@ -150,6 +155,7 @@ export function createWorkflowApp() {
       acknowledge: () => copyCreation.review.acknowledge(navigation.context()) }
   });
   const titleDetail = createTitleDetailController({ host: detailHost, sessionIdentity, polarisLookup, copyCreation, announce, onReceipt, clearReceipt,
+    onTitleChanged: titleQueue.requireRefresh,
     onCopyChanged: copyCreatedOrUnconfirmed,
     beforeOpen: navigation.beforeDetailOpen, isNavigationCurrent: ticket => navigation.generation() === ticket,
     getNavigationGeneration: navigation.generation, getScope: () => navigation.context().scope, onAlign: navigation.alignTitle,
@@ -171,12 +177,14 @@ export function createWorkflowApp() {
     onNewSuggestion: (barcode, opener, id) => suggestion.open(opener, { barcode, focusReturn: titleQueue.quickCreateFocusReturn(id) })
   });
   const suggestion = createSuggestionController({ root: get('#staff-suggestion-dialog'), trigger: get('#new-suggestion'), sessionIdentity, polarisLookup, announce,
+    onTitleChanged: titleQueue.requireRefresh,
     getNavigationGeneration: navigation.generation,
     getScope: () => navigation.context().scope,
     getLibraries: titleQueue.libraries, beforeOpen: navigation.prepareSuggestion, beforeClose: () => navigation.allow({ settings: false, request: false }),
     openCreatedTitle: navigation.openCreatedTitle, openExistingTitle: navigation.openExistingTitle, onReceipt, clearReceipt
   });
   const bulk = createBulkDeleteController({ root: get('#bulk-delete-dialog'), titleTrigger: get('#bulk-delete-closed'), copyTrigger: get('#bulk-delete-closed-copies'),
+    onTitleChanged: titleQueue.requireRefresh,
     onCopyChanged: copyCounts.refresh,
     sessionIdentity, getLibraries: titleQueue.libraries, beforeOpen: () => navigation.allow(), beforeExecute: () => navigation.allow({ bulk: false }),
     captureReview: navigation.captureClosedReview, reviewClosed: navigation.reviewClosed, onReceipt, clearReceipt,
@@ -210,12 +218,12 @@ export function createWorkflowApp() {
     refreshCurrentStaff: owner => session.refreshCurrentStaff(owner),
     onConfigurationCommitted: (owner, scope) => {
       if (!sessionIdentity.isCurrent(owner)) return;
-      titleDetail.invalidateConfiguration(scope); titleQueue.markStale(scope); copyQueue.markStale(scope);
+      titleDetail.invalidateConfiguration(scope); refreshTitleProjection(scope); copyQueue.markStale(scope);
       shell.configurationCommitted(scope);
     },
     onStaffAccessCommitted: owner => {
       if (!sessionIdentity.isCurrent(owner)) return;
-      titleQueue.markStale(); copyQueue.markStale();
+      refreshTitleProjection(); copyQueue.markStale();
       void copyCounts.refresh(owner);
     },
     onOrganizationCatalogCommitted: organizationCatalogCommitted,
@@ -225,12 +233,14 @@ export function createWorkflowApp() {
       shell.settingsRefreshed(owner, review);
       if (sessionIdentity.isCurrent(owner) && review.kind === 'settings') titleDetail.invalidateConfiguration(review.scope);
       if (sessionIdentity.isCurrent(owner) && review.kind === 'staff' && review.changed) {
-        titleQueue.markStale(); copyQueue.markStale();
+        if (!review.confirmed) { refreshTitleProjection(); }
+        copyQueue.markStale();
         void copyCounts.refresh(owner);
       }
       if (sessionIdentity.isCurrent(owner) && review.kind === 'settings' && review.changed) {
-        titleQueue.markStale(review.scope); copyQueue.markStale(review.scope); shell.configurationCommitted(review.scope);
-        if (review.catalogChanged) organizationCatalogCommitted(owner);
+        shell.configurationCommitted(review.scope);
+        if (review.catalogChanged) { organizationCatalogCommitted(owner); }
+        else { refreshTitleProjection(review.scope); copyQueue.markStale(review.scope); }
       }
     }
   });
@@ -251,12 +261,25 @@ export function createWorkflowApp() {
     }
   });
   function populateScopes(libraries) { operations.setLibraries(libraries); titleQueue.setLibraries(libraries); copyQueue.setLibraries(libraries); }
+  function refreshHiddenTitleQueue() {
+    // Let navigation commit its destination and catalog changes retire the old scope first.
+    queueMicrotask(() => {
+      if (!disposed && navigation.context().activeView !== 'queue' && sessionIdentity.actor()) {
+        void titleQueue.refreshOnEntry({ silent: true });
+      }
+    });
+  }
+  function refreshTitleProjection(scope) {
+    titleQueue.markStale(scope);
+    refreshHiddenTitleQueue();
+  }
   function organizationCatalogCommitted(owner, change) {
     if (!sessionIdentity.isCurrent(owner)) return;
     titleQueue.markStale(); copyQueue.markStale();
     populateScopes([]); operations.retireCatalog();
     const previousScope = navigation.context().scope;
     navigation.organizationCatalogChanged(change);
+    refreshHiddenTitleQueue();
     if (previousScope === navigation.context().scope) void copyCounts.refresh(owner);
   }
   let started = false, disposed = false;
@@ -266,6 +289,7 @@ export function createWorkflowApp() {
       started = true; settings.bind(); navigation.start(); await session.start();
       // A rejected initial detail link can leave the authorized default queue active.
       copyCounts.ensureScope();
+      if (sessionIdentity.actor() && titleQueue.sequence() === 0) { void titleQueue.refreshOnEntry({ silent: true }); }
     },
     dispose() { if (disposed) return; disposed = true; session.dispose(); shell.dispose(); navigation.dispose(); for (const feature of features) feature.dispose?.(); disposeConfirmations(); }
   };

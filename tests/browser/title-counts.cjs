@@ -29,11 +29,13 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
   };
   const names = totals => totals.map((total, i) => `${labels[i]} (${total})`);
   const countNames = page => page.locator('#status-tabs [data-status]').evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')));
-  const counts = async (page, totals) => {
+  const requestsNav = (page, total) => page.getByRole('button', { name: `Requests (${total})`, exact: true });
+  const counts = async (page, totals, suggestions = totals[0]) => {
     const expected = names(totals);
     await page.waitForFunction(expected => JSON.stringify([...document.querySelectorAll('#status-tabs [data-status]')]
       .map(tab => tab.getAttribute('aria-label'))) === JSON.stringify(expected), expected);
     assert.deepEqual(await countNames(page), expected);
+    await requestsNav(page, suggestions).waitFor();
     assert.deepEqual(await page.locator('#status-tabs .status-count').allTextContents(), totals.map(total => `(${total})`));
     for (let index = 0; index < totals.length; index++) {
       assert.equal(await page.getByRole('tab', { name: expected[index], exact: true }).count(), 1);
@@ -54,6 +56,8 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       .map(tab => tab.getAttribute('aria-label'))) === JSON.stringify(expected), expected);
     assert.deepEqual(await countNames(page), expected);
     assert.match(await page.locator('#status-count-state').textContent(), loading ? /Counts loading/ : /requests unavailable/i);
+    await page.getByRole('button', { name: 'Requests', exact: true }).waitFor();
+    assert.match(await page.locator('#requests-count-state').textContent(), loading ? /loading/ : /unavailable/);
     assert.ok(await page.locator('#status-count-state').evaluate(node => node.getBoundingClientRect().height > 0),
       'Loading and unavailable feedback remains visible.');
   };
@@ -122,7 +126,9 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       getComputedStyle(node).outlineStyle !== 'none'), true);
   }
   async function checkCopyWorkspace(page, name) {
+    const countBeforeSort = await page.locator('#requests-count').textContent();
     await checkHeaders(page, '#request-grid', name + '-requests');
+    assert.equal(await page.locator('#requests-count').textContent(), countBeforeSort);
     const nav = page.getByRole('button', { name: 'Additional copies (26)', exact: true });
     await nav.click();
     const open = page.getByRole('tab', { name: 'Open (26)', exact: true });
@@ -142,11 +148,14 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       await open.waitFor(); await closed.waitFor(); await nav.waitFor();
       await page.locator('#additional-copy-search').fill('');
       await page.locator('#additional-copy-claim-filter').selectOption('mine');
+      await requestsNav(page, 0).waitFor();
       await page.waitForFunction(() => document.querySelector('#additional-copy-summary').textContent === '0 open tasks');
       await open.waitFor(); await closed.waitFor();
       await page.locator('#additional-copy-claim-filter').selectOption('all');
+      await requestsNav(page, fixture.libraryCounts[0]).waitFor();
       assert.deepEqual(filterReads, [], 'Sort, pagination, search and claims operate on the list without fetching totals.');
       await page.locator('#additional-copy-library-scope').selectOption(fixture.otherLibrary);
+      await requestsNav(page, fixture.otherCounts[0]).waitFor();
       await page.getByRole('button', { name: 'Additional copies (0)', exact: true }).waitFor();
       await page.getByRole('tab', { name: 'Open (0)', exact: true }).waitFor();
       await page.getByRole('tab', { name: 'Closed (0)', exact: true }).waitFor();
@@ -173,6 +182,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await page.unroute(countPath);
     await page.locator('#refresh-additional-copies').click(); await nav.waitFor();
     await page.locator('[data-view="queue"]').click();
+    await page.locator('#queue-view').waitFor({ state: 'visible' });
   }
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers(fixture.super) });
@@ -239,7 +249,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await page.locator('#request-grid .gridjs-notfound').waitFor({ state: 'visible' });
     assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), [],
       'Mine has no matching rows in the unclaimed SQL fixture.');
-    await counts(page, fixture.libraryCounts);
+    await counts(page, fixture.libraryCounts, 0);
     await page.keyboard.press('Home');
     await page.waitForFunction(() => document.querySelector('#claim-filter').value === 'all' &&
       document.querySelector('#request-grid .gridjs-summary')?.textContent === 'Showing 1 to 25 of 28 results' &&
@@ -256,7 +266,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       document.querySelectorAll('#request-grid .request-title-link').length === 1 &&
       document.querySelector('#request-grid .request-title-link')?.dataset.requestId === id, fixture.mutationId);
     assert.equal(await tag.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
-    await counts(page, fixture.libraryCounts);
+    await counts(page, fixture.libraryCounts, 1);
     await page.keyboard.press('Home');
     await page.waitForFunction(() => document.querySelector('#tag-filter').value === 'all' &&
       document.querySelector('#request-grid .gridjs-summary')?.textContent === 'Showing 1 to 25 of 28 results' &&
@@ -273,7 +283,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       document.querySelectorAll('#request-grid .request-title-link').length === 1 &&
       document.querySelector('#request-grid .request-title-link')?.dataset.requestId === id, fixture.mutationId);
     assert.equal(await similarity.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
-    await counts(page, fixture.libraryCounts);
+    await counts(page, fixture.libraryCounts, 1);
     await page.keyboard.press('Home');
     await page.waitForFunction(() => document.querySelector('#similar-filter').value === 'all' &&
       document.querySelector('#request-grid .gridjs-summary')?.textContent === 'Showing 1 to 25 of 28 results' &&
@@ -288,7 +298,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await counts(page, fixture.libraryCounts);
     await page.locator('#request-search').fill('no matching requests');
     await page.waitForFunction(() => document.querySelector('#request-grid .gridjs-notfound')?.textContent === 'No requests match these filters.');
-    await counts(page, fixture.libraryCounts);
+    await counts(page, fixture.libraryCounts, 0);
     await page.locator('#request-search').fill('');
     await page.locator('#request-grid .gridjs-summary').filter({ hasText: 'Showing 1 to 25 of 28 results' }).waitFor();
     await scan(page, 'counts-desktop');

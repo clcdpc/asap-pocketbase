@@ -366,6 +366,7 @@ export function createSettingsController({
   let logoPreviewGeneration = 0;
   let copyGeneration = 0;
   let notificationGeneration = 0, staffStatusGeneration = 0;
+  let clearGlobalNotification = null;
   let blockedDraftNotice = null;
   let pendingInheritanceNotice = null;
   let templateValidationTarget = null;
@@ -1050,6 +1051,7 @@ export function createSettingsController({
     dom.message.textContent = message || '';
     dom.message.className = `settings-message${kind ? ` ${kind}` : ''}`;
     const clearAnnouncement = announce(message || '', kind);
+    clearGlobalNotification = typeof clearAnnouncement === 'function' ? clearAnnouncement : null;
     return () => {
       if (notificationGeneration === generation) {
         dom.message.textContent = '';
@@ -2048,7 +2050,7 @@ export function createSettingsController({
       renderStaffUsers({ discard: options.discard === true });
       updateDirtyState();
       onRefreshed(loadState.context.owner, { kind: 'staff', scope: loadState.context.scope,
-        changed: review?.slot === 'administration-staff-mutation' });
+        changed: review?.slot === 'administration-staff-mutation', confirmed: review?.outcome === 'committed' });
       return true;
     } catch (error) {
       if (isSettingsOperationCurrent(loadState) && !isAbortError(error) && error.status !== 401) {
@@ -3192,6 +3194,7 @@ export function createSettingsController({
     if (disposed) return false;
     if (state.pendingMutation || state.outcomeUncertain) return false;
     state.visible = false;
+    clearGlobalNotification?.();
     emailTest.invalidate();
     placeholders.clear(); patronPlaceholders.clear(); suggestionLimitPlaceholders.refresh();
     placeholders.retireValidationNotice();
