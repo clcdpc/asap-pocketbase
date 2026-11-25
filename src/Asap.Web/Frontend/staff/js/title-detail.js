@@ -14,6 +14,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   getFocusReturn, refreshQueue, queueSequence, rememberOpened, forgetUnavailable, onReceipt, clearReceipt,
   refreshCurrentStaff = async () => null,
   onCopyChanged = () => {},
+  onTitleChanged = () => {},
   onNewSuggestion = null,
   onOpenEmailOperation = null,
   request: send = authorizedJson }) {
@@ -288,6 +289,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       const result = await send(`/api/asap/staff/requests/${encodeURIComponent(snapshot.id)}`, { method: 'DELETE', body: attempt.body });
       if (result?.deleted !== true) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
+      onTitleChanged(attempt.owner, snapshot.libraryOrgId);
       const message = `Title request ${snapshot.id} permanently deleted. Its deletion audit remains.`;
       recordReceipt(attempt, `${message} Sign in again to review Closed work.`);
       if (!attempt.isCurrent()) return;
@@ -476,6 +478,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       const purchaseTaskResolved = !recordedProviderOutcome && !uncertain &&
         (purchaseConflict || receiptRecovery && definiteNoCommit);
       attempt.outcome = recordedProviderOutcome ? 'provider_recorded' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
+      if (uncertain || recordedProviderOutcome) { onTitleChanged(attempt.owner, snapshot.libraryOrgId); }
       if (uncertain && body.action === 'purchase' && body.operationId) onCopyChanged(attempt.owner);
       if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 && error.response?.code === 'duplicate_open_request') {
         if (body.action === 'purchase' && body.operationId) workflows?.clearPurchaseTaskOperation(body.operationId, body);

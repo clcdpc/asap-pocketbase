@@ -34,9 +34,12 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
   };
   const rows = async (page, { copy = false, scope = fixture.library, status = 'suggestion', choice, actor = fixture.first }) => {
     await selected(page, choice);
-    const expected = (copy ? fixture.copies : fixture.titles).filter(item => (scope === 'all' || item.scope === scope) && item.status === status &&
+    const matches = item => (scope === 'all' || item.scope === scope) &&
       (choice === 'all' || choice === 'mine' && item.claimedBy === actor.id || choice === 'unclaimed' && !item.claimedBy ||
-       choice === 'mine_unclaimed' && (!item.claimedBy || item.claimedBy === actor.id))).map(item => item.id).sort();
+       choice === 'mine_unclaimed' && (!item.claimedBy || item.claimedBy === actor.id));
+    const expected = (copy ? fixture.copies : fixture.titles).filter(item => item.status === status && matches(item)).map(item => item.id).sort();
+    const suggestions = fixture.titles.filter(item => item.status === 'suggestion' && matches(item)).length;
+    await page.waitForFunction(count => document.querySelector('#requests-count').textContent === ` (${count})`, suggestions);
     const selector = copy ? '#additional-copy-grid .additional-copy-open' : '#request-grid .request-title-link';
     const totals = scope === 'all' ? fixture.allCounts : stages.map(stage => fixture.titles.filter(item => item.scope === scope && item.status === stage).length);
     await page.waitForFunction(({ selector, expected, copy, totals }) =>

@@ -121,22 +121,22 @@ export function createNavigationController({ router, sessionIdentity, detailHost
     }
   }
 
-  function resolveOperationalScope(owner) {
+  function resolveOperationalScope(owner, options) {
     if (disposed || !sessionIdentity.isCurrent(owner)) return null;
     if (!catalogStale || owner.role !== 'super_admin') return context.scope;
-    return reviewOperationalCatalog(owner);
+    return reviewOperationalCatalog(owner, options);
   }
 
-  async function reviewOperationalCatalog(owner) {
+  async function reviewOperationalCatalog(owner, { silent = false } = {}) {
     const load = reads.begin('operational-catalog');
     try {
       const result = await request('/api/asap/staff/organizations', { signal: load.signal });
       if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner)) return null;
       const libraries = (result?.data ?? result).filter(item => Number(item.id) > 1 && item.organizationCodeId === 2 && item.isActive);
-      views.queue.setLibraries(libraries);
+      if (!silent) { views.queue.setLibraries(libraries); }
       return libraries.some(item => String(item.id) === context.scope) ? context.scope : 'all';
     } catch (error) {
-      if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
+      if (!silent && !disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
         announce('Operational libraries could not be reviewed. Refresh to load current requests.', 'error');
       }
       return null;
@@ -275,7 +275,6 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       return false;
     }
     const requested = router.requested();
-    const previousView = context.activeView;
     const nextSettingsScope = requested.settingsScope || (owner.role === 'super_admin' ? 'system' : String(owner.organizationId));
     const options = { settings: context.activeView === 'settings' &&
       (requested.stage !== 'settings' || nextSettingsScope !== views.settings.currentScope()) };
@@ -295,7 +294,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
         if (!detail?.isCurrent() || !departure.isCurrent()) { router.reject(); return false; }
         if (target.name === 'queue') target.status = detail.request.status;
         else target.copyStatus = detail.request.status;
-        queue = await views[target.name].prepare({ ...context, scope: target.scope, status: target.status, additionalCopyStatus: target.copyStatus });
+        queue = await views[target.name].prepare({ ...context, scope: target.scope, status: target.status, additionalCopyStatus: target.copyStatus }, target.requestId);
         if (!load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
         if (!queue?.isCurrent() || !detail.isCurrent()) { router.reject(); return false; }
         target.scope = queue.scope;
@@ -304,7 +303,7 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       // or commands must obtain fresh permission before any source is discarded.
       const ready = await departure.revalidate();
       if (!load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
-      if (!ready || !departure.commit()) { router.reject(); return false; }
+      if (!ready || (queue && !queue.isCurrent()) || (detail && !detail.isCurrent()) || !departure.commit()) { router.reject(); return false; }
       closeTransient();
       const ticket = invalidate();
       if (target.replacement) target.replacement.accept();
@@ -325,9 +324,8 @@ export function createNavigationController({ router, sessionIdentity, detailHost
       if (target.warning) announce(target.warning, 'error');
       if (queue) queue.accept();
       if (detail) views[target.name].presentDetail(detail, {}, ticket);
-      else if (target.name !== 'queue' || previousView !== 'queue' || !views.queue.isReady?.(context)) {
-        await views[target.name]?.refresh?.({ skipDeepLink: true });
-      }
+      else if (target.name === 'queue') { await views.queue.refreshOnEntry?.(); }
+      else { await views[target.name]?.refresh?.({ skipDeepLink: true }); }
       return true;
     } catch (error) {
       if (load.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {

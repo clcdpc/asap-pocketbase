@@ -169,6 +169,7 @@ export function createCatalogQueue({ dialog, panel, searchForm, results, session
       if (!isCommittedRequestResponse(result, record.requestId) || result.operationId !== record.body.operationId ||
           record.body.action === 'additionalCopy' && !validRequestId(result.additionalCopyRequestId)) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
+      current.onTitleChanged?.();
       if (record.body.action === 'additionalCopy') onCopyChanged(record.owner);
       clear(record);
       const notification = notificationOutcome(result.notificationStatus, result.notificationReason, 'Purchase reminder');
@@ -190,6 +191,7 @@ export function createCatalogQueue({ dialog, panel, searchForm, results, session
         ['bib_validation_unavailable', 'holdings_unavailable', 'notification_dependency_unavailable'].includes(error.response?.code);
       const uncertain = !rejected && (error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error));
       attempt.outcome = uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
+      if (uncertain) { current.onTitleChanged?.(); }
       if (uncertain && record.body.action === 'additionalCopy') onCopyChanged(record.owner);
       if (!uncertain) clear(record);
       if (uncertain) onReceipt('The catalog action could not be confirmed. Recover the identical action before retrying.', record.owner, attempt);

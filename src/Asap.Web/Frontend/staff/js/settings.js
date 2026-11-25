@@ -2048,7 +2048,7 @@ export function createSettingsController({
       renderStaffUsers({ discard: options.discard === true });
       updateDirtyState();
       onRefreshed(loadState.context.owner, { kind: 'staff', scope: loadState.context.scope,
-        changed: review?.slot === 'administration-staff-mutation' });
+        changed: review?.slot === 'administration-staff-mutation', confirmed: review?.outcome === 'committed' });
       return true;
     } catch (error) {
       if (isSettingsOperationCurrent(loadState) && !isAbortError(error) && error.status !== 401) {

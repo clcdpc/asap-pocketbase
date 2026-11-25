@@ -2702,7 +2702,7 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
           : pathname.endsWith(nextId) ? 'not_found' : 'stale_version' }) });
     });
     await page.getByRole('button', { name: 'Profile', exact: true }).click();
-    await page.getByRole('button', { name: 'Requests', exact: true }).click();
+    await page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click();
     await page.getByRole('button', { name: 'Delete closed work...' }).click();
     await page.locator('#bulk-delete-dialog[open]').waitFor();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'bulk-delete-scope');
@@ -3125,10 +3125,10 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
       window.dispatchEvent(event);
       return event.defaultPrevented;
     }), true);
-    await decideDiscard(() => page.getByRole('button', { name: 'Requests', exact: true }).click(), false, /Discard unsaved Profile/);
+    await decideDiscard(() => page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click(), false, /Discard unsaved Profile/);
     assert.equal(page.url(), profileRoute);
     assert.equal(await page.locator('#weekly-email').inputValue(), 'unsaved-profile@example.org');
-    await decideDiscard(() => page.getByRole('button', { name: 'Requests', exact: true }).click(), true, /Discard unsaved Profile/);
+    await decideDiscard(() => page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click(), true, /Discard unsaved Profile/);
     assert.equal(await page.locator('#weekly-email').inputValue(), profileBaseline);
     await page.goBack(); await page.locator('#profile-view').waitFor({ state: 'visible' });
     await page.locator('#weekly-email').fill('forward-profile@example.org');
@@ -3138,7 +3138,7 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     assert.equal(await page.locator('#weekly-email').inputValue(), 'forward-profile@example.org');
     await page.locator('#weekly-email').fill(profileBaseline);
     await page.goForward(); await page.locator('#queue-view').waitFor({ state: 'visible' });
-    await page.getByRole('button', { name: 'Requests', exact: true }).click();
+    await page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click();
     await page.locator('#library-scope').selectOption('2');
     await page.locator('#claim-filter').selectOption('all');
     const listUrl = page.url();
@@ -3200,7 +3200,7 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     await page.goForward();
     await page.locator('[data-copy-status="open"][aria-selected="true"]').waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'copy-route-round-trip');
-    await page.getByRole('button', { name: 'Requests', exact: true }).click();
+    await page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click();
     await page.getByRole('button', { name: 'New suggestion', exact: true }).click();
     await page.getByLabel('Patron barcode or name', { exact: true }).fill('Unsaved patron lookup');
     await decideDiscard(() => page.keyboard.press('Escape'), false, /Discard the unsaved new suggestion/);
@@ -3820,7 +3820,7 @@ async function runProfileSessionReplacementCase(browser, args, detectBeforeRespo
     if (detectBeforeResponse) {
       // The pending save protects the Profile route. A separate protected read
       // still detects replacement access before the unresolved POST returns.
-      await page.getByRole('button', { name: 'Requests', exact: true }).click();
+      await page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click();
       assert.equal(await page.locator('#profile-view').isVisible(), true);
       await page.evaluate(() => document.querySelector('#refresh-queue').click());
       await page.locator('#workspace').waitFor({ state: 'hidden' });
@@ -4632,6 +4632,12 @@ async function runRejectionNotificationAndReopen(browser, args, axeSource, repor
   const pathname = `/api/asap/staff/title-requests/${args.staleTitleBId}/action`;
   const detailURL = `${args.baseOrigin}/api/asap/staff/title-requests/${args.staleTitleBId}`;
   try {
+    await page.goto(`${args.baseOrigin}/staff/`, { waitUntil: 'networkidle' });
+    await page.locator('#claim-filter').selectOption('all');
+    const queue = await context.request.get(`${args.baseOrigin}/api/asap/staff/title-requests?scope=all`);
+    assert.equal(queue.status(), 200);
+    const suggestions = (await queue.json()).items.filter(item => item.status === 'suggestion').length;
+    const count = total => page.locator('#requests-count').filter({ hasText: `(${total})` }).waitFor({ state: 'attached' });
     await page.goto(`${args.baseOrigin}/staff/?request=${args.staleTitleBId}`, { waitUntil: 'networkidle' });
     await page.locator('#request-dialog[open]').waitFor();
     const before = await (await context.request.get(detailURL)).json();
@@ -4687,11 +4693,13 @@ async function runRejectionNotificationAndReopen(browser, args, axeSource, repor
     const accepted = await action(page.locator('.action-choice button[type="submit"]'), 200);
     assert.equal(accepted.committed, true);
     assert.equal(accepted.notificationStatus, 'queued');
+    await count(suggestions - 1);
     await page.locator('#request-dialog .status-badge').filter({ hasText: 'Closed' }).waitFor();
     await page.locator('#app-status').filter({ hasText: /Rejection email queued; delivery is pending/ }).waitFor();
     assert.match(await page.locator('.request-activity').textContent(), /Selected rejection template: Browser acceptance rejection/);
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'rejection-queued');
     await action(page.getByRole('button', { name: 'Reopen', exact: true }), 200);
+    await count(suggestions);
     await page.locator('#request-dialog .status-badge').filter({ hasText: 'Suggestion' }).waitFor();
     const reopened = await (await context.request.get(detailURL)).json();
     assert.equal(reopened.claimedByStaffUserId, args.superIdentity.staffId);
@@ -4699,6 +4707,7 @@ async function runRejectionNotificationAndReopen(browser, args, axeSource, repor
     assert.equal(reopened.claimRuleId, null);
     await revealRequestActions(page);
     await action(page.getByRole('button', { name: 'Close silently', exact: true }), 200);
+    await count(suggestions - 1);
     await page.locator('#request-dialog .status-badge').filter({ hasText: 'Closed' }).waitFor();
     await page.setViewportSize({ width: 390, height: 844 });
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'rejection-reopen-silent-close');

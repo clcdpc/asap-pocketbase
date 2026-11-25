@@ -208,6 +208,8 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
   const dom = {
     statusTabs: [...root.querySelectorAll('#status-tabs [data-status]')],
     countState: root.querySelector('#status-count-state'),
+    navigationCount: root.ownerDocument.querySelector('#requests-count'),
+    navigationState: root.ownerDocument.querySelector('#requests-count-state'),
     scopeField: root.querySelector('#scope-field'),
     scope: root.querySelector('#library-scope'),
     search: root.querySelector('#request-search'),
@@ -233,17 +235,38 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     sessionIdentity.isCurrent(state.loadedOwner);
   const reads = createLatestLoad();
   const events = new window.AbortController();
-  const claimsControl = claimsFilter.bind(dom.claim, () => renderGrid());
+  const claimsControl = claimsFilter.bind(dom.claim, renderProjection);
+  let pendingRefresh = null, hiddenResult = null, gridNeedsRender = false;
   let disposed = false, acceptingScope = false, targetGeneration = 0, lookupContext = null;
   const gridAccessibility = bindGridAccessibility(root, () => dom.grid, events.signal, 'Title requests');
 
   function closeLookup() { if (lookupContext) polarisLookup?.close(lookupContext); lookupContext = null; }
   function invalidate() {
-    closeLookup(); targetGeneration++; reads.begin('queue-target').abort(); reads.begin('queue').abort();
-    if (disposed) return;
+    closeLookup(); targetGeneration++; reads.begin('queue-target').abort();
+  }
+
+  function cancelRefresh() {
+    reads.begin('queue').abort();
+    pendingRefresh = null;
     dom.refresh.disabled = false;
-    if (state.countState === 'loading') state.countState = 'unavailable';
+  }
+
+  function requireRefresh(owner, scope) {
+    if (disposed || !sessionIdentity.isCurrent(owner) || !affectsProjection(scope, getContext().scope)) { return; }
+    // A command may still own a recovery dialog. Withdraw counts without retiring its opener.
+    cancelRefresh();
+    targetGeneration++;
+    state.refreshRequired = true;
+    state.countState = 'unavailable';
     renderCounts();
+  }
+
+  function renderNavigationCount(total = null) {
+    const value = total === null ? '' : ` (${total})`;
+    const message = total !== null ? '' : state.countState === 'loading'
+      ? 'Suggestions count loading.' : 'Suggestions count unavailable. Refresh to try again.';
+    if (dom.navigationCount.textContent !== value) { dom.navigationCount.textContent = value; }
+    if (dom.navigationState.textContent !== message) { dom.navigationState.textContent = message; }
   }
 
   function validateResult(result, owner) {
@@ -259,6 +282,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     const available = state.countState === 'ready' && !state.stale &&
       state.loadedContext?.scope === getContext().scope && sessionIdentity.isCurrent(state.loadedOwner);
     const loading = state.countState === 'loading';
+    if (!available) { renderNavigationCount(); }
     for (const { tab, label, count } of statusCounts) {
       const total = available ? state.requests.filter(request => request.status === tab.dataset.status).length : null;
       count.textContent = available ? `(${total})` : loading ? '(…)' : '(—)';
@@ -270,15 +294,29 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     dom.statusTabs.find(tab => tab === document.activeElement)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
   }
 
-  async function prepare(context) {
+  async function prepare(context, requestId) {
     const owner = sessionIdentity.preferences(), load = reads.begin('queue-target'), ticket = ++targetGeneration;
-    const live = () => !disposed && !load.signal.aborted && ticket === targetGeneration && sessionIdentity.isCurrent(owner);
+    const sequence = state.sequence;
+    const live = () => !disposed && !load.signal.aborted && ticket === targetGeneration &&
+      sequence === state.sequence && sessionIdentity.isCurrent(owner);
     try {
       const scope = owner.role === 'super_admin' ? context.scope : String(owner.organizationId);
+      if (pendingRefresh && scope === getContext().scope) {
+        const refreshed = await pendingRefresh;
+        if (!live() || !refreshed || !isReady(context)) { return null; }
+        if (!requestId) { return { scope, isCurrent: live, accept() {} }; }
+      }
+      if (requestId && isReady(context) && state.requests.some(item => item.id === requestId && item.status === context.status)) {
+        return { scope, isCurrent: live, accept() {} };
+      }
       const result = await request(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`, { signal: load.signal });
       if (!live()) return null;
       validateResult(result, owner);
-      return { scope: result.scope, isCurrent: live, accept: () => acceptResult(result, ++state.sequence, owner) };
+      return { scope: result.scope, isCurrent: live, accept() {
+        if (disposed || !sessionIdentity.isCurrent(owner) || result.scope !== getContext().scope) { return; }
+        cancelRefresh();
+        acceptResult(result, ++state.sequence, owner);
+      } };
     } finally { reads.finish('queue-target', load.token); }
   }
 
@@ -290,14 +328,33 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     state.countState = 'ready';
     state.stale = false;
     state.refreshRequired = false;
-    if (sessionIdentity.actor()?.role === 'super_admin') { setLibraries(result.organizations); onLibraries(result.organizations); }
-    renderCounts(); populateTags(); renderGrid({ preservePage: true });
-    onRefreshed({ sequence, items: state.requests, context: state.loadedContext });
+    renderCounts(); populateTags(); renderProjection({ preservePage: true });
+    const presentation = { organizations: result.organizations, sequence };
+    if (getContext().activeView === 'queue') { presentResult(presentation); }
+    else { hiddenResult = presentation; }
   }
 
-  async function refresh(options = {}) {
+  function presentResult({ organizations, sequence }) {
+    if (state.loadedOwner.role === 'super_admin') { setLibraries(organizations); onLibraries(organizations); }
+    onRefreshed({ sequence, items: state.requests, context: state.loadedContext });
+    hiddenResult = null;
+  }
+
+  function refresh(options = {}) {
     const owner = sessionIdentity.preferences();
-    if (disposed || !owner) return false;
+    if (disposed || !owner) { return Promise.resolve(false); }
+    const result = loadRequests(options, owner).finally(() => {
+      if (pendingRefresh === result) { pendingRefresh = null; }
+    });
+    pendingRefresh = result;
+    return result;
+  }
+
+  function refreshOnEntry(options = {}) {
+    if (!isReady(getContext())) { return pendingRefresh ?? refresh(options); }
+  }
+
+  async function loadRequests(options, owner) {
     const load = reads.begin('queue');
     const sequence = ++state.sequence;
     const focusContext = getContext();
@@ -316,32 +373,33 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     dom.refresh.disabled = true;
     const clearLoading = !options.silent ? announce('Loading authorized requests...') : null;
     try {
-      const resolution = resolveScope(owner);
+      const resolution = resolveScope(owner, { silent: focusContext.activeView !== 'queue' });
       const acceptedScope = typeof resolution === 'string' ? resolution : await resolution;
       if (!acceptedScope || disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
       acceptingScope = true;
       try { onScopeAccepted(acceptedScope); } finally { acceptingScope = false; }
-      state.countState = 'loading'; renderCounts();
+      if (state.countState !== 'loading') { state.countState = 'loading'; renderCounts(); }
       const context = getContext();
       const scope = owner.role === 'super_admin' ? context.scope : String(owner.organizationId);
       const result = await request(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`, { signal: load.signal });
       if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner) || context.scope !== getContext().scope || context.status !== getContext().status) return false;
       validateResult(result, owner);
-      acceptingScope = true;
-      try { onScopeAccepted(result.scope); } finally { acceptingScope = false; }
+      if (getContext().activeView === 'queue') {
+        acceptingScope = true;
+        try { onScopeAccepted(result.scope); } finally { acceptingScope = false; }
+      } else if (result.scope !== context.scope) { return false; }
       acceptResult(result, sequence, owner);
       return true;
     } catch (error) {
       if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) &&
-          !options.silent && !isAbortError(error) && error.status !== 401) announce(error.message || 'Requests could not be loaded.', 'error');
+          getContext().activeView === 'queue' && !options.silent && !isAbortError(error) && error.status !== 401) announce(error.message || 'Requests could not be loaded.', 'error');
       return false;
     } finally {
       document.removeEventListener('focusin', moved);
       if (typeof clearLoading === 'function') clearLoading();
       if (!disposed && load.isCurrent()) {
         dom.refresh.disabled = false;
-        if (state.countState === 'loading') state.countState = 'unavailable';
-        renderCounts();
+        if (state.countState === 'loading') { state.countState = 'unavailable'; renderCounts(); }
       }
       const currentContext = getContext();
       if (restoreRefresh && !focusMoved && !disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) &&
@@ -366,10 +424,12 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
 
   function resetQueueFilters() {
     if (disposed) return;
+    const changed = dom.search.value !== '' || dom.tag.value !== 'all' || dom.similar.value !== 'all';
     dom.search.value = '';
     dom.tag.value = 'all';
     dom.similar.value = 'all';
     claimsControl.sync();
+    return changed;
   }
 
   function retireProjection() {
@@ -377,9 +437,10 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     state.requests = [];
     state.loadedContext = null;
     state.loadedOwner = null;
+    hiddenResult = null;
     state.countState = 'unavailable';
     state.stale = true;
-    if (!acceptingScope) invalidate();
+    if (!acceptingScope) { invalidate(); cancelRefresh(); }
     renderCounts();
     state.grid?.destroy?.();
     // An older Grid.js render can finish after navigation; keep its container detached.
@@ -412,14 +473,14 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     dom.tag.value = tags.includes(selected) ? selected : 'all';
   }
 
-  function filteredRequests() {
-    const query = dom.search.value.trim().toLocaleLowerCase();
+  function filteredRequests(status = getContext().status, useStageFilters = true) {
+    const query = useStageFilters ? dom.search.value.trim().toLocaleLowerCase() : '';
     const claim = claimsFilter.value();
-    const tag = dom.tag.value;
-    const similarity = dom.similar.value;
+    const tag = useStageFilters ? dom.tag.value : 'all';
+    const similarity = useStageFilters ? dom.similar.value : 'all';
     return state.requests.filter(request => {
-      if (request.status !== getContext().status) return false;
-      if (getContext().status === 'suggestion' && similarity !== 'all') {
+      if (request.status !== status) { return false; }
+      if (status === 'suggestion' && similarity !== 'all') {
         const count = request.relatedRequests?.count;
         if (!Number.isInteger(count) || (similarity === 'similar' ? count < 1 : count !== 0)) return false;
       }
@@ -475,6 +536,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
       directActions: ['suggestion', 'outstanding_purchase'].includes(request.status) &&
         request.capabilities?.allowedActions?.includes('catalogFound') &&
         request.capabilities.canChangeBib === true && request.capabilities.canEditIdentifier === true,
+      onTitleChanged: () => requireRefresh(owner, request.libraryOrgId),
       onCommitted: async () => {
         if (!sessionIdentity.isCurrent(owner)) return false;
         const refreshed = await refresh({ silent: true });
@@ -558,13 +620,24 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
       id: request.id, actions, live, onOpen, fallback: dom.refresh });
   }
 
+  function renderProjection(options) {
+    const context = getContext();
+    if ((context.activeView !== 'queue' || context.status !== 'suggestion') && isReady(context)) {
+      renderNavigationCount(filteredRequests('suggestion', false).length);
+    }
+    if (context.activeView === 'queue') { renderGrid(options); }
+    else { gridNeedsRender = true; }
+  }
+
   function renderGrid({ preservePage = false } = {}) {
     if (disposed) return;
     if (state.loadedOwner && !sessionIdentity.isCurrent(state.loadedOwner)) { retireProjection(); return; }
+    gridNeedsRender = false;
     closeLookup();
     const owner = sessionIdentity.preferences();
     onRendered();
     const requests = filteredRequests();
+    if (getContext().status === 'suggestion' && isReady(getContext())) { renderNavigationCount(requests.length); }
     dom.empty.hidden = state.stale || requests.length !== 0;
     if (state.stale) return;
     const definitions = queueColumns();
@@ -615,7 +688,10 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
   dom.search.addEventListener('input', renderGrid, { signal: events.signal });
   for (const input of [dom.tag, dom.similar]) input.addEventListener('change', renderGrid, { signal: events.signal });
   return {
-    refresh, prepare, invalidate, markStale, render: renderGrid, resetFilters: resetQueueFilters, setStaff, setLibraries,
+    refresh, prepare, invalidate, markStale, requireRefresh, render: renderGrid, setStaff, setLibraries,
+    resetFilters() {
+      if (resetQueueFilters() && isReady(getContext())) { renderProjection(); }
+    },
     isReady,
     find: id => state.requests.find(item => item.id === id), sequence: () => state.sequence,
     libraryScope: scopeForLibraryOrAll,
@@ -628,25 +704,36 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     libraries: () => [...dom.scope.options].filter(option => option.value !== 'all')
       .map(option => Object.freeze({ id: option.value, name: option.textContent })),
     focusReturn: (id, fallback) => focusPort({ grid: () => dom.grid, label: `Open request ${id}`, fallback, sessionIdentity, getContext }),
-    activate({ previous }) { if (disposed) return; if (previous !== 'queue') resetQueueFilters(); updateStatusTabs(); },
+    activate({ previous }) {
+      if (disposed) { return; }
+      if (previous !== 'queue') {
+        const changed = resetQueueFilters();
+        if (isReady(getContext()) && (changed || gridNeedsRender)) { renderGrid(); }
+        if (hiddenResult && isReady(getContext())) { presentResult(hiddenResult); }
+      }
+      updateStatusTabs();
+    },
     deactivate: invalidate,
-    refreshOnEntry() { if (!isReady(getContext())) return refresh(); },
+    refreshOnEntry,
     contextChanged(next, previous) {
       if (disposed) return;
       dom.scope.value = next.scope;
       if (next.status !== previous.status) {
         invalidate(); resetQueueFilters(); updateStatusTabs();
         if (next.scope === previous.scope) {
-          if (isReady(next)) renderGrid();
-          else retireProjection();
+          if (isReady(next)) { renderProjection(); }
+          else { retireProjection(); }
         }
       }
       if (next.scope !== previous.scope) { resetQueueFilters(); retireProjection(); }
+      else if (next.activeView !== 'queue' && previous.activeView === 'queue' && isReady(next)) {
+        renderNavigationCount(filteredRequests('suggestion', false).length);
+      }
     },
-    preferencesChanged() { if (disposed) return; claimsControl.sync(); renderGrid(); },
+    preferencesChanged() { if (disposed) { return; } claimsControl.sync(); renderProjection(); },
     clear: retireProjection,
     signedOut() { if (disposed) return; claimsControl.setStaff(null); retireProjection(); },
-    dispose() { if (disposed) return; disposed = true; claimsControl.dispose(); gridAccessibility.disconnect(); events.abort(); invalidate(); state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
+    dispose() { if (disposed) return; disposed = true; claimsControl.dispose(); gridAccessibility.disconnect(); events.abort(); invalidate(); cancelRefresh(); state.countState = 'unavailable'; renderNavigationCount(); state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
   };
 }
 

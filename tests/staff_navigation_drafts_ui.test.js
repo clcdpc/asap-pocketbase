@@ -259,6 +259,65 @@ async function fixture(route, journey, options = {}) {
 
 const cases = [];
 const test = (name, body) => cases.push({ name, body });
+test('Failed initial Requests count recovers on an Additional copies refresh without rendering a hidden table', async () => {
+  let reads = 0;
+  await fixture('?stage=additional_copies&scope=2&request=71', async ui => {
+    assert.equal(ui.get('#request-dialog').open, true);
+    assert.equal(ui.get('#requests-count').textContent, '');
+    assert.match(ui.get('#requests-count-state').textContent, /unavailable/);
+    assert.equal(reads, 1);
+    await ui.closeDetail();
+    ui.get('#refresh-additional-copies').click();
+    await until(() => ui.get('#requests-count').textContent === ' (1)', 'count recovered outside Requests');
+    assert.equal(ui.get('#queue-view').hidden, true);
+    assert.equal(ui.get('#request-grid table'), null);
+    ui.get('[data-view="queue"]').click();
+    await until(() => ui.get('#request-grid .request-title-link'), 'accepted hidden result available on entry');
+    assert.equal(reads, 2, 'queue entry reuses the recovered scope');
+  }, { copyRequest: {}, api: ({ pathname, request }) => {
+    if (pathname.endsWith('/title-requests')) {
+      reads++;
+      return reads === 1 ? response(503, {}) : response(200, { scope: '2', items: [request], organizations: [] });
+    }
+  } });
+});
+test('Requests navigation shares an outstanding initial count with queue entry and uses the effective Suggestions filters', async () => {
+  let complete;
+  const items = Array.from({ length: 21 }, (_, i) => ({
+    id: String(i + 1), title: i < 5 ? 'Match' : 'Other', status: i === 20 ? 'outstanding_purchase' : 'suggestion',
+    claimedByStaffUserId: i < 8 ? null : '21', workflowTags: i < 4 ? ['Selected'] : [], relatedRequests: { count: i < 3 ? 1 : 0 }
+  }));
+  await fixture('?stage=profile', async ui => {
+    const count = value => assert.equal(ui.get('#requests-count').textContent, ` (${value})`);
+    const reads = () => ui.calls.filter(call => call.url.includes('/title-requests?'));
+    assert.equal(reads().length, 1);
+    assert.match(ui.get('#requests-count-state').textContent, /loading/);
+    assert.equal(ui.get('#request-grid table'), null);
+    ui.get('[data-view="queue"]').click();
+    await until(() => !ui.get('#queue-view').hidden, 'entered Requests while loading');
+    complete(response(200, { scope: 'all', items, organizations: [] }));
+    await until(() => ui.get('.request-title-link'), 'accepted rows');
+    count(20); assert.equal(reads().length, 1);
+    const select = (selector, value) => {
+      const input = ui.get(selector); input.value = value; input.dispatchEvent(new ui.dom.window.Event('change'));
+    };
+    select('#claim-filter', 'unclaimed'); count(8);
+    ui.edit('#request-search', 'Match'); count(5);
+    select('#tag-filter', 'Selected'); count(4);
+    select('#similar-filter', 'similar'); count(3);
+    ui.get('[data-status="outstanding_purchase"]').click();
+    await until(() => ui.get('[data-status="outstanding_purchase"]').getAttribute('aria-selected') === 'true', 'Purchases selected');
+    count(8); select('#claim-filter', 'all'); count(20);
+    ui.edit('#request-search', 'absent'); select('#tag-filter', 'Selected'); count(20);
+    ui.get('[data-status="suggestion"]').click();
+    await until(() => ui.get('.gridjs-summary')?.textContent === 'Showing 1 to 20 of 20 results', 'Suggestions restored');
+    ui.edit('#request-search', 'Match'); count(5);
+    ui.get('#profile-button').click(); await until(() => !ui.get('#profile-view').hidden, 'returned to Profile'); count(20);
+    ui.get('[data-view="queue"]').click();
+    await until(() => !ui.get('#queue-view').hidden && ui.get('.gridjs-summary')?.textContent === 'Showing 1 to 20 of 20 results', 'reset results');
+    count(20); assert.equal(reads().length, 1);
+  }, { api: ({ pathname }) => pathname.endsWith('/title-requests') ? new Promise(resolve => { complete = resolve; }) : undefined });
+});
 for (const scope of ['system', '2']) {
   test(`Settings navigation recovery: ${scope} conflict discard requires a current version`, () =>
     fixture(`?stage=settings&settingsScope=${scope}#settings-patron`, async ui => {
@@ -1042,7 +1101,10 @@ test('empty authoritative publication is clean even with configured choices', ()
   await ui.closeDetail();
   assert.equal(ui.confirms.length, 0);
 }));
-test('save protects fields while pending and clears draft after authoritative success', () => fixture(`?request=${id}`, async ui => {
+test('save protects fields while pending and clears draft after authoritative success', () => fixture('?stage=suggestion', async ui => {
+  ui.edit('#request-search', 'Saved title');
+  await ui.open();
+  assert.equal(ui.get('#requests-count').textContent, ' (1)');
   let resolve;
   ui.edit('.edit-form input', 'Saved browser draft');
   ui.setOperation(() => new Promise(done => { resolve = done; }));
@@ -1052,8 +1114,11 @@ test('save protects fields while pending and clears draft after authoritative su
   ui.get('#close-request').click();
   assert.equal(ui.get('#request-dialog').open, true);
   assert.equal(ui.confirms.length, 0);
-  resolve(response(200, { committed: true, request: { ...ui.readRequest(), version: 'v2', title: 'Saved browser draft' } }));
+  const saved = { ...ui.readRequest(), version: 'v2', title: 'Saved browser draft' };
+  ui.setApi(({ pathname }) => pathname.endsWith('/title-requests') ? response(200, { scope: 'all', items: [saved], organizations: [] }) : undefined);
+  resolve(response(200, { committed: true, request: saved }));
   await until(() => ui.get('.edit-form input').value === 'Saved browser draft' && !ui.get('.edit-form input').disabled, 'saved detail rendered');
+  await until(() => ui.get('#requests-count').textContent === ' (0)', 'saved title no longer matches the queue search');
   const unload = new ui.dom.window.Event('beforeunload', { cancelable: true });
   ui.dom.window.dispatchEvent(unload);
   assert.equal(unload.defaultPrevented, false);
@@ -3090,7 +3155,7 @@ for (const copy of [false, true]) {
         assert.match(ui.get(copy ? '#additional-copy-summary' : '#status-count-state').textContent, /unavailable/i);
         available = true; ui.get(copy ? '#refresh-additional-copies' : '#refresh-queue').click();
         await until(() => /Reviewed request/.test(ui.get(grid).textContent), 'explicit retry renders fresh data');
-      }, { copyRequest: {} }));
+      }, { request: { title: 'Before configuration commit' }, copyRequest: {} }));
   }
   for (const settingsScope of ['2', '3', 'system', '1']) {
     test(`authoritative projections: ${view} configuration scope ${settingsScope}`, () =>
@@ -3127,10 +3192,10 @@ for (const copy of [false, true]) {
         if (['2', '3'].includes(settingsScope)) {
 
         }
+        const before = queueReads;
         ui.edit('#patron-login-note', 'Committed configuration');
         ui.get('#settings-form').dispatchEvent(new ui.dom.window.Event('submit', { cancelable: true }));
         await until(() => committed && !ui.get('#settings-form').inert, 'configuration committed and reviewed');
-        const before = queueReads;
         ui.get(`[data-view="${view}"]`).click(); await settle();
         if (settingsScope === '3') {
           assert.equal(queueReads, before, 'unaffected library projection stays loaded');
@@ -3190,7 +3255,8 @@ for (const copy of [false, true]) {
         assert.equal(ui.get('#operations-scope option[value="2"]'), null, 'Operations choice retired');
         assert.equal(ui.get('#operations-scope').value, 'all', 'Operations selection canonicalized');
         ui.get(`[data-view="${view}"]`).click();
-        await until(() => queueReads > 0, 'queue refresh attempted');
+        await until(() => !ui.get(copy ? '#additional-copy-view' : '#queue-view').hidden && queueReads > 0,
+          'queue navigation committed and refresh attempted');
         assert.equal(ui.params().get('scope'), 'all');
         assert.equal(ui.params().get('marker'), 'keep');
         assert.equal(ui.get(`${grid} .grid-open`), null, 'failed refresh cannot resurrect invalid rows');

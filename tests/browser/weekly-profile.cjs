@@ -137,9 +137,9 @@ async function main() {
     await scan(page, 'desktop');
 
     await field.fill('draft@example.org');
-    await decideConfirmation(page, () => page.getByRole('button', { name: 'Requests', exact: true }).click(), dialog => dialog.dismiss());
+    await decideConfirmation(page, () => page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click(), dialog => dialog.dismiss());
     assert.equal(await field.inputValue(), 'draft@example.org');
-    await decideConfirmation(page, () => page.getByRole('button', { name: 'Requests', exact: true }).click(), dialog => dialog.accept());
+    await decideConfirmation(page, () => page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click(), dialog => dialog.accept());
     await page.getByRole('button', { name: 'Profile', exact: true }).click();
     assert.equal(await field.inputValue(), 'additional@example.org');
     await field.fill('conflict@example.org'); conflictNext = true;

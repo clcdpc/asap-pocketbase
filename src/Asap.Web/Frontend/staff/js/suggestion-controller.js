@@ -13,6 +13,7 @@ import { element, icon, labeledInput, selectWithHistorical, dateTime } from './u
 export function createSuggestionController({ root, trigger, sessionIdentity, polarisLookup, announce, getLibraries,
   beforeOpen, beforeClose, openCreatedTitle, openExistingTitle, onReceipt, clearReceipt,
   getNavigationGeneration = () => 0,
+  onTitleChanged = () => {},
   getScope = () => null, request: send = authorizedJson }) {
   const dom = { staffSuggestionDialog: root, staffSuggestionForm: root.querySelector('#staff-suggestion-form'),
     staffSuggestionStatus: root.querySelector('#staff-suggestion-status'), staffSuggestionBody: root.querySelector('#staff-suggestion-body'),
@@ -751,6 +752,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       if (!validRequestId(created?.id) || !Number.isSafeInteger(created?.libraryOrgId) ||
           created.libraryOrgId !== body.libraryOrgId) throw unconfirmedResponseError();
       attempt.outcome = 'committed'; attempt.pending = false;
+      onTitleChanged(owner, body.libraryOrgId);
       const notification = notificationOutcome(created.notificationStatus, created.notificationReason, 'Confirmation email');
       const notificationText = notification.text || (created.notificationStatus === 'not_requested'
         ? ' No confirmation email was requested.' : ' Confirmation email status is unconfirmed.');
@@ -769,6 +771,7 @@ export function createSuggestionController({ root, trigger, sessionIdentity, pol
       const pickupChanged = error.response?.code === 'request_not_created_pickup_changed' && error.response?.pickupPreferenceChanged === true;
       const uncertain = !pickupChanged && (error.outcomeUnknown === true || !error.status || error.status === 408 || error.status >= 500 || isAbortError(error));
       attempt.outcome = pickupChanged ? 'pickup_changed' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
+      if (uncertain) { onTitleChanged(owner, body.libraryOrgId); }
       if (pickupChanged) {
         const selectedPickupId = Number(attempt.body.preferredPickupBranchId);
         const selectedPickup = current.result?.patron?.pickupBranches?.find(branch => Number(branch.id) === selectedPickupId);
