@@ -157,7 +157,7 @@ button, a, input, select, textarea { outline-offset: 3px; }
 .recent-request-list button:hover { background: var(--soft); }
 .recent-request-list p { margin: 6px; color: var(--muted); }
 
-main { width: min(1500px, 100%); margin: 0 auto; padding: 0 clamp(14px, 3vw, 38px) 44px; }
+main { width: min(1800px, 100%); margin: 0 auto; padding: 0 clamp(14px, 2vw, 28px) 44px; }
 .status-message { min-height: 28px; margin: 12px 0; color: var(--muted); }
 .status-message.error { color: var(--danger); font-weight: 600; }
 .status-message.success { color: var(--success); font-weight: 600; }
@@ -404,7 +404,6 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
 
 .operations-actions { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; padding: 4px 0 20px; }
-#operations-view { max-width: 1100px; margin-inline: auto; }
 #operations-view h1 { font-size: 1.875rem; }
 #operations-view .section-heading .compact-field { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 #operations-view .compact-field select { min-height: 42px; max-width: 100%; }

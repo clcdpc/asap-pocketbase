@@ -10,6 +10,30 @@ const settingsSpacingRecorder = require('./settings-spacing.cjs');
 const materialFormatsLayout = require('./material-formats-layout.cjs');
 const [baseURL, artifacts, staffId, tenantId, email] = process.argv.slice(2);
 
+async function verifyWorkspaceAlignment(page) {
+  const { viewport, workspace, content } = await page.evaluate(() => {
+    const edges = selector => {
+      const { left, right } = document.querySelector(selector).getBoundingClientRect();
+      return [left, right];
+    };
+    return {
+      viewport: document.documentElement.clientWidth,
+      workspace: edges('main'),
+      content: Object.fromEntries(['.view-tabs', '#operations-view > .section-heading', '.operations-sections',
+        '#operations-workflow-panel'].map(selector => [selector, edges(selector)]))
+    };
+  });
+  const margin = Math.max(0, (viewport - 1800) / 2);
+  assert.deepEqual(workspace, [margin, viewport - margin], 'Main is centered and capped at 1800px.');
+  const { width } = page.viewportSize();
+  const padding = width <= 760 ? 10 : Math.min(28, Math.max(14, width * 0.02));
+  const inset = margin + padding;
+  for (const [selector, [left, right]] of Object.entries(content)) {
+    assert.ok(Math.abs(left - inset) < 1 && Math.abs(right - (viewport - inset)) < 1,
+      `${width}px: ${selector} spans ${left}–${right}, expected ${inset}px inset on both sides`);
+  }
+}
+
 async function verifyPolarisSettings(page, width, scope, scan, report) {
   await page.locator('#settings-nav-polaris').click();
   const key = page.locator('#polaris-api-key'), password = page.locator('#polaris-admin-pass');
@@ -436,6 +460,14 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
         await page.locator('#refresh-operations:not([disabled])').waitFor();
         await quietFeedback();
         assert.equal((await sortedSelect('#operations-scope'))[0].id, 'all');
+        await verifyWorkspaceAlignment(page);
+        if (width === 1440) {
+          for (const wide of [1920, 2560]) {
+            await page.setViewportSize({ width: wide, height: 900 });
+            await verifyWorkspaceAlignment(page);
+          }
+          await page.setViewportSize({ width, height: 900 });
+        }
         await page.locator('[data-view="settings"]').click();
         await page.locator('#settings-form:not([hidden])').waitFor();
         assert.equal((await sortedSelect('#settings-scope'))[0].id, 'system');
