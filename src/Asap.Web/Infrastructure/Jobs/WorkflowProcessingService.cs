@@ -338,104 +338,6 @@ public sealed partial class WorkflowProcessingService(
         }
     }
 
-    private async Task<WorkflowItemResult> PromoteRowAsync(
-        TitleRequest candidate,
-        int scanScope,
-        byte[] expectedProgressVersion,
-        StaffIdentityEvidence? manualActorEvidence,
-        CancellationToken cancellationToken)
-    {
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-        if (!await LockManualOrganizationsAsync(context, manualActorEvidence, candidate.LibraryOrganizationId, cancellationToken))
-        {
-            return new WorkflowItemResult("staff_scope_forbidden", Stop: true);
-        }
-        var organization = await context.Organizations.FromSqlInterpolated(
-                $"SELECT * FROM [asap].[Organization] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {candidate.LibraryOrganizationId}")
-            .SingleOrDefaultAsync(cancellationToken);
-        if (!await IsManualActorAllowedLockedAsync(
-                context,
-                manualActorEvidence,
-                candidate.LibraryOrganizationId,
-                cancellationToken))
-        {
-            return new WorkflowItemResult("staff_scope_forbidden", Stop: true);
-        }
-        var request = organization is null
-            ? null
-            : await context.TitleRequests.FromSqlInterpolated(
-                    $"SELECT * FROM [asap].[TitleRequest] WITH (UPDLOCK,HOLDLOCK) WHERE [Id] = {candidate.Id}")
-                .SingleOrDefaultAsync(cancellationToken);
-        var code = "skipped";
-        var changed = false;
-        if (organization is not null && OrganizationAuthority.IsActiveLibrary(organization) && request is not null &&
-            request.LibraryOrganizationId == candidate.LibraryOrganizationId &&
-            request.RowVersion.SequenceEqual(candidate.RowVersion) &&
-            request.Status == RequestStatus.OutstandingPurchase)
-        {
-            var settings = await EffectiveWorkflowAsync(context, request.LibraryOrganizationId, cancellationToken);
-            var incomplete = await PickupPreferenceMutationService.HasIncompleteAsync(context, request.Id, cancellationToken) ||
-                await context.HoldPlacementOperations.AnyAsync(
-                item => item.TitleRequestId == request.Id && item.CompletedUtc == null,
-                cancellationToken);
-            if (incomplete)
-            {
-                code = "hold_operation_incomplete";
-            }
-            else if (settings.AutoPromote == true && request.BibId is > 0)
-            {
-                var otherOpenBibs = request.AutoHold ? await context.TitleRequests.AsNoTracking().Where(item =>
-                    item.LibraryOrganizationId == request.LibraryOrganizationId &&
-                    ((request.PatronIdSnapshot.HasValue && item.PatronIdSnapshot == request.PatronIdSnapshot) ||
-                     item.PatronIdSnapshot == null && item.Barcode == request.Barcode) && item.BibId != null &&
-                    item.Id != request.Id && item.Status != RequestStatus.Closed)
-                    .Select(item => item.BibId!)
-                    .ToListAsync(cancellationToken) : [];
-                var duplicate = otherOpenBibs.Contains(request.BibId);
-                if (duplicate)
-                {
-                    code = "duplicate_open_request";
-                }
-                else if (request.AutoHold && !request.BibIdStaffVerified)
-                {
-                    code = "bib_unverified";
-                }
-                else
-                {
-                    request.Status = TitleRequestWorkflowPolicy.AfterCatalogMatch(request.AutoHold);
-                    request.CloseReason = request.AutoHold ? null : "purchased_no_hold";
-                    request.LastPromoterCheckUtc = UtcNow();
-                    request.UpdatedUtc = UtcNow();
-                    context.TitleRequestEvents.Add(new TitleRequestEvent
-                    {
-                        TitleRequestId = request.Id,
-                        EventType = "promoted",
-                        Status = request.Status,
-                        CloseReason = request.CloseReason,
-                        ActorType = "system",
-                        Message = request.AutoHold ? "Purchase promoted to hold placement." : "Purchase completed without an automatic hold.",
-                        CreatedUtc = UtcNow()
-                    });
-                    code = "changed";
-                    changed = true;
-                }
-            }
-        }
-
-        return await CommitLocalOutcomeAsync(
-            context,
-            transaction,
-            QueueNames.PurchasePromotion,
-            scanScope,
-            expectedProgressVersion,
-            candidate.CreatedUtc,
-            candidate.Id,
-            code,
-            changed,
-            cancellationToken);
-    }
-
     private async Task<WorkflowItemResult> PlaceHoldRowAsync(
         TitleRequest candidate,
         int scanScope,
@@ -541,6 +443,7 @@ public sealed partial class WorkflowProcessingService(
         {
             OrganizationId = organizationId,
             AutoPromote = library?.AutoPromote ?? system.AutoPromote,
+            ExcludedPromotionToms = system.ExcludedPromotionToms,
             OutstandingTimeoutEnabled = library?.OutstandingTimeoutEnabled ?? system.OutstandingTimeoutEnabled,
             OutstandingTimeoutDays = library?.OutstandingTimeoutDays ?? system.OutstandingTimeoutDays,
             OutstandingTimeoutSendEmail = library?.OutstandingTimeoutSendEmail ?? system.OutstandingTimeoutSendEmail,

@@ -135,6 +135,159 @@ public sealed partial class PolarisProtocolTests
         Assert.AreEqual(1, handler.RequestCount);
     }
 
+    private const string TomDefinitions = """
+        {"PAPIErrorCode":3,"MARCTypeOfMaterialsRows":[{"MARCTypeOfMaterialID":36,"Description":"eBook","SearchCode":"ebk"},
+        {"MARCTypeOfMaterialID":41,"Description":"eAudiobook","SearchCode":"aeb"},{"MARCTypeOfMaterialID":1,"Description":"Book","SearchCode":"bks"}]}
+        """;
+
+    [TestMethod]
+    [DataRow("aeb,ebk", "0-8044-2957-X", "ISBN", "080442957X", 1)]
+    [DataRow("bks", "001234567890", "UPC", "001234567890", 36)]
+    [DataRow("", "n 78-89035", "LCCN", "n78089035", 41)]
+    public async Task PurchaseDiscoverySendsOneFilteredIdentifierSearch(string codes, string query,
+        string field, string catalogValue, int primary)
+    {
+        var exclusions = codes.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        var hit = SearchRow(42, "Title", primary);
+        hit[field] = catalogValue;
+        var replies = new List<(HttpStatusCode, string)>();
+        if (exclusions.Length > 0)
+        {
+            replies.Add((HttpStatusCode.OK, TomDefinitions));
+        }
+        replies.Add((HttpStatusCode.OK, PageResponse(1, [hit])));
+        var handler = new SequenceResponseHandler(replies.ToArray());
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.LookupPurchaseIdentifierAsync(query, 2, exclusions, CancellationToken.None);
+        Assert.AreEqual(IdentifierLookupOutcome.Found, result.Outcome);
+        Assert.AreEqual(42, result.BibId);
+        var identifier = field == "LCCN" ? "N7889035" : catalogValue;
+        var term = $"ISBN=\"{identifier}\" OR UPC=\"{identifier}\" OR LCCN=\"{catalogValue}\"";
+        if (exclusions.Length > 0)
+        {
+            term = $"({term}) NOT ({string.Join(" OR ", exclusions.Select(code => "TOM=" + code))})";
+        }
+        AssertSearchRequest(handler.RequestUris.Last(), "/search/bibs/boolean", term, "PDTI", 1);
+        Assert.AreEqual(replies.Count, handler.RequestCount);
+    }
+
+    [TestMethod]
+    [DataRow("zero", IdentifierLookupOutcome.DefinitiveNotFound)]
+    [DataRow("empty-hit", IdentifierLookupOutcome.OperationalFailure)]
+    [DataRow("primary", IdentifierLookupOutcome.OperationalFailure)]
+    [DataRow("associated", IdentifierLookupOutcome.OperationalFailure)]
+    [DataRow("missing-material", IdentifierLookupOutcome.OperationalFailure)]
+    [DataRow("unconfirmed", IdentifierLookupOutcome.OperationalFailure)]
+    [DataRow("short", IdentifierLookupOutcome.OperationalFailure)]
+    [DataRow("multiple", IdentifierLookupOutcome.Found)]
+    [DataRow("large", IdentifierLookupOutcome.Found)]
+    public async Task PurchaseDiscoveryChecksFirstPageCardinalityAndEvidence(string scenario, IdentifierLookupOutcome expected)
+    {
+        var total = scenario switch { "zero" => 0, "multiple" => 2, "large" or "short" => 111, _ => 1 };
+        var count = scenario switch { "empty-hit" => 0, "short" => 1, _ => Math.Min(10, total) };
+        var rows = Enumerable.Range(1, count).Select(id => SearchRow(id, "Title",
+            scenario switch { "missing-material" => null, "primary" => 36, _ => 1 })).ToArray();
+        foreach (var row in rows)
+        {
+            row["ISBN"] = scenario == "unconfirmed" ? "9780000000000" : "9780306406157";
+            row["TypeOfMaterialValues"] = scenario == "associated" ? new[] { 1, 36 } : new[] { 1 };
+        }
+        var handler = new SequenceResponseHandler((HttpStatusCode.OK, TomDefinitions), (HttpStatusCode.OK, PageResponse(total, rows)),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"ControlNumber":1,"PrimaryTypeOfMaterial":1,"BibGetRows":[{"ElementID":1,"Label":"ISBN","Value":"9780000000000"}]}"""));
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.LookupPurchaseIdentifierAsync("9780306406157", 2, ["ebk"], CancellationToken.None);
+        Assert.AreEqual(expected, result.Outcome);
+        Assert.AreEqual(scenario is "multiple" or "large", result.MultipleMatches);
+        Assert.IsNull(result.BibId);
+        Assert.AreEqual(scenario == "unconfirmed" ? 3 : 2, handler.RequestCount);
+    }
+
+    [TestMethod]
+    [DataRow("")]
+    [DataRow("unknown")]
+    [DataRow("*9780306406157*")]
+    public async Task UnsupportedPurchaseIdentifierDoesNotContactPolaris(string identifier)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK, PageResponse(0, []));
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.LookupPurchaseIdentifierAsync(identifier, 2, [], CancellationToken.None);
+        Assert.AreEqual("unsupported_identifier", result.ErrorCode);
+        Assert.IsNull(result.BibId);
+        Assert.AreEqual(0, handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task PurchaseDiscoveryCorroboratesSparseSearchHitFromExactBibDetail()
+    {
+        var handler = new SequenceResponseHandler((HttpStatusCode.OK,
+            """{"PAPIErrorCode":1,"ErrorMessage":"Search terms normalized","TotalRecordsFound":1,"BibSearchRows":[{"ControlNumber":42,"PrimaryTypeOfMaterial":1}]}"""),
+            (HttpStatusCode.OK, """{"PAPIErrorCode":0,"PrimaryTypeOfMaterial":1,"BibGetRows":[{"ElementID":1,"Label":"LCCN","Value":"n78089035"}]}"""));
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.LookupPurchaseIdentifierAsync("n 78-89035", 2, [], CancellationToken.None);
+        Assert.AreEqual(IdentifierLookupOutcome.Found, result.Outcome);
+        Assert.AreEqual(42, result.BibId);
+        StringAssert.Contains(handler.RequestUris.Last().AbsolutePath, "/bib/42");
+    }
+
+    [TestMethod]
+    [DataRow("missing")]
+    [DataRow("ebk OR CN=42")]
+    [DataRow("36")]
+    public async Task PurchaseDiscoveryRequiresRecognizedTomBeforeSearching(string code)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK, TomDefinitions);
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.LookupPurchaseIdentifierAsync("9780306406157", 2, [code], CancellationToken.None);
+        Assert.AreEqual(IdentifierLookupOutcome.OperationalFailure, result.Outcome);
+        StringAssert.EndsWith(handler.RequestUris.Single().AbsolutePath, "/marctypeofmaterials");
+    }
+
+    [TestMethod]
+    [DataRow(503, "{}")]
+    [DataRow(200, "{\"PAPIErrorCode\":0,\"MARCTypeOfMaterialsRows\":[]}")]
+    [DataRow(200, "{\"PAPIErrorCode\":2,\"MARCTypeOfMaterialsRows\":[{\"MARCTypeOfMaterialID\":36,\"Description\":\"eBook\",\"SearchCode\":\"ebk\"}]}")]
+    public async Task UnavailableTomDefinitionsBlockFilteredSearch(int status, string body)
+    {
+        var handler = new StaticResponseHandler((HttpStatusCode)status, body);
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.LookupPurchaseIdentifierAsync("9780306406157", 2, ["ebk"], CancellationToken.None);
+        Assert.AreEqual(IdentifierLookupOutcome.OperationalFailure, result.Outcome);
+        StringAssert.EndsWith(handler.RequestUris.Single().AbsolutePath, "/marctypeofmaterials");
+    }
+
+    [TestMethod]
+    [DataRow(401, "{}")]
+    [DataRow(408, "{}")]
+    [DataRow(503, "{}")]
+    [DataRow(200, "{}")]
+    [DataRow(200, "{\"TotalRecordsFound\":-1,\"BibSearchRows\":[],\"PAPIErrorCode\":0}")]
+    public async Task PurchaseDiscoveryDistinguishesProviderFailureFromZeroMatches(int status, string body)
+    {
+        var handler = new StaticResponseHandler((HttpStatusCode)status, body);
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.LookupPurchaseIdentifierAsync("9780306406157", 2, [], CancellationToken.None);
+        Assert.AreEqual(IdentifierLookupOutcome.OperationalFailure, result.Outcome);
+        Assert.AreEqual(1, handler.RequestCount);
+    }
+
+    [TestMethod]
+    [DataRow("eligible", IdentifierLookupOutcome.Found)]
+    [DataRow("excluded", IdentifierLookupOutcome.DefinitiveNotFound)]
+    [DataRow("wrong-bib", IdentifierLookupOutcome.OperationalFailure)]
+    [DataRow("contradiction", IdentifierLookupOutcome.OperationalFailure)]
+    public async Task StaffPurchaseBibUsesExactControlNumberWithTheSameTomFilter(string scenario, IdentifierLookupOutcome expected)
+    {
+        var detail = """{"PAPIErrorCode":0,"ControlNumber":42,"PrimaryTypeOfMaterial":1,"BibGetRows":[{"ElementID":1,"Value":"Title"}]}""";
+        var row = SearchRow(scenario == "wrong-bib" ? 43 : 42, "Title", scenario == "contradiction" ? 36 : 1);
+        var search = scenario == "excluded" ? PageResponse(0, []) : PageResponse(1, [row]);
+        var handler = new SequenceResponseHandler((HttpStatusCode.OK, detail), (HttpStatusCode.OK, TomDefinitions), (HttpStatusCode.OK, search));
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.ValidatePurchaseBibAsync(42, 2, ["aeb", "ebk"], CancellationToken.None);
+        Assert.AreEqual(expected, result.Outcome);
+        AssertSearchRequest(handler.RequestUris.Last(), "/search/bibs/boolean", "(CN=42) NOT (TOM=aeb OR TOM=ebk)", "PDTI", 1);
+        Assert.AreEqual(3, handler.RequestCount);
+    }
+
     private static Dictionary<string, object?> SearchRow(int id, string title, int? materialType = null) =>
         new() { ["ControlNumber"] = id, ["Title"] = title, ["PrimaryTypeOfMaterial"] = materialType };
 

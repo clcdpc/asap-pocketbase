@@ -91,6 +91,55 @@ Remaining live checks include known ISBN, UPC and LCCN records, title stop words
 and punctuation, author formats outside the verified example, and the deployed
 catalog's deepest navigable page, site-specific limits and out-of-range response.
 
+## Approved purchase discovery
+
+Each outstanding purchase is eligible for another check when its library’s effective
+**Automatically promote approved purchases** setting is on. The promoter issues one
+Boolean search (page 1, ten records). With the system defaults the expression is:
+
+```text
+(ISBN="<normalized>" OR UPC="<normalized>" OR LCCN="<normalized LCCN>") NOT (TOM=aeb OR TOM=ebk)
+```
+
+Polaris applies binary `NOT` to the grouped identifier and TOM expressions. An
+empty exclusion list sends the identifier expression alone. A filtered
+`TotalRecordsFound` of zero leaves the purchase outstanding for a later check.
+Two or more matches require staff review. One match requires one valid BIB,
+consistent TOM evidence and identifier corroboration from its search row or exact
+BIB detail. Inconsistent responses and unavailable lookups remain retryable.
+[Polaris Boolean syntax](https://catalog.clcohio.org/polaris/help/content/1033/boolean.htm)
+[BibBooleanSearch response](https://documentation.iii.com/polaris/PAPI/current/PAPIService/PAPIServiceBibBooleanSearch.htm)
+
+**Excluded TOMs for automatic promotion** is system-wide. Staff select descriptions
+from Polaris MARC TOM definitions. The schema 13 DACPAC adds a nullable column on
+the system workflow row. An unset value resolves to eBook (`ebk`) and eAudiobook
+(`aeb`) on installation and upgrade. A saved empty string represents no exclusions.
+Unresolved configured codes block evaluation. Library AutoPromote overrides,
+interactive searches and suggestion checks retain their own policies.
+
+A staff-verified assignment gets an exact BIB read. With exclusions, the promoter
+also checks its control number with the same index predicate, for example
+`(CN=2373666) NOT (TOM=aeb OR TOM=ebk)`. This accounts for associated TOMs beyond
+the primary ID. Staff retain their selection and identifier-check history.
+Unverified assignments must agree with the unique identifier match.
+
+Before committing, the worker rechecks the exclusion list and existing request,
+scope, queue and operation fences. An accepted identifier match sets the canonical
+check to found, updates its result and timestamp, clears previous retries and errors,
+and replaces obsolete identifier tags. The same transaction records the verified
+BIB/identifier, promotion result, transition and queue outcome. Pending holds use the
+existing journaled placement worker. Opt-outs close as purchased without hold.
+
+Read-only checks on the CLC development PowerPAC (8.1.7065.1, November 25, 2026)
+returned BIB 1339524 for ISBN 9780439023528 with and without the default exclusions.
+Excluding `bks` returned zero. ISBN 9781593275440 returned BIB 2373666 unfiltered
+and zero with the defaults. That BIB matched both `ebk` and `bks`; excluding
+either from its control-number query removed it. BIB 4201333 matched both `aeb`
+and `abk` and was removed by the defaults. The public PAPI reference endpoint
+required authentication (HTTP 401). Controlled HTTP responses verify the pinned
+client’s query serialization, filtered totals and evidence handling. Live checks
+used PowerPAC counts. [CLC development catalog](https://devpac.clcohio.org/Polaris/default.aspx)
+
 Each result retains `bibId`, `title`, `author`, `publication`, `identifier`,
 `materialTypeId` and `format`. Format labels resolve through Polaris MARC material definitions,
 using a bounded, serialized reference read and an in-memory cache for the host

@@ -48,6 +48,8 @@ public sealed partial class PatronJourneyTests
         var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         var seeded = await SeedBibOwnershipRequestAsync("phase-promotion", 9001, staffVerified: true,
             isbnCheckStatus: "found", status: "outstanding_purchase", autoHold: autoHold, libraryOrganizationId: scope);
+        factory.Services.GetRequiredService<Asap.Web.Infrastructure.Testing.DeterministicTestingPatronProvider>()
+            .SetBib(9001, scope, new BibValidationResult(true) { PrimaryMaterialTypeId = 1 });
         long? newerRequestId = null;
         try
         {

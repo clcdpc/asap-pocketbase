@@ -13,7 +13,7 @@ function settingsData(scope) {
   const empty = { exists: false, values: [] };
   const templates = keys.map((templateKey, index) => ({ id: String(index + 1), organizationId: 1,
     templateKey, subject: sourceText, body: sourceText, enabled: true, version: 'template-v1' }));
-  const configured = { workflow: { suggestionLimitMessage: sourceText, commonAuthorsEnabled: true,
+  const configured = { workflow: { suggestionLimitMessage: sourceText, commonAuthorsEnabled: true, excludedPromotionToms: ['aeb', 'ebk'],
       commonAuthorsLabel: 'Common creators', commonAuthorsHelp: 'Select creators', commonAuthorsMessage: 'Creator guidance' },
     patron: { successMessage: sourceText },
     email: { fromAddress: 'fixture@example.org', fromName: 'Fixture' },
@@ -288,6 +288,9 @@ async function runSourceComponents(artifacts) {
           { id: 1, name: 'System', organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org1' },
           { id: 2, name: 'Library Two', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org2' }
         ] } });
+        if (url.pathname === '/api/asap/staff/polaris/promotion-toms') return route.fulfill({ json: { data: [
+          { searchCode: 'ebk', description: 'eBook' }, { searchCode: 'aeb', description: 'eAudiobook' }
+        ] } });
         if (url.pathname === '/api/asap/staff/polaris/patron-codes') return route.fulfill({ json: { data: [] } });
         if (url.pathname === '/api/asap/staff/users') {
           if (route.request().method() !== 'GET') { writes.push({ staff: route.request().postDataJSON() }); return route.fulfill({ status: 400, json: { message: 'Unexpected staff mutation in the presentation fixture.' } }); }
@@ -378,6 +381,11 @@ async function runSourceComponents(artifacts) {
       }
       await page.locator('#settings-nav-workflow').click();
       await page.locator('#settings-workflow').waitFor({ state: 'visible' });
+      const promotionToms = page.getByRole('listbox', { name: 'Excluded TOMs for automatic promotion' });
+      await page.locator('#auto-promote').focus();
+      await page.keyboard.press('Tab');
+      assert.equal(await promotionToms.evaluate(node => node === document.activeElement), true);
+      assert.deepEqual(await promotionToms.evaluate(node => Array.from(node.selectedOptions, opt => opt.textContent)), ['eBook', 'eAudiobook']);
       const addCreator = page.locator('#add-common-creator');
       await addCreator.press('Enter');
       const creatorRows = page.locator('#common-creators-editor .settings-creator-row');
@@ -781,6 +789,7 @@ async function runSourceComponents(artifacts) {
       await page.locator('#settings-scope').selectOption('2');
       await page.waitForFunction(() => window.accessibilitySettings.currentScope() === '2' && window.accessibilitySettings.isReady());
       await firstTab.click();
+      assert.equal(await page.locator('#excluded-promotion-toms').isDisabled(), true);
       assert.equal(await page.locator('#manage-library-participation').isDisabled(), true);
       const summary = await contrast(page, '#organizations-status-message'); receipt.contrasts.push({ selector: '#organizations-status-message', ...summary });
       assert.ok(summary.ratios[0] >= 4.5, JSON.stringify(summary));

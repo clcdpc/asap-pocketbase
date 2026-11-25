@@ -162,6 +162,10 @@ public sealed partial class AdministrationService
         {
             workflow.AdditionalCopyTimeoutEnabled = command.Workflow.AdditionalCopyTimeoutEnabled.Value ?? (isSystem ? false : (bool?)null);
         }
+        if (isSystem && command.Workflow.ExcludedPromotionToms is { } exclusions)
+        {
+            workflow.ExcludedPromotionToms = string.Join(',', exclusions);
+        }
         if (command.Workflow.AutoPromote.IsSupplied)
         {
             workflow.AutoPromote = command.Workflow.AutoPromote.Value ?? (isSystem ? false : (bool?)null);

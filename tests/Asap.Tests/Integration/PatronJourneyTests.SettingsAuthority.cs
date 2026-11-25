@@ -19,6 +19,73 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
+    public async Task PurchasePromotionTomSettingsPersistOnlyInSystemScope()
+    {
+        var actor = await ReadConfiguredSuperAdminAsync();
+        using var client = factory!.CreateClient();
+        AddTestingStaffHeaders(client, actor.Id, actor.EntraTenantId, actor.AuthenticationEmail);
+        client.DefaultRequestHeaders.Add("X-ASAP-Antiforgery", await ReadAntiforgeryTokenAsync(client));
+        var auditBefore = await ReadAuditHighWatermarkAsync();
+        async Task<HttpResponseMessage> SaveAsync(string scope, string[] codes)
+        {
+            using var settings = await ReadSettingsDocumentAsync(client, scope);
+            return await PostSettingsJsonAsync(client, JsonSerializer.Serialize(new
+            {
+                orgId = scope, version = settings.RootElement.GetProperty("version").GetString(),
+                workflow = new { excludedPromotionToms = codes }
+            }));
+        }
+        async Task<string[]> ReadAsync(string scope)
+        {
+            using var settings = await ReadSettingsDocumentAsync(client, scope);
+            return settings.RootElement.GetProperty("systemValues").GetProperty("workflow")
+                .GetProperty("excludedPromotionToms").Deserialize<string[]>()!;
+        }
+        try
+        {
+            CollectionAssert.AreEquivalent(new[] { "ebk", "aeb" }, await ReadAsync("system"));
+            using var choices = await client.GetAsync("/api/asap/staff/polaris/promotion-toms?orgId=system");
+            Assert.AreEqual(HttpStatusCode.OK, choices.StatusCode);
+            StringAssert.Contains(await choices.Content.ReadAsStringAsync(), "eAudiobook");
+            foreach (var invalid in new[] { "unknown", "36", "bks OR CN=1" })
+            {
+                using var denied = await SaveAsync("system", [invalid]);
+                Assert.AreEqual(HttpStatusCode.BadRequest, denied.StatusCode);
+            }
+            using var library = await SaveAsync("2", ["bks"]);
+            Assert.AreEqual(HttpStatusCode.BadRequest, library.StatusCode);
+            StringAssert.Contains(await library.Content.ReadAsStringAsync(), "settings_system_only");
+            var libraryAdmin = (await GetOwnershipTestActorAsync()) with { Role = StaffRole.Admin, OrganizationId = 2 };
+            var systemCommand = AdministrationSettingsBinding.Bind(libraryAdmin, JsonSerializer.SerializeToElement(new
+            {
+                orgId = "system", workflow = new { excludedPromotionToms = new[] { "bks" } }
+            }));
+            var forbidden = await factory.Services.GetRequiredService<AdministrationService>()
+                .SaveSettingsAsync(libraryAdmin, systemCommand, CancellationToken.None);
+            Assert.AreEqual("staff_scope_forbidden", forbidden.Code);
+            foreach (string[] selection in new string[][] { ["bks"], [], [] })
+            {
+                using var response = await SaveAsync("system", selection);
+                Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
+                CollectionAssert.AreEqual(selection, await ReadAsync("system"));
+                CollectionAssert.AreEqual(selection, await ReadAsync("2"));
+            }
+            var provider = factory.Services.GetRequiredService<DeterministicTestingPatronProvider>();
+            provider.SetFailure(new(TestingPolarisOperation.PromotionToms, 1), new PolarisOperationalException("unavailable", "TOMs unavailable."));
+            using var unavailable = await SaveAsync("system", ["ebk"]);
+            Assert.AreEqual(HttpStatusCode.BadGateway, unavailable.StatusCode);
+            CollectionAssert.AreEqual(Array.Empty<string>(), await ReadAsync("system"));
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync("""
+                UPDATE [asap].[WorkflowSettings] SET [ExcludedPromotionToms] = NULL WHERE [OrganizationId] = 1;
+                DELETE FROM [asap].[AdministrativeAudit] WHERE [Id] > @auditBefore;
+                """, ("@auditBefore", auditBefore));
+        }
+    }
+
+    [TestMethod]
     public async Task SettingsContractOmitsRetiredArtworkConfiguration()
     {
         var actor = await ReadConfiguredSuperAdminAsync();

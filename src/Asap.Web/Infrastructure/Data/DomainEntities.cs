@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using Clc.Polaris.Api.Models;
 
 namespace Asap.Web.Infrastructure.Data;
@@ -108,6 +109,10 @@ public sealed class WorkflowSettings
     public bool? AdditionalCopyTimeoutEnabled { get; set; }
     public int? AdditionalCopyTimeoutDays { get; set; }
     public bool? AutoPromote { get; set; }
+    // NULL is the installation default. An empty string is an explicit empty selection.
+    public string? ExcludedPromotionToms { get; set; }
+    public string[] ReadExcludedPromotionToms() =>
+        (ExcludedPromotionToms ?? "aeb,ebk") is { Length: > 0 } codes ? codes.Split(',') : [];
     public bool? CommonAuthorsEnabled { get; set; }
     public string? CommonAuthorsLabel { get; set; }
     public string? CommonAuthorsHelp { get; set; }
@@ -380,6 +385,10 @@ public sealed class TitleRequest
     public string? CloseReason { get; set; }
     public int? BibId { get; set; }
     public bool BibIdStaffVerified { get; set; }
+    public int? AutoVerifiedBibId { get; set; }
+    public string? AutoVerifiedIdentifier { get; set; }
+    [DatabaseGenerated(DatabaseGeneratedOption.Computed)]
+    public bool HasTrustedBib { get; internal set; }
     public string? Notes { get; set; }
     public long? ClaimedByStaffUserId { get; set; }
     public string? ClaimedByDisplayName { get; set; }
@@ -387,6 +396,7 @@ public sealed class TitleRequest
     public string? ClaimType { get; set; }
     public long? ClaimRuleId { get; set; }
     public DateTime? LastPromoterCheckUtc { get; set; }
+    public string? LastPromoterResult { get; set; }
     public string? IsbnCheckStatus { get; set; }
     public string? IsbnCheckResult { get; set; }
     public int IsbnCheckRetryCount { get; set; }

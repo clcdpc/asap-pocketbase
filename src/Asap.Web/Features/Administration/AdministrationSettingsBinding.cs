@@ -17,6 +17,7 @@ public sealed record WorkflowSettingsPatch
     public SuppliedValue<bool?> HoldPickupTimeoutEnabled { get; init; }
     public SuppliedValue<bool?> PendingHoldTimeoutEnabled { get; init; }
     public SuppliedValue<bool?> AdditionalCopyTimeoutEnabled { get; init; }
+    public string[]? ExcludedPromotionToms { get; init; }
     public SuppliedValue<bool?> AutoPromote { get; init; }
     public SuppliedValue<bool?> CommonAuthorsEnabled { get; init; }
     public SuppliedValue<bool?> AllowPatronAutoholdOptOut { get; init; }
@@ -151,7 +152,7 @@ public static class AdministrationSettingsBinding
         "suggestionLimitMessage", "commonAuthorsLabel", "commonAuthorsHelp", "commonAuthorsMessage",
         "patronCodeEligibilityMessage", "outstandingTimeoutEnabled", "outstandingTimeoutSendEmail",
         "holdPickupTimeoutEnabled", "pendingHoldTimeoutEnabled", "additionalCopyTimeoutEnabled",
-        "autoPromote", "commonAuthorsEnabled", "allowPatronAutoholdOptOut", "allowAnyRegisteredCardLogin",
+        "autoPromote", "excludedPromotionToms", "commonAuthorsEnabled", "allowPatronAutoholdOptOut", "allowAnyRegisteredCardLogin",
         "patronCodeEligibilityEnabled", "suggestionLimit", "outstandingTimeoutDays", "holdPickupTimeoutDays",
         "pendingHoldTimeoutDays", "additionalCopyTimeoutDays", "outstandingTimeoutRejectionTemplateId",
         "outstandingTimeoutRejectionTemplate"
@@ -226,7 +227,7 @@ public static class AdministrationSettingsBinding
             error ??= "settings_library_only";
         }
         if (scope.Kind != LibraryScopeKind.System &&
-            (HasPropertyNamed(payload, "enabledLibraryOrgIds") || HasPropertyNamed(payload, "enabledLibraries") ||
+            (HasPropertyNamed(payload, "excludedPromotionToms") || HasPropertyNamed(payload, "enabledLibraryOrgIds") || HasPropertyNamed(payload, "enabledLibraries") ||
              HasPropertyNamed(payload, "patronEmbedAllowedOrigins") || HasPropertyNamed(payload, "origins")))
         {
             error ??= "settings_system_only";
@@ -302,6 +303,7 @@ public static class AdministrationSettingsBinding
             HoldPickupTimeoutEnabled = Boolean(workflow, "holdPickupTimeoutEnabled", ref error),
             PendingHoldTimeoutEnabled = Boolean(workflow, "pendingHoldTimeoutEnabled", ref error),
             AdditionalCopyTimeoutEnabled = Boolean(workflow, "additionalCopyTimeoutEnabled", ref error),
+            ExcludedPromotionToms = PromotionToms(workflow, ref error),
             AutoPromote = Boolean(workflow, "autoPromote", ref error),
             CommonAuthorsEnabled = Boolean(workflow, "commonAuthorsEnabled", ref error),
             AllowPatronAutoholdOptOut = Boolean(workflow, "allowPatronAutoholdOptOut", ref error),
@@ -678,6 +680,21 @@ public static class AdministrationSettingsBinding
             return default;
         }
         return new(true, value.ValueKind == JsonValueKind.String ? value.GetString() : null);
+    }
+
+    private static string[]? PromotionToms(JsonElement root, ref string? error)
+    {
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("excludedPromotionToms", out var values))
+        {
+            return null;
+        }
+        if (values.ValueKind != JsonValueKind.Array ||
+            values.EnumerateArray().Any(item => item.ValueKind != JsonValueKind.String || !PolarisTom.IsValidCode(item.GetString())))
+        {
+            error ??= "settings_payload_invalid";
+            return null;
+        }
+        return values.EnumerateArray().Select(item => item.GetString()!.ToLowerInvariant()).Distinct().Order(StringComparer.Ordinal).ToArray();
     }
 
     private static SuppliedValue<bool?> Boolean(JsonElement root, string name, ref string? error)

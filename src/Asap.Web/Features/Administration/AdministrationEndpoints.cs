@@ -56,6 +56,14 @@ public static class AdministrationEndpoints
         endpoints.MapPost("/api/asap/staff/polaris/test", TestPolarisAsync)
             .RequireAuthorization()
             .AddEndpointFilter<StaffAntiforgeryFilter>();
+        endpoints.MapGet("/api/asap/staff/polaris/promotion-toms", async (HttpContext context, string? orgId,
+            AdministrationService service, CancellationToken cancellationToken) =>
+        {
+            var actor = StaffAuthenticationEndpoints.RequireCurrentStaff(context);
+            return LibraryScope.TryParse(orgId, AdministrationSettingsBinding.DefaultScope(actor), out var scope)
+                ? ToResult(await service.ListPromotionTomsAsync(actor, scope, cancellationToken))
+                : Results.BadRequest(new { code = "organization_invalid" });
+        }).RequireAuthorization();
         endpoints.MapGet("/api/asap/staff/polaris/patron-codes", ListPatronCodesAsync)
             .RequireAuthorization();
         endpoints.MapGet("/api/asap/staff/audit", ListAuditAsync)

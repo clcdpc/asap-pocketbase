@@ -307,11 +307,22 @@ public sealed partial class TitleRequestMutationService
         {
             request.Identifier = Clean(proposedIdentifier);
         }
+        var clearsPromotion = request.LastPromoterCheckUtc.HasValue && (staffSelectedBib || input.Action == "reopen");
+        if (identifierChanged || bibChanged || clearsPromotion)
+        {
+            request.AutoVerifiedBibId = null;
+            request.AutoVerifiedIdentifier = null;
+            request.LastPromoterResult = null;
+            request.LastPromoterCheckUtc = null;
+        }
         if (identifierChanged || bibChanged)
         {
             request.BibId = null;
             request.BibIdStaffVerified = false;
             InvalidateIdentifierCheckState(request);
+        }
+        if (identifierChanged || bibChanged || clearsPromotion)
+        {
             await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
         }
         if (bibChanged || staffSelectedBib)

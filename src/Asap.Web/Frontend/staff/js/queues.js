@@ -598,8 +598,9 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
         onClick: event => { if (live(event)) searchCatalog(request, mode, event.currentTarget); }
       }, glyph('search'));
       const bibUrl = researchRecordUrl(request.research, 'bib', request.bibid);
-      const flags = [...new Set([...(request.workflowTags || []),
-        request.isbnCheckStatus === 'not_found' && !(request.workflowTags || []).includes('Polaris BIB not found') ? 'Identifier not found in Polaris' : null,
+      const promotionResult = request.status === 'outstanding_purchase' ? request.lastPromoterResult : null;
+      const flags = [...new Set([...(request.workflowTags || []), promotionResult,
+        !promotionResult && request.isbnCheckStatus === 'not_found' && !(request.workflowTags || []).includes('Polaris BIB not found') ? 'Identifier not found in Polaris' : null,
         request.relatedRequests?.count > 0 ? `${request.relatedRequests.count} related request(s)` : null].filter(Boolean))];
       return h('div', { className: 'request-bibliographic-cell' }, [
         h('div', { className: 'request-bibliographic-line' }, [

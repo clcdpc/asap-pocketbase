@@ -944,7 +944,7 @@ public sealed class HoldPlacementService(
             return new AcquisitionResult("bib_required");
         }
         var bibId = request.BibId.Value;
-        if (!request.BibIdStaffVerified)
+        if (!request.HasTrustedBib)
         {
             return new AcquisitionResult("bib_unverified");
         }
@@ -1287,7 +1287,7 @@ public sealed class HoldPlacementService(
         {
             return "hold_history_retained";
         }
-        return request.BibIdStaffVerified ? null : "bib_unverified";
+        return request.HasTrustedBib ? null : "bib_unverified";
     }
 
     private async Task<HoldPlacementResult> ExecuteReplyAsync(
@@ -1426,7 +1426,7 @@ public sealed class HoldPlacementService(
               AND [State] = N'in_progress' AND [Phase] = N'acquired'
               AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
                   WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
-                    AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
+                    AND request.[AutoHold] = 1 AND request.[HasTrustedBib] = 1
                     AND request.[LibraryOrganizationId] = {organizationId}
                     AND (request.[PatronIdSnapshot] IS NULL OR request.[PatronIdSnapshot] = {patron.PatronId})
                     AND NOT EXISTS (SELECT 1 FROM [asap].[HoldPlacementOperation] AS successful
@@ -1501,7 +1501,7 @@ public sealed class HoldPlacementService(
               AND [ReplyAnswer] = {(int)HoldRequestReplyAnswer.Yes} AND [ReplyState] = {(int)HoldRequestReplyState.AcceptEvenWithExistingHolds} AND [LeaseExpiresUtc] > SYSUTCDATETIME()
               AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
                   WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
-                    AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
+                    AND request.[AutoHold] = 1 AND request.[HasTrustedBib] = 1
                     AND NOT EXISTS (SELECT 1 FROM [asap].[HoldPlacementOperation] AS successful
                         WHERE successful.[TitleRequestId] = request.[Id] AND successful.[State] = N'succeeded')
                     AND request.[BibId] = [BibIdSnapshot]);
@@ -1703,7 +1703,7 @@ public sealed class HoldPlacementService(
               AND [State] = N'in_progress' AND [Phase] = N'acquired'
               AND EXISTS (SELECT 1 FROM [asap].[TitleRequest] AS request
                   WHERE request.[Id] = [TitleRequestId] AND request.[Status] = N'pending_hold'
-                    AND request.[AutoHold] = 1 AND request.[BibIdStaffVerified] = 1
+                    AND request.[AutoHold] = 1 AND request.[HasTrustedBib] = 1
                     AND NOT EXISTS (SELECT 1 FROM [asap].[HoldPlacementOperation] AS successful
                         WHERE successful.[TitleRequestId] = request.[Id] AND successful.[State] = N'succeeded')
                     AND request.[BibId] = [BibIdSnapshot])
