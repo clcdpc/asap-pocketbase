@@ -465,7 +465,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await page.getByText('Profile saved.').waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'profile-saved');
 
-    await page.getByRole('button', { name: 'Requests' }).click();
+    await page.locator('[data-view="queue"]').click();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'queue-title');
     const suggestionTab = page.locator('[data-status="suggestion"]');
     await suggestionTab.focus();
@@ -1989,7 +1989,7 @@ async function runAdditionalCopies(browser, args, axeSource, report) {
     await page.locator('#app-status').filter({ hasText: `Additional-copy task ${created.id} created.` }).waitFor();
 
     await page.getByRole('button', { name: 'Close request details' }).click();
-    await page.getByRole('button', { name: 'Additional copies' }).click();
+    await page.locator('[data-view="additional-copies"]').click();
     await page.waitForFunction(() => !document.getElementById('refresh-additional-copies').disabled);
     assert.equal(await page.evaluate(() => document.activeElement.id), 'additional-copy-title');
     const openTab = page.locator('[data-copy-status="open"]');
@@ -2306,7 +2306,7 @@ async function runScopedBlocked(browser, args, axeSource, report) {
     await assertReadableMobileQueue(page);
     await scan(page, axeSource, args.artifactRoot, report, 'mobile', 'scoped-queue');
 
-    await page.getByRole('button', { name: 'Additional copies' }).click();
+    await page.locator('[data-view="additional-copies"]').click();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'additional-copy-title');
     await page.getByRole('button', { name: `Open additional-copy task ${args.mobileCopyId}` }).waitFor();
     const openTab = page.locator('[data-copy-status="open"]');
@@ -2702,7 +2702,7 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
           : pathname.endsWith(nextId) ? 'not_found' : 'stale_version' }) });
     });
     await page.getByRole('button', { name: 'Profile', exact: true }).click();
-    await page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click();
+    await page.locator('[data-view="queue"]').click();
     await page.getByRole('button', { name: 'Delete closed work...' }).click();
     await page.locator('#bulk-delete-dialog[open]').waitFor();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'bulk-delete-scope');
@@ -3125,10 +3125,11 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
       window.dispatchEvent(event);
       return event.defaultPrevented;
     }), true);
-    await decideDiscard(() => page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click(), false, /Discard unsaved Profile/);
+    await decideDiscard(() => page.locator('[data-view="queue"]').click(), false, /Discard unsaved Profile/);
     assert.equal(page.url(), profileRoute);
     assert.equal(await page.locator('#weekly-email').inputValue(), 'unsaved-profile@example.org');
-    await decideDiscard(() => page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click(), true, /Discard unsaved Profile/);
+    await decideDiscard(() => page.locator('[data-view="queue"]').click(), true, /Discard unsaved Profile/);
+    await page.locator('#queue-view').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#weekly-email').inputValue(), profileBaseline);
     await page.goBack(); await page.locator('#profile-view').waitFor({ state: 'visible' });
     await page.locator('#weekly-email').fill('forward-profile@example.org');
@@ -3138,7 +3139,7 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     assert.equal(await page.locator('#weekly-email').inputValue(), 'forward-profile@example.org');
     await page.locator('#weekly-email').fill(profileBaseline);
     await page.goForward(); await page.locator('#queue-view').waitFor({ state: 'visible' });
-    await page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click();
+    await page.locator('[data-view="queue"]').click();
     await page.locator('#library-scope').selectOption('2');
     await page.locator('#claim-filter').selectOption('all');
     const listUrl = page.url();
@@ -3190,7 +3191,7 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     await page.waitForFunction(() => !new URL(location.href).searchParams.has('request'));
     assert.equal(new URL(page.url()).searchParams.get('scope'), '2');
 
-    await page.getByRole('button', { name: /^Additional copies \(\d+\)$/ }).click();
+    await page.locator('[data-view="additional-copies"]').click();
     await page.locator('[data-copy-status="closed"]').click();
     await page.reload({ waitUntil: 'networkidle' });
     assert.equal(await page.locator('[data-copy-status="closed"]').getAttribute('aria-selected'), 'true');
@@ -3200,7 +3201,7 @@ async function runDraftRoutingJourneys(browser, args, axeSource, report) {
     await page.goForward();
     await page.locator('[data-copy-status="open"][aria-selected="true"]').waitFor();
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'copy-route-round-trip');
-    await page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click();
+    await page.locator('[data-view="queue"]').click();
     await page.getByRole('button', { name: 'New suggestion', exact: true }).click();
     await page.getByLabel('Patron barcode or name', { exact: true }).fill('Unsaved patron lookup');
     await decideDiscard(() => page.keyboard.press('Escape'), false, /Discard the unsaved new suggestion/);
@@ -3585,7 +3586,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     assert.match(await page.locator('#settings-message').textContent(), /Wait for the settings change to finish before reloading/);
     await assert.rejects(() => page.locator('#settings-discard').click({ timeout: 500 }));
     assert.match(await page.locator('#branding-logo').inputValue(), /preview\.gif$/);
-    await page.getByRole('button', { name: 'Requests' }).click();
+    await page.locator('[data-view="queue"]').click();
     assert.equal(await page.locator('#settings-patron').isVisible(), true,
       'View navigation must wait for the logo save result');
     await page.evaluate(() => {
@@ -3689,7 +3690,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
       { waitUntil: 'networkidle' });
     await page.locator('#settings-workflow').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#settings-scope').inputValue(), '2');
-    await page.getByRole('button', { name: 'Requests' }).click();
+    await page.locator('[data-view="queue"]').click();
     await page.getByRole('button', { name: 'Settings' }).click();
     assert.equal(new URL(page.url()).searchParams.get('settingsScope'), '2');
     assert.equal(new URL(page.url()).hash, '#settings-workflow');
@@ -3750,7 +3751,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
         }
       })
     }));
-    await decideConfirmation(page, () => page.getByRole('button', { name: 'Requests' }).click(), dialog => dialog.accept());
+    await decideConfirmation(page, () => page.locator('[data-view="queue"]').click(), dialog => dialog.accept());
     await page.locator('#workspace').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#recent-request-list button').count(), 0,
       'A replacement account must not inherit the previous account’s recents');
@@ -3820,7 +3821,7 @@ async function runProfileSessionReplacementCase(browser, args, detectBeforeRespo
     if (detectBeforeResponse) {
       // The pending save protects the Profile route. A separate protected read
       // still detects replacement access before the unresolved POST returns.
-      await page.getByRole('button', { name: /^Requests \(\d+\)$/ }).click();
+      await page.locator('[data-view="queue"]').click();
       assert.equal(await page.locator('#profile-view').isVisible(), true);
       await page.evaluate(() => document.querySelector('#refresh-queue').click());
       await page.locator('#workspace').waitFor({ state: 'hidden' });
@@ -4265,6 +4266,14 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
       const detailRoute = route => route.fulfill({ status: 200, contentType: 'application/json',
         json: { ...snapshot, status: 'closed', capabilities: { ...snapshot.capabilities, canDelete: true } } });
       await page.route(args.baseOrigin + detailPath + '*', detailRoute);
+      const listPath = args.baseOrigin + '/api/asap/staff/title-requests?*';
+      const closedTitleList = async route => {
+        const response = await route.fetch(), list = await response.json();
+        assert.ok(list.items.some(item => item.id === id), 'The controlled Closed title belongs to the authorized list.');
+        await route.fulfill({ response, json: { ...list,
+          items: list.items.map(item => item.id === id ? { ...item, status: 'closed' } : item) } });
+      };
+      if (!copy) await page.route(listPath, closedTitleList);
       const versions = [];
       let latest = (await session(context, args.baseOrigin)).staff;
       const deleteRoute = async route => {
@@ -4283,11 +4292,9 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
         }
       };
       await page.route(args.baseOrigin + deletePath, deleteRoute);
-      const view = copy ? /^Additional copies \(\d+\)$/ : /^Requests$/;
       const stage = copy ? '[data-copy-status="closed"]' : '[data-status="closed"]';
-      await page.getByRole('button', { name: view }).click();
+      await page.locator(copy ? '[data-view="additional-copies"]' : '[data-view="queue"]').click();
       await page.locator(stage).click();
-      // The real list may contain the source in another stage; the named route intent still opens its authoritative detail.
       await page.evaluate(({ id, copy }) => {
         const url = new URL(location.href); url.searchParams.set('request', id);
         url.searchParams.set('stage', copy ? 'additional_copies' : 'closed');
@@ -4338,6 +4345,7 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
         'The retained Delete review still refers to the current, unchanged title request version.');
       await remove(); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
       assert.equal(versions.length, 3); assert.equal(versions[2], latest.version);
+      if (!copy) await page.unroute(listPath, closedTitleList);
       await page.unroute(args.baseOrigin + detailPath + '*', detailRoute);
       await page.unroute(args.baseOrigin + deletePath, deleteRoute);
     }

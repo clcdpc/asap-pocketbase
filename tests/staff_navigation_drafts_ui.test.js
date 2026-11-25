@@ -2368,6 +2368,35 @@ for (const kind of ['assignment', 'pickup', 'rejection', 'copy-assignment']) {
     }, { status: kind === 'pickup' ? 'pending_hold' : 'suggestion', copyRequest: kind === 'copy-assignment' ? {} : undefined }));
 }
 
+for (const detailResponse of ['embedded', 'delayed', 'failed']) {
+  test(`confirmed Claim withdraws Suggestions count before ${detailResponse} detail and queue review`, () =>
+    fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+      const updated = { ...ui.readRequest(), version: 'v2', claimedByStaffUserId: '20' };
+      const filter = ui.get('#claim-filter');
+      filter.value = 'unclaimed'; filter.dispatchEvent(new ui.dom.window.Event('change'));
+      assert.equal(ui.get('#requests-count').textContent, ' (1)');
+      let detail, queue;
+      ui.setOperation(() => response(200, { committed: true, finalStatus: 'suggestion',
+        request: detailResponse === 'embedded' ? updated : null, refreshUnavailable: detailResponse !== 'embedded' }));
+      ui.setApi(({ pathname }) => {
+        if (pathname.endsWith(`/title-requests/${id}`)) return new Promise(resolve => { detail = resolve; });
+        if (pathname.endsWith('/title-requests')) return new Promise(resolve => { queue = resolve; });
+      });
+      actionButton('Claim').click(); approveTitleClaim(ui);
+      if (detailResponse !== 'embedded') {
+        await until(() => detail, 'confirmed Claim awaits its detail');
+        assert.equal(ui.get('#requests-count').textContent, '');
+        assert.match(ui.get('#requests-count-state').textContent, /unavailable/);
+        detail(detailResponse === 'failed' ? response(503, {}) : response(200, updated));
+      }
+      await until(() => queue, 'authoritative queue refresh started');
+      assert.equal(ui.get('#requests-count').textContent, '');
+      assert.match(ui.get('#requests-count-state').textContent, /loading/);
+      queue(response(200, { scope: '2', items: [updated], organizations: defaultOrganizations }));
+      await until(() => ui.get('#requests-count').textContent === ' (0)', 'confirmed zero from refreshed claims');
+    }));
+}
+
 test('Recent Requests honors the dirty Profile discard boundary', () =>
   fixture('?stage=suggestion&scope=2', async ui => {
     await ui.open(); await ui.closeDetail();
@@ -2386,7 +2415,10 @@ test('Recent Requests honors the dirty Profile discard boundary', () =>
 
 test('bulk access loss from a concurrent read retains the pending ledger until DELETE confirms, without attempting later items', () =>
   fixture('?stage=profile', async ui => {
-    ui.get('[data-view="queue"]').click(); ui.get('[data-status="closed"]').click(); await settle();
+    ui.get('[data-view="queue"]').click();
+    await until(() => !ui.get('#queue-view').hidden, 'Requests navigation accepted');
+    ui.get('[data-status="closed"]').click();
+    await until(() => !ui.get('#bulk-delete-closed').hidden, 'Closed work selected');
     await previewBulk(ui);
     let resolveDelete;
     ui.setApi(({ pathname, init }) => {
@@ -3491,6 +3523,34 @@ for (const type of ['title', 'copy']) {
   }
 }
 
+test('history detail revalidates same-status rows and refuses a different version', () =>
+  fixture(`?stage=suggestion&scope=2&request=${id}`, async ui => {
+    const filter = ui.get('#claim-filter');
+    filter.value = 'unclaimed'; filter.dispatchEvent(new ui.dom.window.Event('change'));
+    ui.get('[data-view="profile"]').click(); await settle();
+    const source = ui.dom.window.location.href;
+    ui.edit('#weekly-email', 'Keep this draft'); ui.allowDiscard();
+    const updated = { ...ui.readRequest(), title: 'Edited title', version: 'v2', claimedByStaffUserId: '20' };
+    let queue;
+    ui.setApi(({ pathname }) => {
+      if (pathname.endsWith(`/title-requests/${id}`)) return response(200, updated);
+      if (pathname.endsWith('/title-requests')) return new Promise(resolve => { queue = resolve; });
+    });
+    await ui.back(); await until(() => queue, 'fresh validation requested for unchanged status');
+    queue(response(200, { scope: '2', items: [ui.readRequest()], organizations: defaultOrganizations }));
+    await until(() => ui.dom.window.location.href === source, 'mismatched target rejected');
+    assert.equal(ui.get('#weekly-email').value, 'Keep this draft');
+    assert.equal(ui.get('#request-dialog').open, false);
+    assert.equal(ui.get('#requests-count').textContent, ' (1)');
+    queue = null;
+    await ui.back(); await until(() => queue, 'new queue validation on retry');
+    queue(response(200, { scope: '2', items: [updated], organizations: defaultOrganizations }));
+    await until(() => ui.get('#request-dialog').open, 'matching detail and queue accepted');
+    assert.match(ui.get('#request-dialog').textContent, /Edited title/);
+    assert.equal(ui.get('#requests-count').textContent, ' (0)');
+    assert.equal(protectedUnload(ui), false);
+  }));
+
 test('ownership transfer: duplicate target failure retains the Suggestion owner', () =>
   fixture('?stage=suggestion&scope=2', async ui => {
     ui.get('#new-suggestion').click(); await settle();
@@ -3617,22 +3677,27 @@ for (const view of ['queue', 'additional-copies']) {
   for (const outcome of ['failure then retry', 'changed draft decline', 'changed draft accept']) {
     test(`ownership transfer: stale catalog ${view} ${outcome}`, () =>
       fixture('?stage=settings&settingsScope=system', async ui => {
-        let retired = false, available = true, complete;
+        let retired = false, available = true, background, complete;
         ui.setApi(({ pathname }) => {
           if (pathname.endsWith('/organizations/sync')) {
             retired = true; return response(200, { code: 'synced', data: { received: 3, changed: 1 } });
           }
           if (pathname.endsWith('/organizations') && retired && !available) return response(503, { message: 'Catalog unavailable' });
+          if (pathname.endsWith('/title-requests') && retired && !background) {
+            return new Promise(resolve => { background = resolve; });
+          }
         });
         ui.get('#btn-sync-organizations').click();
-        await until(() => retired && !ui.get('#settings-form').hasAttribute('aria-busy'), 'catalog retired');
+        await until(() => background && !ui.get('#settings-form').hasAttribute('aria-busy'), 'hidden queue awaits its catalog result');
+        assert.equal(ui.get('#requests-count').textContent, '');
+        assert.equal(ui.get('#library-scope option[value="2"]'), null);
         available = false;
         ui.edit('#patron-login-note', 'Exact catalog draft'); ui.allowDiscard();
         const url = ui.dom.window.location.href, before = ui.calls.length;
         if (outcome !== 'failure then retry') {
           ui.setApi(({ pathname }) => pathname.endsWith('/organizations')
             ? new Promise(resolve => { complete = resolve; }) : undefined);
-        }
+        } else { background(response(503, { message: 'Background queue unavailable' })); }
         ui.get(`[data-view="${view}"]`).click();
         if (outcome === 'failure then retry') {
           await until(() => /Operational libraries could not be reviewed/.test(ui.get('#app-status').textContent), 'failed catalog review');
@@ -3647,12 +3712,20 @@ for (const view of ['queue', 'additional-copies']) {
           await until(() => complete, 'catalog pending'); ui.edit('#patron-login-note', 'New catalog draft');
           const initial = ui.confirms.length, accept = outcome.endsWith('accept');
           require('./helpers/confirmation.cjs').answerConfirmations(ui.dom.window, message => { ui.confirms.push(message); return accept; });
-          complete(response(200, { data: [{ id: 2, name: 'A', isActive: true }] }));
+          const libraries = [libraryOrganization(2, 'Reviewed library')];
+          ui.setOrganizations(libraries);
+          complete(response(200, { data: libraries }));
           await until(() => ui.confirms.length === initial + 1, 'catalog requires second consent'); await settle();
           assert.equal(ui.get('#settings-view').hidden, accept);
           if (!accept) {
             assert.equal(ui.get('#patron-login-note').value, 'New catalog draft'); assert.equal(ui.dom.window.location.href, url);
             assert.equal(protectedUnload(ui), true);
+          }
+          background(response(200, { scope: 'all', items: [], organizations: [libraryOrganization(3, 'Obsolete library')] }));
+          await settle();
+          for (const selector of ['#library-scope', '#additional-copy-library-scope', '#operations-scope']) {
+            assert.equal(ui.get(`${selector} option[value="3"]`), null, 'superseded background response cannot publish choices');
+            assert.equal(ui.get(`${selector} option[value="2"]`)?.textContent, accept ? 'Reviewed library' : undefined);
           }
         }
       }));

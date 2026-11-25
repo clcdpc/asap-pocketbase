@@ -236,7 +236,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
   const reads = createLatestLoad();
   const events = new window.AbortController();
   const claimsControl = claimsFilter.bind(dom.claim, renderProjection);
-  let pendingRefresh = null, hiddenResult = null, gridNeedsRender = false;
+  let pendingRefresh = null, hiddenResult = null, gridNeedsRender = false, libraryRevision = 0;
   let disposed = false, acceptingScope = false, targetGeneration = 0, lookupContext = null;
   const gridAccessibility = bindGridAccessibility(root, () => dom.grid, events.signal, 'Title requests');
 
@@ -252,10 +252,12 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
   }
 
   function requireRefresh(owner, scope) {
-    if (disposed || !sessionIdentity.isCurrent(owner) || !affectsProjection(scope, getContext().scope)) { return; }
+    if (disposed || !sessionIdentity.isCurrent(owner)) { return; }
+    // A prepared navigation target can belong to a different scope from its source.
+    targetGeneration++;
+    if (!affectsProjection(scope, getContext().scope)) { return; }
     // A command may still own a recovery dialog. Withdraw counts without retiring its opener.
     cancelRefresh();
-    targetGeneration++;
     state.refreshRequired = true;
     state.countState = 'unavailable';
     renderCounts();
@@ -294,24 +296,24 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     dom.statusTabs.find(tab => tab === document.activeElement)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
   }
 
-  async function prepare(context, requestId) {
+  async function prepare(context, detail) {
     const owner = sessionIdentity.preferences(), load = reads.begin('queue-target'), ticket = ++targetGeneration;
     const sequence = state.sequence;
     const live = () => !disposed && !load.signal.aborted && ticket === targetGeneration &&
       sequence === state.sequence && sessionIdentity.isCurrent(owner);
     try {
       const scope = owner.role === 'super_admin' ? context.scope : String(owner.organizationId);
+      const matchesDetail = items => !detail || items.some(item => item.id === detail.id &&
+        item.status === detail.status && item.version === detail.version);
       if (pendingRefresh && scope === getContext().scope) {
         const refreshed = await pendingRefresh;
         if (!live() || !refreshed || !isReady(context)) { return null; }
-        if (!requestId) { return { scope, isCurrent: live, accept() {} }; }
-      }
-      if (requestId && isReady(context) && state.requests.some(item => item.id === requestId && item.status === context.status)) {
-        return { scope, isCurrent: live, accept() {} };
+        if (matchesDetail(state.requests)) { return { scope, isCurrent: live, accept() {} }; }
       }
       const result = await request(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`, { signal: load.signal });
       if (!live()) return null;
       validateResult(result, owner);
+      if (!matchesDetail(result.items)) { throw new Error('The request changed. Open it again to review the current version.'); }
       return { scope: result.scope, isCurrent: live, accept() {
         if (disposed || !sessionIdentity.isCurrent(owner) || result.scope !== getContext().scope) { return; }
         cancelRefresh();
@@ -320,7 +322,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     } finally { reads.finish('queue-target', load.token); }
   }
 
-  function acceptResult(result, sequence, owner) {
+  function acceptResult(result, sequence, owner, catalog = libraryRevision, reviewed = false) {
     if (disposed || !sessionIdentity.isCurrent(owner) || result.scope !== getContext().scope) return;
     state.requests = Object.freeze(result.items.map(item => Object.freeze({ ...item })));
     state.loadedContext = Object.freeze({ scope: result.scope, status: getContext().status });
@@ -329,14 +331,23 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     state.stale = false;
     state.refreshRequired = false;
     renderCounts(); populateTags(); renderProjection({ preservePage: true });
-    const presentation = { organizations: result.organizations, sequence };
+    const presentation = { organizations: result.organizations, catalog, sequence };
     if (getContext().activeView === 'queue') { presentResult(presentation); }
-    else { hiddenResult = presentation; }
+    else {
+      if (reviewed) { publishLibraries(presentation); }
+      hiddenResult = presentation;
+    }
   }
 
-  function presentResult({ organizations, sequence }) {
-    if (state.loadedOwner.role === 'super_admin') { setLibraries(organizations); onLibraries(organizations); }
-    onRefreshed({ sequence, items: state.requests, context: state.loadedContext });
+  function publishLibraries({ organizations, catalog }) {
+    if (state.loadedOwner.role === 'super_admin' && catalog === libraryRevision) {
+      setLibraries(organizations); onLibraries(organizations);
+    }
+  }
+
+  function presentResult(presentation) {
+    publishLibraries(presentation);
+    onRefreshed({ sequence: presentation.sequence, items: state.requests, context: state.loadedContext });
     hiddenResult = null;
   }
 
@@ -358,6 +369,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     const load = reads.begin('queue');
     const sequence = ++state.sequence;
     const focusContext = getContext();
+    const catalog = libraryRevision;
     const focusAnchor = root.querySelector('#queue-title');
     const restoreRefresh = document.activeElement === dom.refresh && focusContext.activeView === 'queue' && focusAnchor?.isConnected;
     let focusMoved = false;
@@ -374,21 +386,22 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     const clearLoading = !options.silent ? announce('Loading authorized requests...') : null;
     try {
       const resolution = resolveScope(owner, { silent: focusContext.activeView !== 'queue' });
-      const acceptedScope = typeof resolution === 'string' ? resolution : await resolution;
-      if (!acceptedScope || disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
-      acceptingScope = true;
-      try { onScopeAccepted(acceptedScope); } finally { acceptingScope = false; }
-      if (state.countState !== 'loading') { state.countState = 'loading'; renderCounts(); }
-      const context = getContext();
-      const scope = owner.role === 'super_admin' ? context.scope : String(owner.organizationId);
+      const review = typeof resolution === 'string' ? null : await resolution;
+      const acceptedScope = typeof resolution === 'string' ? resolution : review?.scope;
+      if (typeof acceptedScope !== 'string' || disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
+      const scope = owner.role === 'super_admin' ? acceptedScope : String(owner.organizationId);
       const result = await request(`/api/asap/staff/title-requests?scope=${encodeURIComponent(scope)}`, { signal: load.signal });
-      if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner) || context.scope !== getContext().scope || context.status !== getContext().status) return false;
+      if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner) || focusContext.scope !== getContext().scope || focusContext.status !== getContext().status) return false;
       validateResult(result, owner);
-      if (getContext().activeView === 'queue') {
+      const publishLibraries = catalog === libraryRevision;
+      if (review && !review.isCurrent()) { return false; }
+      if (result.scope !== getContext().scope &&
+          (!publishLibraries || focusContext !== getContext() || (!review && focusContext.activeView !== 'queue'))) { return false; }
+      if (publishLibraries && (review || getContext().activeView === 'queue')) {
         acceptingScope = true;
         try { onScopeAccepted(result.scope); } finally { acceptingScope = false; }
-      } else if (result.scope !== context.scope) { return false; }
-      acceptResult(result, sequence, owner);
+      }
+      acceptResult(result, sequence, owner, catalog, Boolean(review));
       return true;
     } catch (error) {
       if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) &&
@@ -412,7 +425,9 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     }
   }
 
-  function setLibraries(libraries) { if (!disposed) populateLibraries(dom.scope, libraries, getContext().scope); }
+  function setLibraries(libraries) {
+    if (!disposed) { libraryRevision++; populateLibraries(dom.scope, libraries, getContext().scope); }
+  }
   function setStaff(staff) {
     if (disposed) return;
     claimsControl.setStaff(staff);
@@ -809,12 +824,10 @@ export function createCopyQueue({ root, sessionIdentity, claimsFilter, getContex
     const clearLoading = !options.silent ? announce('Loading authorized additional-copy tasks...') : null;
     try {
       const resolution = resolveScope(owner);
-      const acceptedScope = typeof resolution === 'string' ? resolution : await resolution;
+      const acceptedScope = typeof resolution === 'string' ? resolution : (await resolution)?.scope;
       if (!acceptedScope || disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner)) return false;
-      acceptingScope = true;
-      try { onScopeAccepted(acceptedScope); } finally { acceptingScope = false; }
       const context = getContext();
-      const scope = owner.role === 'super_admin' ? context.scope : String(owner.organizationId);
+      const scope = owner.role === 'super_admin' ? acceptedScope : String(owner.organizationId);
       const result = await request(`/api/asap/staff/additional-copies?scope=${encodeURIComponent(scope)}&status=${encodeURIComponent(context.additionalCopyStatus)}`, { signal: load.signal });
       if (disposed || !load.isCurrent() || !sessionIdentity.isCurrent(owner) || context.scope !== getContext().scope || context.additionalCopyStatus !== getContext().additionalCopyStatus) return false;
       acceptingScope = true;

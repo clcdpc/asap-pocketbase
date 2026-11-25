@@ -78,8 +78,9 @@ export function createWorkflowApp() {
       queue: {
         activate: options => titleQueue.activate(options), deactivate: () => titleQueue.deactivate(),
         refresh: options => titleQueue.refresh(options), render: () => titleQueue.render(),
-        prepare: (context, requestId) => titleQueue.prepare(context, requestId),
+        prepare: (context, detail) => titleQueue.prepare(context, detail), markStale: () => titleQueue.markStale(),
         isReady: context => titleQueue.isReady(context),
+        reviewSession: owner => session.refreshCurrentStaff(owner),
         prepareDetail: (id, options) => titleDetail.prepare(id, options), presentDetail: (target, options, ticket) => titleDetail.present(target, null, options, ticket),
         refreshOnEntry: options => titleQueue.refreshOnEntry(options), setLibraries: libraries => populateScopes(libraries),
         find: id => titleQueue.find(id), libraryScope: id => titleQueue.libraryScope(id),
@@ -183,6 +184,7 @@ export function createWorkflowApp() {
     openCreatedTitle: navigation.openCreatedTitle, openExistingTitle: navigation.openExistingTitle, onReceipt, clearReceipt
   });
   const bulk = createBulkDeleteController({ root: get('#bulk-delete-dialog'), titleTrigger: get('#bulk-delete-closed'), copyTrigger: get('#bulk-delete-closed-copies'),
+    onTitleChanged: titleQueue.requireRefresh,
     onCopyChanged: copyCounts.refresh,
     sessionIdentity, getLibraries: titleQueue.libraries, beforeOpen: () => navigation.allow(), beforeExecute: () => navigation.allow({ bulk: false }),
     captureReview: navigation.captureClosedReview, reviewClosed: navigation.reviewClosed, onReceipt, clearReceipt,
