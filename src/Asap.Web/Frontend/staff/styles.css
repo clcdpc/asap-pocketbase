@@ -276,14 +276,14 @@ button.gridjs-sort:focus-visible, th.gridjs-th-sort:focus-visible,
 input.gridjs-input:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; box-shadow: none; }
 table.gridjs-table { width: 100%; min-width: 920px; max-width: none; table-layout: fixed; }
 #request-grid table.gridjs-table { min-width: 0; }
-/* Keep Title requests' original proportions fractional through table layout; Grid.js rounds pixel widths separately. */
+/* Keep Title requests' proportions fractional through table layout; Grid.js rounds pixel widths separately. */
 #request-grid th[data-request-column="patron"] { width: 14%; }
-#request-grid th[data-request-column="bibliographic"] { width: 23%; }
+#request-grid th[data-request-column="bibliographic"] { width: 20%; }
 #request-grid th[data-request-column="format"] { width: 8%; }
 #request-grid th[data-request-column="submitted"] { width: 10%; }
 #request-grid th[data-request-column="library"] { width: 10%; }
 #request-grid th[data-request-column="claim"] { width: 9%; }
-#request-grid th[data-request-column="status"] { width: 9%; }
+#request-grid th[data-request-column="identifier"] { width: 12%; }
 #request-grid th[data-request-column="actions"] { width: 17%; }
 #additional-copy-grid .gridjs-container { container: additional-copies / inline-size; }
 #additional-copy-grid table.gridjs-table { min-width: 0; }

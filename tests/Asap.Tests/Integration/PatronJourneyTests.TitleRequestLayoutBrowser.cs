@@ -53,6 +53,14 @@ public sealed partial class PatronJourneyTests
                             ? string.Join(' ', Enumerable.Repeat("Long author name segment", 10))
                             : $"Layout author {index}",
                         MaterialFormatId = format.Id,
+                        Identifier = status switch
+                        {
+                            "suggestion" => "012345678X",
+                            "outstanding_purchase" => "012345678905",
+                            "closed" when longTitle => string.Concat(Enumerable.Repeat("0123456789-", 8)),
+                            "closed" => "978-0-123456-78-9",
+                            _ => null
+                        },
                         Status = status,
                         AutoHold = false,
                         BibId = status is "pending_hold" or "hold_placed" ? 428900 + index : null,

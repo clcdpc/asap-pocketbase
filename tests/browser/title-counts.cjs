@@ -53,7 +53,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await page.waitForFunction(expected => JSON.stringify([...document.querySelectorAll('#status-tabs [data-status]')]
       .map(tab => tab.getAttribute('aria-label'))) === JSON.stringify(expected), expected);
     assert.deepEqual(await countNames(page), expected);
-    assert.match(await page.locator('#status-count-state').textContent(), loading ? /Counts loading/ : /Counts unavailable/);
+    assert.match(await page.locator('#status-count-state').textContent(), loading ? /Counts loading/ : /requests unavailable/i);
     assert.ok(await page.locator('#status-count-state').evaluate(node => node.getBoundingClientRect().height > 0),
       'Loading and unavailable feedback remains visible.');
   };
@@ -218,14 +218,14 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.deepEqual(claimFocus, { active: true, visible: true }, 'Claims receives visible keyboard focus.');
     await page.keyboard.press('Home');
     await page.waitForFunction(() => document.querySelector('#claim-filter').value === 'all' &&
-      document.querySelector('#queue-summary').textContent === '28 suggestion requests' &&
+      document.querySelector('#request-grid .gridjs-summary')?.textContent === 'Showing 1 to 25 of 28 results' &&
       document.querySelectorAll('#request-grid tbody .request-title-link').length === 25);
     const firstPageIds = await visibleIds(page.locator('#request-grid tbody .request-title-link'));
     assert.equal(firstPageIds.length, 25);
     assert.equal(new Set(firstPageIds).size, 25, 'All shows 25 distinct first-page Suggestions.');
     await page.keyboard.press('End');
     await page.waitForFunction(() => document.querySelector('#claim-filter').value === 'unclaimed' &&
-      document.querySelector('#queue-summary').textContent === '28 suggestion requests' &&
+      document.querySelector('#request-grid .gridjs-summary')?.textContent === 'Showing 1 to 25 of 28 results' &&
       document.querySelectorAll('#request-grid tbody .request-title-link').length === 25 &&
       [...document.querySelectorAll('#request-grid tbody .claim-label')].every(node => node.textContent.trim() === 'Unclaimed'));
     assert.equal(await claim.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
@@ -234,7 +234,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await counts(page, fixture.libraryCounts);
     await page.keyboard.press('ArrowUp');
     await page.waitForFunction(() => document.querySelector('#claim-filter').value === 'mine' &&
-      document.querySelector('#queue-summary').textContent === '0 suggestion requests');
+      document.querySelector('#request-grid .gridjs-notfound')?.textContent === 'No requests match these filters.');
     assert.equal(await claim.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
     await page.locator('#request-grid .gridjs-notfound').waitFor({ state: 'visible' });
     assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), [],
@@ -242,7 +242,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await counts(page, fixture.libraryCounts);
     await page.keyboard.press('Home');
     await page.waitForFunction(() => document.querySelector('#claim-filter').value === 'all' &&
-      document.querySelector('#queue-summary').textContent === '28 suggestion requests' &&
+      document.querySelector('#request-grid .gridjs-summary')?.textContent === 'Showing 1 to 25 of 28 results' &&
       document.querySelectorAll('#request-grid tbody .request-title-link').length === 25);
     assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), firstPageIds,
       'All restores the exact first-page ID set.');
@@ -252,14 +252,14 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.deepEqual(tagFocus, { active: true, visible: true }, 'Tag receives visible keyboard focus.');
     await page.keyboard.press('ArrowDown');
     await page.waitForFunction(id => document.querySelector('#tag-filter').value === 'Browser tag' &&
-      document.querySelector('#queue-summary').textContent === '1 suggestion request' &&
+      document.querySelector('#request-grid .gridjs-summary')?.textContent === 'Showing 1 to 1 of 1 results' &&
       document.querySelectorAll('#request-grid .request-title-link').length === 1 &&
       document.querySelector('#request-grid .request-title-link')?.dataset.requestId === id, fixture.mutationId);
     assert.equal(await tag.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
     await counts(page, fixture.libraryCounts);
     await page.keyboard.press('Home');
     await page.waitForFunction(() => document.querySelector('#tag-filter').value === 'all' &&
-      document.querySelector('#queue-summary').textContent === '28 suggestion requests' &&
+      document.querySelector('#request-grid .gridjs-summary')?.textContent === 'Showing 1 to 25 of 28 results' &&
       document.querySelectorAll('#request-grid tbody .request-title-link').length === 25);
     assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), firstPageIds,
       'All tags restores the exact first-page ID set.');
@@ -269,14 +269,14 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.deepEqual(similarityFocus, { active: true, visible: true }, 'Similarity receives visible keyboard focus.');
     await page.keyboard.press('Home'); await page.keyboard.press('ArrowDown');
     await page.waitForFunction(id => document.querySelector('#similar-filter').value === 'similar' &&
-      document.querySelector('#queue-summary').textContent === '1 suggestion request' &&
+      document.querySelector('#request-grid .gridjs-summary')?.textContent === 'Showing 1 to 1 of 1 results' &&
       document.querySelectorAll('#request-grid .request-title-link').length === 1 &&
       document.querySelector('#request-grid .request-title-link')?.dataset.requestId === id, fixture.mutationId);
     assert.equal(await similarity.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
     await counts(page, fixture.libraryCounts);
     await page.keyboard.press('Home');
     await page.waitForFunction(() => document.querySelector('#similar-filter').value === 'all' &&
-      document.querySelector('#queue-summary').textContent === '28 suggestion requests' &&
+      document.querySelector('#request-grid .gridjs-summary')?.textContent === 'Showing 1 to 25 of 28 results' &&
       document.querySelectorAll('#request-grid tbody .request-title-link').length === 25);
     assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), firstPageIds,
       'All similarity restores the exact first-page ID set.');
@@ -284,11 +284,13 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await page.waitForFunction(() => document.querySelectorAll('#request-grid tbody .request-title-link').length === 25);
     await page.getByRole('button', { name: 'Next', exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll('#request-grid tbody .request-title-link').length === 3);
+    assert.equal(await page.locator('#request-grid .gridjs-summary').textContent(), 'Showing 26 to 28 of 28 results');
     await counts(page, fixture.libraryCounts);
     await page.locator('#request-search').fill('no matching requests');
-    await page.waitForFunction(() => document.querySelector('#queue-summary').textContent === '0 suggestion requests');
+    await page.waitForFunction(() => document.querySelector('#request-grid .gridjs-notfound')?.textContent === 'No requests match these filters.');
     await counts(page, fixture.libraryCounts);
     await page.locator('#request-search').fill('');
+    await page.locator('#request-grid .gridjs-summary').filter({ hasText: 'Showing 1 to 25 of 28 results' }).waitFor();
     await scan(page, 'counts-desktop');
     await checkCopyWorkspace(page, 'desktop');
     await counts(page, fixture.libraryCounts);

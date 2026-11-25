@@ -74,13 +74,10 @@ async function selectStage(page, stage) {
   await page.locator(`#status-tabs [data-status="${stage}"]`).click();
   await page.waitForFunction(stage => document.querySelector(`#status-tabs [data-status="${stage}"]`)?.getAttribute('aria-selected') === 'true', stage);
   const expected = expectedCounts[stage];
-  await page.waitForFunction(expected => {
-    const summary = document.querySelector('#queue-summary')?.textContent || '';
-    return summary.startsWith(`${expected} `);
-  }, expected);
   if (expected === 0) {
     await page.locator('#request-grid .gridjs-notfound').waitFor();
   } else {
+    await page.getByText(`Showing 1 to ${expected} of ${expected} results`, { exact: true }).waitFor();
     await page.waitForFunction(expected => {
       const titles = [...document.querySelectorAll('#request-grid tbody .request-title-link')].map(node => node.textContent);
       return titles.length === expected.length && expected.every(title => titles.some(value => value.includes(title)));
@@ -181,6 +178,10 @@ async function measure(page, name, width, stage) {
       'Scroll the table horizontally to reach every column. Use a request title to open details.'
     ].filter(copy => (queue.innerText || '').includes(copy));
     const stateBounds = countState.getBoundingClientRect();
+    const heading = queue.querySelector('.section-heading');
+    const title = queue.querySelector('h1').getBoundingClientRect();
+    const actions = heading.querySelector('.section-heading-actions').getBoundingClientRect();
+    const headingStyle = getComputedStyle(heading);
     return {
       name: info.name,
       viewportWidth: innerWidth,
@@ -196,9 +197,16 @@ async function measure(page, name, width, stage) {
       table: { ...elementMetrics(table), hasHorizontalOverflow: table.scrollWidth > wrapper.clientWidth },
       columns,
       rowCount: table?.tBodies[0]?.rows.length ?? 0,
+      identifiers: [...grid.querySelectorAll('td[data-request-column="identifier"] .request-cell-text')].map(node => ({
+        value: node.textContent, title: node.title, clipped: node.scrollHeight > node.clientHeight + 1,
+        reason: node.nextElementSibling?.textContent || null
+      })),
       actionNames: [...grid.querySelectorAll('button[data-request-action]')].map(button => button.getAttribute('aria-label')),
       cleanup: {
-        removedNodesAbsent: ['status-count-help', 'queue-automation', 'request-table-help']
+        headingAlignmentError: headingStyle.flexDirection === 'column'
+          ? Math.abs(actions.top - title.bottom - parseFloat(headingStyle.rowGap))
+          : Math.abs(actions.bottom - title.bottom),
+        removedNodesAbsent: ['queue-summary', 'status-count-help', 'queue-automation', 'request-table-help']
           .every(id => document.getElementById(id) === null),
         visibleRemovedCopy,
         filterLabels: filters,
@@ -218,15 +226,28 @@ async function measure(page, name, width, stage) {
   }, { name, stage });
   assert.equal(metric.columns.length, 8, `${name}/${stage}: keep all eight Title columns.`);
   assert.deepEqual(metric.columns.map(column => column.text), [
-    'Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Status', 'Actions'
+    'Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Identifier', 'Actions'
   ]);
   assert.deepEqual(metric.columns.map(column => column.key), [
-    'patron', 'bibliographic', 'format', 'submitted', 'library', 'claim', 'status', 'actions'
+    'patron', 'bibliographic', 'format', 'submitted', 'library', 'claim', 'identifier', 'actions'
   ]);
   assert.equal(metric.columns[7].action, false, `${name}/${stage}: Actions stays unsortable.`);
+  for (const identifier of metric.identifiers) {
+    assert.equal(identifier.title, identifier.value);
+    if (identifier.value.length <= 17) {
+      assert.equal(identifier.clipped, false, `${name}: show the complete ${identifier.value}`);
+    }
+    assert.equal(identifier.reason, stage === 'closed' ? 'Closed by staff' : null);
+  }
+  const identifiers = {
+    suggestion: ['012345678X'], outstanding_purchase: ['012345678905'], pending_hold: [],
+    hold_placed: ['Not recorded'], closed: ['0123456789-'.repeat(8), '978-0-123456-78-9']
+  };
+  assert.deepEqual(metric.identifiers.map(item => item.value).sort(), identifiers[stage]);
   assert.equal(metric.focusedRegion, true, `${name}/${stage}: the table region receives focus.`);
   assert.deepEqual(metric.region, { role: 'region', tabIndex: 0, label: 'Title requests' });
   assert.equal(metric.cleanup.removedNodesAbsent, true, `${name}/${stage}: removed helper elements are absent.`);
+  assert.ok(metric.cleanup.headingAlignmentError <= 1, `${name}/${stage}: title and controls align without space for a subtitle.`);
   assert.deepEqual(metric.cleanup.visibleRemovedCopy, [], `${name}/${stage}: removed helper prose is absent.`);
   assert.deepEqual(metric.cleanup.filterLabels.map(filter => filter.name), ['Claims filter', 'Tag filter', 'Similarity filter']);
   assert.ok(metric.cleanup.filterLabels.filter(filter => !filter.hidden).every(filter =>
@@ -266,6 +287,11 @@ async function capture(page, metric) {
   await wrapper.focus();
   const name = `${metric.stage}-${metric.name}`;
   await page.screenshot({ path: path.join(artifacts, `${name}.png`), fullPage: false });
+  if (name === 'closed-mobile-390') {
+    await wrapper.evaluate(node => { node.scrollLeft = node.scrollWidth; });
+    await page.screenshot({ path: path.join(artifacts, `${name}-identifier.png`) });
+    await wrapper.evaluate(node => { node.scrollLeft = 0; });
+  }
 }
 
 async function collectViewport(page, viewport) {
@@ -279,7 +305,10 @@ async function collectViewport(page, viewport) {
     const metric = await measure(page, viewport.name, viewport.width, stage);
     entries.push(metric);
     if ([3000, 390, 320].includes(viewport.width)) await scan(page, `${stage}-${viewport.name}`);
-    if ([3000, 320].includes(viewport.width) || viewport.width === 390 && ['closed', 'hold_placed'].includes(stage)) await capture(page, metric);
+    if ([3000, 320].includes(viewport.width) || viewport.width === 390 && ['closed', 'hold_placed'].includes(stage) ||
+        viewport.width === 1440 && stage === 'closed') {
+      await capture(page, metric);
+    }
   }
   report.viewportMatrix.push({ ...viewport, stages: entries });
   if (viewport.width === 390) {
@@ -314,10 +343,10 @@ async function verifySortingAndActions(page, fixture) {
   const headers = page.locator('#request-grid thead th');
   assert.equal(await headers.count(), 8, 'Title requests retains all eight columns.');
   assert.deepEqual(await headers.locator('.gridjs-th-content').allTextContents(), [
-    'Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Status', 'Actions'
+    'Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Identifier', 'Actions'
   ]);
   assert.deepEqual(await headers.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-request-column'))),
-    ['patron', 'bibliographic', 'format', 'submitted', 'library', 'claim', 'status', 'actions'],
+    ['patron', 'bibliographic', 'format', 'submitted', 'library', 'claim', 'identifier', 'actions'],
     'Each header retains its Title-only CSS sizing key.');
   assert.equal(await headers.nth(7).locator('button.gridjs-sort').count(), 0, 'Actions stays unsortable.');
   const sort = headers.nth(1), sortButton = sort.locator('button.gridjs-sort');
@@ -421,7 +450,7 @@ async function verifyActionColumnSizingAndCleanFlows(page, fixture, artifacts) {
   assert.deepEqual(restored.inline, original.inline, 'Reset restores the original direct command set.');
   assert.deepEqual(restored.overflow, original.overflow, 'Reset restores the original More command set.');
   assert.ok(restored.overflow.length > 0, 'The original Actions width provides a More trigger for keyboard checks.');
-  const proportions = [0.14, 0.23, 0.08, 0.10, 0.10, 0.09, 0.09, 0.17];
+  const proportions = [0.14, 0.20, 0.08, 0.10, 0.10, 0.09, 0.12, 0.17];
   assert.deepEqual(restoredWidths.columns.map((column, index) => Math.abs(column.width - restoredWidths.table * proportions[index]) <= 1),
     proportions.map(() => true), 'Reset restores all eight fractional Title column proportions.');
   await row.scrollIntoViewIfNeeded();
@@ -583,7 +612,7 @@ async function verifyActionColumnSizingAndCleanFlows(page, fixture, artifacts) {
       ...report.resizeOnly,
       ...report.nativeZoom
     ];
-    const proportions = [0.14, 0.23, 0.08, 0.10, 0.10, 0.09, 0.09, 0.17];
+    const proportions = [0.14, 0.20, 0.08, 0.10, 0.10, 0.09, 0.12, 0.17];
     report.assertions = {
       wideOverflow,
       mobileContained: narrow.stages.every(stage => stage.document.scrollWidth <= stage.document.clientWidth),
@@ -616,7 +645,7 @@ async function verifyActionColumnSizingAndCleanFlows(page, fixture, artifacts) {
     assert.equal(report.assertions.mobileTableScrolls, true, 'The narrow table remains keyboard-scrollable in its region.');
     assert.equal(report.assertions.shortNarrowContained, true, 'The short 320 CSS pixel viewport has no document overflow.');
     assert.equal(report.assertions.shortNarrowTableScrolls, true, 'Every status retains contained table scrolling at short/narrow size.');
-    assert.deepEqual(report.assertions.proportionalWidthErrors, [], 'The original column proportions remain exact within pixel rounding.');
+    assert.deepEqual(report.assertions.proportionalWidthErrors, [], 'The column proportions remain exact within pixel rounding.');
     assert.deepEqual(report.assertions.keyboardRegionFailures, [], 'The table region retains its keyboard focus contract.');
     assert.deepEqual(report.assertions.documentOverflow, [], 'No document-level horizontal overflow.');
     assert.deepEqual(report.assertions.axeSeriousOrCritical, [], 'No serious or critical axe findings.');

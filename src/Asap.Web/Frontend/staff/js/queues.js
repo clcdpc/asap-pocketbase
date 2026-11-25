@@ -3,7 +3,7 @@ import { createLatestLoad } from '../../shared/latest-load.js';
 import { byDisplayLabel } from './display-order.js';
 import { researchRecordUrl } from './research.js';
 import { RequestRowActions, eligibleRowActions } from './request-row-actions.js';
-import { element, dateTime, statusLabel, closeReasonLabel, timeoutLabel } from './ui.js';
+import { element, dateTime, closeReasonLabel, timeoutLabel } from './ui.js';
 
 function detachGridContainer(container) {
   const replacement = container.cloneNode(false);
@@ -216,7 +216,6 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     similar: root.querySelector('#similar-filter'),
     similarField: root.querySelector('#similar-filter-field'),
     refresh: root.querySelector('#refresh-queue'),
-    summary: root.querySelector('#queue-summary'),
     grid: root.querySelector('#request-grid'),
     empty: root.querySelector('#queue-empty'),
   };
@@ -266,7 +265,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
       count.classList.toggle('quiet', !total);
       tab.setAttribute('aria-label', `${label} (${available ? total : loading ? 'count loading' : 'count unavailable'})`);
     }
-    dom.countState.textContent = available ? '' : loading ? 'Counts loading…' : 'Counts unavailable. Refresh to load them.';
+    dom.countState.textContent = available ? '' : loading ? 'Counts loading…' : 'Current requests unavailable. Refresh to try again.';
     // Counts and selection can widen a tab after keyboard focus has moved.
     dom.statusTabs.find(tab => tab === document.activeElement)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
   }
@@ -452,7 +451,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
       { label: 'Submitted', kind: 'submitted', value: request => request.created || '' },
       { label: 'Library', kind: 'library', value: request => request.libraryOrgName },
       { label: 'Claim', kind: 'claim', value: request => request.claimedByDisplayName || 'Unclaimed' },
-      { label: 'Status', kind: 'status', value: request => statusLabel(request.status) },
+      { label: 'Identifier', kind: 'identifier', value: request => request.identifier || 'Not recorded' },
       { label: 'Actions', kind: 'actions', value: request => request.id }
     ];
   }
@@ -547,8 +546,12 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
       ]) : dateTime(cell);
     }
     if (column.kind === 'claim') return h('span', { className: `claim-label${request.claimedByStaffUserId === owner.id ? ' mine' : ''}`, title: cell }, cell);
-    if (column.kind === 'status') return h('div', {}, [h('span', { className: `status-badge${request.status === 'closed' ? ' closed' : ''}` }, cell),
-      request.status === 'closed' ? h('small', {}, closeReasonLabel(request.closeReason)) : null]);
+    if (column.kind === 'identifier') {
+      return h('div', {}, [
+        h('span', { className: 'request-cell-text', title: cell }, cell),
+        request.status === 'closed' ? h('small', {}, closeReasonLabel(request.closeReason)) : null
+      ]);
+    }
     if (column.kind !== 'actions') return cell;
     const actions = eligibleRowActions(request, owner);
     return h(RequestRowActions, { key: request.id, request, owner,
@@ -562,8 +565,6 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     const owner = sessionIdentity.preferences();
     onRendered();
     const requests = filteredRequests();
-    dom.summary.textContent = state.stale ? 'Requests unavailable. Refresh to load current requests.'
-      : `${requests.length} ${statusLabel(getContext().status).toLocaleLowerCase()} request${requests.length === 1 ? '' : 's'}`;
     dom.empty.hidden = state.stale || requests.length !== 0;
     if (state.stale) return;
     const definitions = queueColumns();

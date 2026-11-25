@@ -65,7 +65,7 @@ async function observe(page) {
         loading: !!grid.querySelector('tbody .gridjs-loading'),
         busy: !!grid.querySelector('.gridjs-container.gridjs-loading'),
         rows: [...grid.querySelectorAll('.request-title-link')].map(node => node.dataset.requestId),
-        summary: document.querySelector('#queue-summary').textContent,
+        summary: document.querySelector('#request-grid .gridjs-summary')?.textContent,
         inert: !!grid.firstElementChild?.inert };
     };
     trace.observer = new MutationObserver(records => {

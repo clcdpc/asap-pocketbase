@@ -88,7 +88,7 @@ const scenarios = [
     run: async t => {
       const f = await fixture(t, 'draft'); await openFixture(t.page, t.origin, f);
       const before = await detail(t.context, t.origin, f);
-      for (const label of ['Purchase', 'Reject', 'Assign']) {
+      for (const label of ['Purchase', 'Reject', 'Assign', 'Close silently']) {
         const opener = await actionButton(t.page, label); await opener.click();
         const panel = dialog(t.page).locator(label === 'Assign' ? '.inline-form' : '.action-choice');
         await panel.waitFor();
@@ -96,16 +96,12 @@ const scenarios = [
         assert.equal(await dialog(t.page).locator('.action-bar').isVisible(), false, 'Inline panel hides the toolbar');
         assert.equal(await panel.evaluate(node => node.contains(document.activeElement)), true, 'Focus enters the panel');
         if (label === 'Purchase') assert.equal(await panel.locator('button[type=submit]').textContent(), 'Confirm purchase');
+        assert.equal(t.mutations.length, 0, 'Consent precedes any request write');
         await t.page.keyboard.press('Escape');
         await panel.waitFor({ state: 'hidden' });
         assert.equal(await dialog(t.page).locator('.action-bar').isVisible(), true);
         assert.equal(await opener.evaluate(n => n === document.activeElement), true, label + ' restores focus');
       }
-      await (await actionButton(t.page, 'Close silently')).click();
-      const confirmation = t.page.locator('#confirmation-dialog[open]'); await confirmation.waitFor();
-      assert.equal(t.mutations.length, 0, 'Consent precedes any request write');
-      await t.page.keyboard.press('Escape'); await confirmation.waitFor({ state: 'hidden' });
-      assert.equal(await (await actionButton(t.page, 'Close silently')).evaluate(n => n === document.activeElement), true);
       await unchanged(t.context, t.origin, f, before);
       await checkpoint(t.page, t.directory, t.id, { visible: [dialog(t.page).locator('.action-bar')] });
     } },
@@ -209,9 +205,12 @@ const scenarios = [
     run: async t => {
       const f = await fixture(t, 'close-reopen'); await openFixture(t.page, t.origin, f);
       for (const [label, approve, state] of [['Close silently', 'Close silently', 'closed'], ['Reopen', 'Reopen request', 'suggestion']]) {
+        const before = t.mutations.length;
         await (await actionButton(t.page, label)).click();
-        const confirm = t.page.locator('#confirmation-dialog[open]'); await confirm.waitFor();
-        const response = await submit(t.page, confirm.getByRole('button', { name: approve, exact: true }), f, 200);
+        const confirm = dialog(t.page).locator('.action-choice').getByRole('button', { name: approve, exact: true });
+        await confirm.waitFor();
+        assert.equal(t.mutations.length, before, label + ' waits for confirmation');
+        const response = await submit(t.page, confirm, f, 200);
         assert.equal(response.committed, true); assert.equal(response.finalStatus, state);
         await status(t.page).filter({ hasText: state === 'closed' ? /^Closed · Closed silently$/ : /^Suggestion$/ }).waitFor();
         assert.equal(await dialog(t.page).getByLabel('Identifier', { exact: true }).isDisabled(), state === 'closed');
