@@ -38,6 +38,10 @@ export function commandButton(label, iconName, handler, className = 'secondary-b
   return element('button', { type: 'button', className, onclick: handler, disabled }, [icon(iconName), label]);
 }
 
+export function additionalCopyLink(id) {
+  return element('a', { href: `/staff/?request=${encodeURIComponent(id)}&stage=additional_copies`, text: `Task ${id}` });
+}
+
 export function text(value, fallback = 'Not recorded') {
   const normalized = value === null || value === undefined ? '' : String(value).trim();
   return normalized || fallback;

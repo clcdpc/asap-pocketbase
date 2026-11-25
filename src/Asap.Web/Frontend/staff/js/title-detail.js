@@ -7,7 +7,7 @@ import { positivePolarisId, researchRecordUrl, researchRecordValue } from './res
 import { createRequestWorkflows } from './request-workflows.js';
 import { unconfirmedResponseError, notificationOutcome, isCommittedRequestResponse } from './mutation-outcome.js';
 import { validRequestId } from './recent-requests.js';
-import { element, icon, commandButton, statusLabel, dateTime, text, closeReasonLabel, timeoutLabel, addDetail } from './ui.js';
+import { element, icon, commandButton, additionalCopyLink, statusLabel, dateTime, text, closeReasonLabel, timeoutLabel, addDetail } from './ui.js';
 
 export function createTitleDetailController({ host, sessionIdentity, polarisLookup, copyCreation, announce,
   beforeOpen, isNavigationCurrent, getNavigationGeneration, getScope, onAlign, onOpened, onUpdated = () => {}, beforeClose, onClosed,
@@ -322,15 +322,18 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
   }
 
   function focusAutomaticHoldReviewInPane(middle) {
-    const submit = lease?.content.querySelector('.action-choice button[type="submit"]');
-    if (!submit) return false;
-    submit.focus({ preventScroll: true });
+    const panel = lease?.content.querySelector('.action-choice');
+    const control = panel?.querySelector('button[type="submit"]') || panel?.querySelector('a, button');
+    if (!control) {
+      return false;
+    }
+    control.focus({ preventScroll: true });
     if (!middle) return true;
     const pane = middle.getBoundingClientRect();
     const visibleTop = pane.top + middle.clientTop;
     const visibleBottom = visibleTop + middle.clientHeight;
-    const focused = submit.getBoundingClientRect();
-    const style = window.getComputedStyle(submit);
+    const focused = control.getBoundingClientRect();
+    const style = window.getComputedStyle(control);
     const focusClearance = Math.max(0, Number.parseFloat(style.outlineWidth) || 0) +
       Math.max(0, Number.parseFloat(style.outlineOffset) || 0);
     if (focused.top < visibleTop + focusClearance) {
@@ -387,13 +390,13 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       ? lease?.content.querySelector('.request-middle')?.scrollTop ?? 0 : null;
     const retained = retainEditor ? editor.captureDraft() : null;
     const attempt = beginAttempt(snapshot, path, body), restore = disableControls(attempt);
+    const purchaseTaskOperation = body.action === 'purchase' && body.requestType === 'title_request' &&
+      typeof body.operationId === 'string';
     let reviewRefreshPending = false;
     announce('Saving request...');
     try {
       const result = await send(path, { method: 'POST', body: attempt.body });
       if (!isCommittedRequestResponse(result, snapshot.id)) throw unconfirmedResponseError();
-      const purchaseTaskOperation = body.action === 'purchase' && body.requestType === 'title_request' &&
-        typeof body.operationId === 'string';
       const purchaseTaskId = body.action === 'purchase' && validRequestId(result.additionalCopyRequestId)
         ? String(result.additionalCopyRequestId) : null;
       if (purchaseTaskOperation && (result.operationId !== body.operationId || !purchaseTaskId ||
@@ -468,8 +471,10 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       const definiteNoCommit = ['bib_validation_unavailable', 'notification_dependency_unavailable'].includes(error.response?.code);
       const uncertain = !definiteNoCommit && (error.outcomeUnknown === true || !error.status || isAbortError(error) || error.status === 408 || error.status >= 500 ||
         ['request_outcome_unconfirmed', 'hold_outcome_unconfirmed', 'hold_provider_error'].includes(error.response?.code));
-      const purchaseTaskResolved = receiptRecovery && !recordedProviderOutcome && !uncertain &&
-        (definiteNoCommit || ['stale_version', 'additional_copy_exists'].includes(error.response?.code));
+      const purchaseConflict = purchaseTaskOperation && error.status === 409 &&
+        ['stale_version', 'additional_copy_exists'].includes(error.response?.code);
+      const purchaseTaskResolved = !recordedProviderOutcome && !uncertain &&
+        (purchaseConflict || receiptRecovery && definiteNoCommit);
       attempt.outcome = recordedProviderOutcome ? 'provider_recorded' : uncertain ? 'uncertain' : 'rejected'; attempt.pending = false;
       if (uncertain && body.action === 'purchase' && body.operationId) onCopyChanged(attempt.owner);
       if ((path.endsWith('/action') || path.endsWith('/place-hold')) && error.status === 409 && error.response?.code === 'duplicate_open_request') {
@@ -505,6 +510,11 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
         const review = await reloadAfterMutation(attempt, retained);
         if (needsReceipt && review?.refreshed === true && review.detailLoaded === true) clearReceipt(attempt);
         if (review?.isCurrent()) {
+          if (purchaseConflict && review.detailLoaded && current.hasOpenAdditionalCopy) {
+            workflows.showOpenPurchaseTask();
+            announce('Purchase was not completed. An open additional-copy task already exists.', 'error');
+            return { outcome: 'rejected', code: error.response.code, operationResolved: purchaseTaskResolved };
+          }
           const feedback = retained && uncertain && review.detailLoaded
             ? `The response was not confirmed. Current saved state: ${statusLabel(current.status)}. Review the saved BIB before retrying.` : message;
           announce(feedback, 'error');
@@ -824,10 +834,9 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
       text: [`Identifier check: ${text(request.isbnCheckStatus)}`, `Phase entered ${dateTime(request.phaseEnteredAt)}`,
         request.status === 'closed' ? `Close reason: ${closeReasonLabel(request.closeReason)}` : ''].filter(Boolean).join(' · ') }));
     if (request.additionalCopyRequestId) {
-      const taskId = String(request.additionalCopyRequestId);
       detailsPanel.append(element('p', { className: 'related-additional-copy' }, [
         element('span', { text: 'Linked additional-copy task: ' }),
-        element('a', { href: `/staff/?request=${encodeURIComponent(taskId)}&stage=additional_copies`, text: `Task ${taskId}` })
+        additionalCopyLink(request.additionalCopyRequestId)
       ]));
     }
 

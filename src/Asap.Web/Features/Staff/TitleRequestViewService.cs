@@ -128,6 +128,8 @@ public sealed record TitleRequestDto(
     public StaffResearchContext? Research { get; init; }
     public Guid? OperationId { get; init; }
     public string? AdditionalCopyRequestId { get; init; }
+    public bool HasOpenAdditionalCopy { get; init; }
+    public string? OpenAdditionalCopyRequestId { get; init; }
     public bool Replayed { get; init; }
     public string? QueueCommittedStatus { get; init; }
 }
@@ -174,7 +176,7 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
         var requests = rows.Select(item => item.Request).ToArray();
         var items = await BuildDtosAsync(context, requests,
             requests.Select(item => new RelatedRequestRead(item.Id, item.LibraryOrganizationId, item.Status,
-                item.Identifier, item.BibId, item.Title)).ToArray(), staff, includeActivity: false, cancellationToken,
+                item.Identifier, item.BibId, item.Title)).ToArray(), staff, organizationId, includeActivity: false, cancellationToken,
             rows.ToDictionary(item => item.Request.Id, item => item.PhaseEnteredAt));
         return new TitleRequestScopeResult(
             items,
@@ -232,7 +234,9 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
             .Where(item => access.OrganizationId == null || item.LibraryOrganizationId == access.OrganizationId)
             .Select(item => new RelatedRequestRead(item.Id, item.LibraryOrganizationId, item.Status, item.Identifier, item.BibId, item.Title))
             .ToListAsync(cancellationToken);
-        var result = (await BuildDtosAsync(context, [request], relatedCandidates, staff, includeActivity: true, cancellationToken)).Single();
+        var copyScope = scope is null ? request.LibraryOrganizationId : access.OrganizationId;
+        var result = (await BuildDtosAsync(context, [request], relatedCandidates, staff, copyScope,
+            includeActivity: true, cancellationToken)).Single();
         await transaction.CommitAsync(cancellationToken);
         return result;
     }
@@ -294,6 +298,7 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
         IReadOnlyList<TitleRequest> requests,
         IReadOnlyList<RelatedRequestRead> relatedCandidates,
         CurrentStaff staff,
+        int? scopeOrganizationId,
         bool includeActivity,
         CancellationToken cancellationToken,
         IReadOnlyDictionary<long, DateTime>? phaseEntries = null)
@@ -346,17 +351,13 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
             .ToListAsync(cancellationToken) : [];
         var eventGroups = events.GroupBy(item => item.TitleRequestId)
             .ToDictionary(item => item.Key, item => item.ToList());
-        var sourceLibraries = requests.ToDictionary(item => item.Id, item => item.LibraryOrganizationId);
         var linkedCopies = await context.AdditionalCopyRequests.AsNoTracking()
             .Where(item => item.SourceTitleRequestId.HasValue && ids.Contains(item.SourceTitleRequestId.Value))
             .OrderByDescending(item => item.Id)
-            .Select(item => new { SourceId = item.SourceTitleRequestId!.Value, item.LibraryOrganizationId, item.Id })
+            .Select(item => new { SourceId = item.SourceTitleRequestId!.Value, item.LibraryOrganizationId, item.Id,
+                IsOpen = item.Status == "open" })
             .ToListAsync(cancellationToken);
-        var additionalCopyIds = linkedCopies
-            .Where(item => sourceLibraries.TryGetValue(item.SourceId, out var organizationId) &&
-                organizationId == item.LibraryOrganizationId)
-            .GroupBy(item => item.SourceId)
-            .ToDictionary(item => item.Key, item => item.First().Id);
+        var copiesBySource = linkedCopies.ToLookup(item => item.SourceId);
         var emailActivity = includeActivity
             ? await LoadEmailActivityAsync(context, requests.Single(), staff, cancellationToken)
             : [];
@@ -396,6 +397,10 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
         foreach (var request in requests)
         {
             var requestEvents = eventGroups.GetValueOrDefault(request.Id) ?? [];
+            var copies = copiesBySource[request.Id];
+            var latestCopy = copies.FirstOrDefault(item => item.LibraryOrganizationId == request.LibraryOrganizationId);
+            var visibleOpenCopy = copies.FirstOrDefault(item => item.IsOpen && CanAccess(staff, item.LibraryOrganizationId) &&
+                (scopeOrganizationId is null || item.LibraryOrganizationId == scopeOrganizationId));
             var incompleteOperation = incomplete.GetValueOrDefault(request.Id);
             var successfulOperation = latestSuccessful.GetValueOrDefault(request.Id);
             var operation = incompleteOperation ??
@@ -511,8 +516,9 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
             {
                 CustomFieldsValid = customFieldsValid,
                 Research = research with { PatronId = request.PatronIdSnapshot is > 0 ? request.PatronIdSnapshot : null },
-                AdditionalCopyRequestId = additionalCopyIds.TryGetValue(request.Id, out var additionalCopyId)
-                    ? additionalCopyId.ToString(CultureInfo.InvariantCulture) : null,
+                AdditionalCopyRequestId = latestCopy?.Id.ToString(CultureInfo.InvariantCulture),
+                HasOpenAdditionalCopy = copies.Any(item => item.IsOpen),
+                OpenAdditionalCopyRequestId = visibleOpenCopy?.Id.ToString(CultureInfo.InvariantCulture),
                 PickupOperation = pendingPickup is null ? null : new PickupOperationSummary(pendingPickup.Id,
                     pendingPickup.State, pendingPickup.TargetBranchId, pendingPickup.TargetBranchName),
                 RelatedRequests = new RelatedRequestSummary(related.Count, relatedCounts),
