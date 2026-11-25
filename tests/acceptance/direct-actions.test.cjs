@@ -55,7 +55,8 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
     assert.equal(await fixture.locator('[data-request-action]').count(), count);
     if (!count) { assert.equal(await fixture.locator('button, [popover]').count(), 0); continue; }
     const wide = await actionGeometry(fixture);
-    assert.equal(wide.inline.length, count); assert.equal(wide.more, 0);
+    assert.equal(wide.inline.length, count === 6 ? 5 : count);
+    assert.deepEqual(wide.overflow, count === 6 ? ['purchase'] : []);
     await fixture.evaluate(node => { node.style.width = '120px'; }); await settleActions(page);
     const narrow = await actionGeometry(fixture);
     assert.equal(narrow.inline.length, 1); assert.equal(narrow.more, count > 1 ? 1 : 0);
@@ -67,7 +68,7 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
     await fixture.evaluate((node, width) => { node.style.width = width; }, width); await settleActions(page);
     for (const key of suggestionKeys) await activateRowAction(fixture, key, width === '900px' ? 'Enter' : 'Space');
   }
-  assert.deepEqual(await page.evaluate(() => calls.map(call => call.action)), [...suggestionKeys, ...suggestionKeys], 'Every secondary command uses the same dispatch directly and in overflow');
+  assert.deepEqual(await page.evaluate(() => calls.map(call => call.action)), [...suggestionKeys, ...suggestionKeys], 'Every eligible command dispatches once at both widths');
   await page.evaluate(() => { calls = []; });
   await fixture.evaluate(node => { node.style.width = '210px'; }); await settleActions(page);
   const more = fixture.locator('.request-row-more');
@@ -78,9 +79,15 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
   assert.equal(await more.getAttribute('aria-expanded'), 'false', 'Viewport-only resize dismisses a menu even when its column width is unchanged');
   assert.equal(await more.evaluate(n => n === document.activeElement), true);
   await more.press('Enter');
-  const focusedKey = await page.evaluate(() => document.activeElement.dataset.requestAction);
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.requestAction), 'purchase');
   await fixture.evaluate(node => { node.style.width = 'min(900px, 100%)'; }); await settleActions(page);
-  assert.equal(await more.count(), 0); assert.equal(await page.evaluate(() => document.activeElement.dataset.requestAction), focusedKey);
+  assert.equal(await more.getAttribute('aria-expanded'), 'false');
+  assert.equal(await more.evaluate(node => node === document.activeElement), true, 'Menu-only Purchase returns focus to More on resize');
+  await fixture.evaluate(node => { node.style.width = '120px'; }); await settleActions(page);
+  await more.press('Enter'); await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.requestAction), 'reject');
+  await fixture.evaluate(node => { node.style.width = 'min(900px, 100%)'; }); await settleActions(page);
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.requestAction), 'reject', 'Promoted command retains focus');
   await activateRowAction(fixture, 'assign', 'Enter');
   await fixture.evaluate(node => { node.style.width = '150px'; }); await settleActions(page);
   await activateRowAction(fixture, 'assign');

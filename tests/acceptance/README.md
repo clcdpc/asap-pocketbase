@@ -145,8 +145,9 @@ one guarded Purchase submission, sorting/paging/filtering/refresh/scope retireme
 desktop/mobile/native 200% geometry, forced colors and the existing checkpoint
 guards. The sixteen existing cardinality/pagination/scope fixtures are preserved.
 Five additional read-only SQL rows supply AutoHold on/off outstanding purchases,
-eligible/blocked Pending holds and a Placed hold. Each primary enters its existing
-confirmation and Cancel without a mutation; Assign is checked in direct/overflow
+eligible/blocked Pending holds and a Placed hold. Each primary enters its inline
+confirmation and Cancel without a mutation. Claim leads an unclaimed Suggestion,
+and Purchase stays first in More at every width. Assign is checked in direct/overflow
 forms. Existing D1 Closed/protected fixtures prove one/zero commands.
 Existing mutation fixtures remain independent.
 Their existing `ACCEPTANCE-I403-*` barcodes identify both seeding and API lookup
@@ -338,7 +339,7 @@ The twenty existing browser scenarios are retained, with one additional
 | Requirement | Live suite implementation | Remaining obligations |
 | --- | --- | --- |
 | #401 shared dialog | Accessible name/description, safe initial focus, keyboard ring, Tab/Shift+Tab, Escape, Cancel, focus return, stacked detail modal | Human visual and screen-reader judgment |
-| #407 Purchase | No-BIB reminder defaults/on/off, verified BIB auto-hold on/off, inline-only approval, Cancel, exact one POST/transition and reminder outbox key | Live reviewer execution |
+| #407 Purchase | No-BIB reminder defaults/on/off and reminder outbox key, verified BIB to Pending hold or a linked additional-copy task and Closed source, inline approval, Cancel, exact one POST/transition | Live reviewer execution |
 | #407 concurrency | Duplicate click, real stale-version conflict, unverified BIB Purchase review/submission with explicit local error and unchanged SQL state, dirty-editor gate, normalized success presentation | Retained lower-level authority/session tests remain separate |
 | #401 rejection | Synthetic template, Cancel, final Reject and close, no second confirmation, Closed/rejected and local outbox evidence | Live mailbox/provider acceptance is separate |
 | #401 navigation | Request/Profile drafts, close/status/view/history, Back/Forward, late event-free edit, competing newer intent | Remaining scope/library/sign-out/new-suggestion combinations are explicit report gaps |
@@ -395,7 +396,7 @@ Checkpoint audit (all captures show the surrounding application viewport):
 | Checkpoint | Intended visible evidence and readiness |
 | --- | --- |
 | `staff-shell` | Loaded queue heading and synthetic staff identity after queue loading completes |
-| Five `purchase-*-review` captures | Purchase heading, consequence, reminder choice where applicable and final Confirm purchase/Cancel controls; review loaded, scrolled into view, toolbar hidden |
+| Five `purchase-*-review` captures | Purchase heading, consequence, reminder choice where applicable and final approval/Cancel controls (Create additional-copy task for a verified BIB with automatic hold off). The loaded review is in view with the toolbar hidden. |
 | Five `purchase-*-complete` captures | Request title and resulting status after the response, UI badge and authoritative SQL/outbox/duplicate-submit assertions |
 | `reject-template-review` / `-complete` | Selected rejection template and Reject and close/Cancel; then request title and Closed after authoritative rejection/outbox checks and UI refresh |
 | `confirmation-desktop-mobile-zoom-{desktop,mobile,zoom}` / `-zoom-dialog` | Stacked discard dialog, warning and controls after keyboard/focus checks; viewport dimensions and zoom-corrected crop checked |
