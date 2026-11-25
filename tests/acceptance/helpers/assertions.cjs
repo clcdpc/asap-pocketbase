@@ -33,16 +33,25 @@ async function actionButton(page, name) {
   await button.waitFor({ state: 'visible' });
   return button;
 }
-async function choose(page, name) {
+async function choose(page, name, approval = name === 'Purchase' ? 'Confirm purchase' : 'Reject and close') {
   await (await actionButton(page, name)).click();
   const review = page.locator('#request-dialog .action-choice');
   await review.waitFor();
   await review.locator('button[type=submit]:not([disabled])').waitFor();
   assert.equal(await page.locator('#request-dialog .action-bar').isVisible(), false, 'Inline review hides competing request actions');
   assert.equal(await review.evaluate(node => node.contains(document.activeElement)), true, 'Focus enters the inline review');
-  assert.equal(await review.locator('button[type=submit]').textContent(), name === 'Purchase' ? 'Confirm purchase' : 'Reject and close');
+  assert.equal(await review.locator('button[type=submit]').textContent(), approval);
   assert.equal(await page.locator('#request-dialog .request-more[open]').count(), 0, 'Action selection lets the application dismiss More');
   return review;
+}
+async function inlineConfirmation(page, label) {
+  const dialog = page.locator('#request-dialog[open]');
+  const panel = dialog.getByRole('form', { name: label, exact: true });
+  await panel.getByRole('heading', { name: label, exact: true }).waitFor();
+  const approve = panel.getByRole('button', { name: label, exact: true });
+  assert.equal(await approve.evaluate(node => node === document.activeElement), true, 'Focus enters the inline confirmation');
+  assert.equal(await dialog.locator('.action-bar').isVisible(), false);
+  return panel;
 }
 async function confirm(page, label) {
   const decision = await waitForConfirmation(page);
@@ -68,4 +77,4 @@ async function submit(page, button, fixture, expectedStatus, double = false) {
   assert.equal(result.status(), expectedStatus, 'Expected authoritative action response');
   return result.json();
 }
-module.exports = { json, detail, openFixture, reveal, actionButton, choose, confirm, unchanged, submit };
+module.exports = { json, detail, openFixture, reveal, actionButton, choose, confirm, inlineConfirmation, unchanged, submit };

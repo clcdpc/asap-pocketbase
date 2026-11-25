@@ -6,7 +6,7 @@ const { createHash } = require('node:crypto');
 const { Blocked } = require('../helpers/reporting.cjs');
 const { requireFixture, must } = require('../helpers/environment.cjs');
 const { checkpoint, confirmationKeyboard, nativeZoom, zoomEvidence } = require('../helpers/accessibility.cjs');
-const { detail, json, openFixture, actionButton, choose, confirm, unchanged, submit } = require('../helpers/assertions.cjs');
+const { detail, json, openFixture, actionButton, choose, confirm, inlineConfirmation, unchanged, submit } = require('../helpers/assertions.cjs');
 
 const titlePath = f => '/api/asap/staff/title-requests/' + f.id + '/action';
 const confirmation = page => page.locator('#confirmation-dialog[open]');
@@ -54,14 +54,16 @@ async function purchase(t, key, expected, reminder, duplicate = false) {
     expected === 'pending_hold' ? 941003 : 941004, verified: expected !== 'outstanding_purchase' });
   await openFixture(t.page, t.origin, f);
   const before = await detail(t.context, t.origin, f);
-  let review = await choose(t.page, 'Purchase');
+  const createsTask = expected === 'closed';
+  const approval = createsTask ? 'Create additional-copy task' : 'Confirm purchase';
+  let review = await choose(t.page, 'Purchase', approval);
   assert.equal(await confirmation(t.page).count(), 0);
   assert.match(await review.innerText(), expected === 'outstanding_purchase' ? /Outstanding purchase/ :
-    expected === 'pending_hold' ? /Pending hold/ : /closes this request without placing a hold/);
-  const checkbox = review.getByRole('checkbox', { name: 'Send purchase reminder', exact: true });
-  if (expected === 'outstanding_purchase') {
+    expected === 'pending_hold' ? /Pending hold/ : /create a task in Additional copies.*then close this request without placing a hold/);
+  const checkbox = review.getByRole('checkbox', { name: createsTask ? 'Email me a purchase reminder' : 'Send purchase reminder', exact: true });
+  if (expected !== 'pending_hold') {
     const session = await json(t.context, t.origin, '/api/asap/staff/session');
-    assert.equal(await checkbox.isChecked(), session.staff.purchaseReminderDefault);
+    assert.equal(await checkbox.isChecked(), createsTask ? session.staff.additionalCopyReminderDefault : session.staff.purchaseReminderDefault);
     await checkbox.setChecked(reminder);
   } else {
     assert.equal(await checkbox.count(), 0);
@@ -71,20 +73,21 @@ async function purchase(t, key, expected, reminder, duplicate = false) {
   await review.getByRole('button', { name: 'Cancel', exact: true }).click();
   await unchanged(t.context, t.origin, f, before);
   assert.equal(t.mutations.length, 0, 'Review/cancel performs no mutation');
-  review = await choose(t.page, 'Purchase');
-  if (expected === 'outstanding_purchase') await checkbox.setChecked(reminder);
-  await t.page.evaluate(() => {
+  review = await choose(t.page, 'Purchase', approval);
+  if (expected !== 'pending_hold') await checkbox.setChecked(reminder);
+  await t.page.evaluate(prefix => {
     window.acceptancePurchaseNotices = [];
     const status = document.querySelector('#app-status');
     new MutationObserver(() => {
       const text = status.textContent;
-      if (text.startsWith('Workflow action completed.') && window.acceptancePurchaseNotices.at(-1) !== text) {
+      if (text.startsWith(prefix) && window.acceptancePurchaseNotices.at(-1) !== text) {
         window.acceptancePurchaseNotices.push(text);
       }
     }).observe(status, { childList: true, subtree: true, characterData: true });
-  });
+  }, createsTask ? 'Additional-copy task created.' : 'Workflow action completed.');
   const outcome = await submit(t.page, reviewSubmit(review), f, 200, duplicate);
   assert.equal(outcome.committed, true);
+  assert.equal(outcome.finalStatus, expected);
   await t.page.locator('#request-dialog .status-badge').filter({ hasText:
     expected === 'outstanding_purchase' ? 'Outstanding purchase' : expected === 'pending_hold' ? 'Pending hold' : 'Closed' }).waitFor();
   const current = await waitStatus(t, f, expected);
@@ -93,11 +96,21 @@ async function purchase(t, key, expected, reminder, duplicate = false) {
   assert.equal(t.mutations.filter(m => m.path === titlePath(f)).length, 1, 'Exactly one action HTTP request');
   const accepted = t.mutations.find(m => m.path === titlePath(f));
   assert.equal(accepted.action, 'purchase');
-  assert.equal(accepted.emailPurchaseReminder, expected === 'outstanding_purchase' && reminder);
+  assert.equal(accepted.emailPurchaseReminder, reminder);
   assert.equal(accepted.version, before.version);
   assert.equal(current.activity.filter(e => e.eventType === 'status_changed').length -
     before.activity.filter(e => e.eventType === 'status_changed').length, 1, 'Exactly one committed transition');
-  if (expected === 'closed') assert.equal(current.closeReason, 'purchased_no_hold');
+  if (createsTask) {
+    assert.equal(current.closeReason, 'purchased_no_hold');
+    assert.match(outcome.additionalCopyRequestId, /^[1-9]\d*$/);
+    assert.equal(current.additionalCopyRequestId, outcome.additionalCopyRequestId);
+    const task = await json(t.context, t.origin, '/api/asap/staff/additional-copies/' + outcome.additionalCopyRequestId);
+    assert.equal(task.sourceTitleRequest, f.id);
+    assert.equal(task.bibid, f.bibid);
+    assert.equal(task.status, 'open');
+    assert.equal(outcome.notificationStatus, 'not_requested');
+    assert.equal(current.activity.filter(e => e.eventType === 'additional_copy_created').length, 1);
+  }
   const evidence = (await t.verify()).evidence;
   if (expected === 'outstanding_purchase') {
     const reminderRows = evidence.outbox.filter(o => o.key.startsWith('purchase-reminder:' + f.id + ':'));
@@ -147,7 +160,7 @@ const scenarios = [
     run: t => purchase(t, 'purchase-reminder-off', 'outstanding_purchase', false) },
   { id: 'purchase-verified-autohold', requirements: ['#407: verified BIB, automatic hold enabled, Pending hold'], writes: true,
     run: t => purchase(t, 'purchase-hold', 'pending_hold', false) },
-  { id: 'purchase-verified-no-hold', requirements: ['#407: verified BIB, automatic hold disabled, closure consequence'], writes: true,
+  { id: 'purchase-verified-no-hold', requirements: ['#407/#515: verified BIB, automatic hold disabled, linked additional-copy task and closed source'], writes: true,
     run: t => purchase(t, 'purchase-no-hold', 'closed', false) },
   { id: 'purchase-double-submit', requirements: ['#407: rapid duplicate clicks, one HTTP mutation and committed transition'], writes: true,
     run: t => purchase(t, 'purchase-duplicate', 'outstanding_purchase', false, true) },
@@ -461,24 +474,34 @@ const scenarios = [
       const f = await fresh(t, 'close-reopen');
       await openFixture(t.page, t.origin, f);
       const before = await detail(t.context, t.origin, f);
-      await (await actionButton(t.page, 'Close silently')).click();
-      await confirmationKeyboard(t.page, 'Close silently', 'Close silently');
-      await confirm(t.page, 'Cancel');
+      const opener = await actionButton(t.page, 'Close silently');
+      await opener.press('Enter');
+      const review = await inlineConfirmation(t.page, 'Close silently');
+      assert.match(await review.locator('p').innerText(), /without a rejection email/);
+      const cancel = review.getByRole('button', { name: 'Cancel', exact: true });
+      await t.page.keyboard.press('Tab');
+      assert.equal(await cancel.evaluate(node => node === document.activeElement), true);
+      await t.page.keyboard.press('Space');
+      await review.waitFor({ state: 'hidden' });
+      assert.equal(await opener.evaluate(node => node === document.activeElement), true);
       await unchanged(t.context, t.origin, f, before);
-      await (await actionButton(t.page, 'Close silently')).click();
-      await confirmation(t.page).waitFor();
-      const response = t.page.waitForResponse(r => new URL(r.url()).pathname === titlePath(f) && r.request().method() === 'POST');
-      await confirm(t.page, 'Close silently'); assert.equal((await response).status(), 200);
+      await opener.press('Enter');
+      await inlineConfirmation(t.page, 'Close silently');
+      assert.equal(t.mutations.length, 0);
+      const closed = await submit(t.page, reviewSubmit(review), f, 200);
+      assert.equal(closed.committed, true); assert.equal(closed.finalStatus, 'closed');
       await waitStatus(t, f, 'closed');
       await (await actionButton(t.page, 'Reopen')).click();
-      await confirmation(t.page).waitFor();
-      const reopenedResponse = t.page.waitForResponse(r => new URL(r.url()).pathname === titlePath(f) && r.request().method() === 'POST');
-      await confirm(t.page, 'Reopen request'); assert.equal((await reopenedResponse).status(), 200);
+      const reopen = await inlineConfirmation(t.page, 'Reopen request');
+      assert.match(await reopen.locator('p').innerText(), /assign a manual claim to you/);
+      assert.equal(t.mutations.length, 1);
+      const result = await submit(t.page, reviewSubmit(reopen), f, 200);
+      assert.equal(result.committed, true); assert.equal(result.finalStatus, 'suggestion');
       const reopened = await waitStatus(t, f, 'suggestion');
       const session = await json(t.context, t.origin, '/api/asap/staff/session');
       assert.equal(reopened.claimedByStaffUserId, session.staff.id);
       assert.equal(reopened.claimType, 'manual');
-      assert.equal(t.mutations.length, 2);
+      assert.deepEqual(t.mutations.map(m => m.action), ['silentClose', 'reopen']);
     } },
   { id: 'stale-purchase-failure', requirements: ['#407: real SQL rowversion conflict, no false success or extra commit'], writes: true,
     run: async t => {

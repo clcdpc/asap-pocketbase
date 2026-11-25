@@ -176,7 +176,7 @@ export function requestRowActions({ id, actions, live, onOpen, fallback }) {
         } else { popup.replaceChildren(); }
         partition = nextPartition;
         if (hadFocus) {
-          const focusTarget = directActions.includes(focused) || menuActions.includes(focused)
+          const focusTarget = directActions.includes(focused)
             ? focused : more.isConnected ? more : directActions[0];
           focusTarget?.focus({ preventScroll: true });
         }
