@@ -2579,13 +2579,13 @@ async function fillOperatorResolution(page, attestProof) {
 }
 
 async function routeClosedTitleList(page, baseOrigin, id) {
-  const path = baseOrigin + '/api/asap/staff/title-requests?*';
-  const handler = async route => {
-    const response = await route.fetch(), list = await response.json();
-    assert.ok(list.items.some(item => item.id === id), 'The controlled Closed title belongs to the authorized list.');
-    await route.fulfill({ response, json: { ...list,
-      items: list.items.map(item => item.id === id ? { ...item, status: 'closed' } : item) } });
-  };
+  const path = baseOrigin + '/api/asap/staff/title-requests?scope=all';
+  const response = await page.request.get(path);
+  assert.equal(response.status(), 200);
+  const list = await response.json();
+  assert.ok(list.items.some(item => item.id === id), 'The controlled Closed title belongs to the authorized list.');
+  const items = list.items.map(item => item.id === id ? { ...item, status: 'closed' } : item);
+  const handler = route => route.fulfill({ json: { ...list, items } });
   await page.route(path, handler);
   return () => page.unroute(path, handler);
 }
@@ -4597,16 +4597,17 @@ async function runOperationalCatalogCommits(browser, args, axeSource, report) {
     assert.equal(library.isActive, true);
     await page.locator(`#settings-organization-catalog [data-organization-id="${library.id}"]`).waitFor();
     await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy') && !document.querySelector('#settings-form').inert);
+    // The participation change starts an authoritative title read while Settings is still active.
+    const failQueue = route => route.fulfill({ status: 503, contentType: 'application/json',
+      json: { message: 'Forced unavailable queue after confirmed participation change' } });
+    await page.route('**/api/asap/staff/title-requests?*', failQueue);
+    await page.route('**/api/asap/staff/additional-copies?*', failQueue);
     await decideConfirmation(page, () => page.getByRole('button', { name: `Deactivate ${library.name}`, exact: true }).click(), dialog => dialog.accept());
     await page.locator('#settings-message').filter({ hasText: `${library.name} deactivated.` }).waitFor();
     await page.waitForFunction(() => !document.querySelector('#settings-form').hasAttribute('aria-busy'));
     assert.equal(await page.locator('#request-grid .request-title-link').count(), 0);
     assert.equal(await page.locator('#additional-copy-grid .grid-open').count(), 0);
     assert.equal(await page.locator('#operations-scope').inputValue(), 'all');
-    const failQueue = route => route.fulfill({ status: 503, contentType: 'application/json',
-      json: { message: 'Forced unavailable queue after confirmed participation change' } });
-    await page.route('**/api/asap/staff/title-requests?*', failQueue);
-    await page.route('**/api/asap/staff/additional-copies?*', failQueue);
     await page.locator('[data-view="queue"]').click();
     await page.waitForFunction(() => new URL(location.href).searchParams.get('scope') === 'all');
     await page.locator('#app-status').filter({ hasText: 'Forced unavailable queue' }).waitFor();
