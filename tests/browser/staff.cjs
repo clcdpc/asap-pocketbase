@@ -2578,6 +2578,18 @@ async function fillOperatorResolution(page, attestProof) {
   if (attestProof) await page.getByLabel(/I attest that this evidence proves/).check();
 }
 
+async function routeClosedTitleList(page, baseOrigin, id) {
+  const path = baseOrigin + '/api/asap/staff/title-requests?*';
+  const handler = async route => {
+    const response = await route.fetch(), list = await response.json();
+    assert.ok(list.items.some(item => item.id === id), 'The controlled Closed title belongs to the authorized list.');
+    await route.fulfill({ response, json: { ...list,
+      items: list.items.map(item => item.id === id ? { ...item, status: 'closed' } : item) } });
+  };
+  await page.route(path, handler);
+  return () => page.unroute(path, handler);
+}
+
 async function runClosedDeletionControls(browser, args, axeSource, report) {
   const highId = '9007199254741993';
   const nextId = '9007199254741994';
@@ -2609,6 +2621,7 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
         body: JSON.stringify({ deleted: true }) });
     };
     await page.route(detailRoutePattern, detailRoute);
+    const restoreList = await routeClosedTitleList(page, args.baseOrigin, closedDetail.id);
     await page.route(deletePath, singleDeleteRoute);
     await page.goto(args.baseOrigin + '/staff/?request=' + args.staleTitleAId, { waitUntil: 'networkidle' });
     await revealRequestActions(page);
@@ -2641,6 +2654,7 @@ async function runClosedDeletionControls(browser, args, axeSource, report) {
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
     assert.equal(singleDeletes, 1);
     await page.unroute(detailRoutePattern, detailRoute);
+    await restoreList();
     await page.unroute(deletePath, singleDeleteRoute);
     await page.locator('[data-status="closed"]').click();
     await page.locator('#request-search').fill('a hidden unrelated filter');
@@ -4270,14 +4284,7 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
       const detailRoute = route => route.fulfill({ status: 200, contentType: 'application/json',
         json: { ...snapshot, status: 'closed', capabilities: { ...snapshot.capabilities, canDelete: true } } });
       await page.route(args.baseOrigin + detailPath + '*', detailRoute);
-      const listPath = args.baseOrigin + '/api/asap/staff/title-requests?*';
-      const closedTitleList = async route => {
-        const response = await route.fetch(), list = await response.json();
-        assert.ok(list.items.some(item => item.id === id), 'The controlled Closed title belongs to the authorized list.');
-        await route.fulfill({ response, json: { ...list,
-          items: list.items.map(item => item.id === id ? { ...item, status: 'closed' } : item) } });
-      };
-      if (!copy) await page.route(listPath, closedTitleList);
+      const restoreList = copy ? null : await routeClosedTitleList(page, args.baseOrigin, id);
       const versions = [];
       let latest = (await session(context, args.baseOrigin)).staff;
       const deleteRoute = async route => {
@@ -4349,7 +4356,7 @@ async function runCurrentStaffPreferenceRevisions(browser, args, axeSource, repo
         'The retained Delete review still refers to the current, unchanged title request version.');
       await remove(); await page.locator('#request-dialog').waitFor({ state: 'hidden' });
       assert.equal(versions.length, 3); assert.equal(versions[2], latest.version);
-      if (!copy) await page.unroute(listPath, closedTitleList);
+      if (restoreList) await restoreList();
       await page.unroute(args.baseOrigin + detailPath + '*', detailRoute);
       await page.unroute(args.baseOrigin + deletePath, deleteRoute);
     }
