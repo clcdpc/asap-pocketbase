@@ -288,6 +288,11 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("operational_failure", denied.Code);
             await db.Entry(row).ReloadAsync();
             Assert.IsFalse(row.HasTrustedBib);
+            Assert.AreEqual("staff_scope_forbidden", await db.QueueProgress.Where(item => item.QueueName == QueueNames.PurchasePromotion &&
+                item.ScopeOrganizationId == scope).Select(item => item.LastOutcomeCode).SingleAsync());
+            // The guard stopped the run after recording the denial. Finish its bounded scan, then start the next cycle.
+            await VisitAsync();
+            Assert.AreEqual(RequestStatus.OutstandingPurchase, row.Status);
             await VisitAsync();
             Assert.AreEqual(RequestStatus.Closed, row.Status);
             Assert.IsTrue(row.HasTrustedBib);

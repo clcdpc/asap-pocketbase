@@ -207,12 +207,6 @@ public sealed partial class WorkflowProcessingService
                     return new WorkflowRunResult("stale_progress_fence", visited, changed, visited - changed);
                 }
 
-                if (outcome.Stop && outcome.Code == "staff_scope_forbidden")
-                {
-                    // A revoked manual actor cannot checkpoint a row on behalf of the next worker.
-                    logger.LogWarning("Manual workflow authority lost at {QueueName} request {RequestId}.", queue, candidate.Id);
-                    return new WorkflowRunResult("operational_failure", visited, changed, visited - changed);
-                }
                 if (outcome.Stop && cancellationToken.IsCancellationRequested)
                 {
                     return new WorkflowRunResult(outcome.Code, visited, changed, visited - changed);
