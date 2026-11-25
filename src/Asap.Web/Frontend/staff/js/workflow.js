@@ -80,7 +80,7 @@ export function createWorkflowApp() {
         refresh: options => titleQueue.refresh(options), render: () => titleQueue.render(),
         prepare: (context, detail) => titleQueue.prepare(context, detail), markStale: () => titleQueue.markStale(),
         isReady: context => titleQueue.isReady(context),
-        reviewSession: owner => session.refreshCurrentStaff(owner),
+        reviewSession: owner => session.refreshCurrentStaff(owner, { ifChanged: true }),
         prepareDetail: (id, options) => titleDetail.prepare(id, options), presentDetail: (target, options, ticket) => titleDetail.present(target, null, options, ticket),
         refreshOnEntry: options => titleQueue.refreshOnEntry(options), setLibraries: libraries => populateScopes(libraries),
         find: id => titleQueue.find(id), libraryScope: id => titleQueue.libraryScope(id),

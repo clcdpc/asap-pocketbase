@@ -3333,7 +3333,7 @@ for (const action of ['activation', 'sync']) {
       ui.get(action === 'activation' ? '[aria-label="Activate New Library B"]' : '#btn-sync-organizations').click();
       await until(() => committed && !ui.get('#settings-form').hasAttribute('aria-busy'), 'catalog change settled');
       ui.get('[data-view="queue"]').click();
-      await until(() => ui.get('#library-scope option[value="3"]'), 'new authoritative library offered');
+      await until(() => !ui.get('#queue-view').hidden && ui.get('#library-scope option[value="3"]'), 'Requests entered with reviewed library choices');
       assert.equal(ui.get('#library-scope option[value="2"]').textContent, 'Renamed Library A');
       assert.equal(ui.params().get('scope'), '2', 'still-active operational scope preserved');
       assert.equal(ui.get('#additional-copy-library-scope option[value="3"]').textContent, 'New Library B');

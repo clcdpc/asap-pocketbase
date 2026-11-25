@@ -1,6 +1,7 @@
 import { authorizedJson, isAbortError, loadStaffSession, onAccessUnavailable, onSessionInvalid } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { createDraftScope } from './draft-scope.js';
+import { actorKey } from './session-identity.js';
 
 export function createSessionCoordinator({ identity, shell, navigation, getFeatures, onAccepted, onPreferencesChanged,
   request = authorizedJson, sessionRequest = loadStaffSession, initialSignInFailure = null }) {
@@ -93,7 +94,7 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
     shell.preferencesChanged?.(preferences);
     onPreferencesChanged(preferences); return true;
   }
-  async function refreshCurrentStaff(owner) {
+  async function refreshCurrentStaff(owner, { ifChanged = false } = {}) {
     if (disposed || !identity.isCurrent(owner)) return null;
     const load = reads.begin('session');
     try {
@@ -101,6 +102,9 @@ export function createSessionCoordinator({ identity, shell, navigation, getFeatu
       if (disposed || !load.isCurrent() || !identity.isCurrent(owner)) return null;
       if (!session.authenticated) { lose('Your staff session ended. Sign in again.'); return null; }
       if (session.accessAllowed === false) { accessUnavailable(); return null; }
+      if (ifChanged && session.staff?.version === owner.version && actorKey(session.staff) === identity.actor()?.key) {
+        return identity.preferences();
+      }
       return updatePreferences(session.staff, owner) ? identity.preferences() : null;
     } catch (error) {
       if (!disposed && load.isCurrent() && identity.isCurrent(owner)) {

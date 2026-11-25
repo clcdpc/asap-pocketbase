@@ -78,6 +78,8 @@ function operationResult(url) {
     global.FormData = dom.window.FormData;
     global.URLSearchParams = dom.window.URLSearchParams;
     global.Node = dom.window.Node;
+    global.HTMLElement = dom.window.HTMLElement;
+    dom.window.gridjs = require(path.join(source, 'vendor/gridjs/6.2.0/gridjs.umd.js'));
 
     const requests = [];
     const operationsReads = new Map();

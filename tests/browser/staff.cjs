@@ -466,6 +466,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await scan(page, axeSource, args.artifactRoot, report, 'desktop', 'profile-saved');
 
     await page.locator('[data-view="queue"]').click();
+    await page.locator('#queue-view').waitFor({ state: 'visible' });
     assert.equal(await page.evaluate(() => document.activeElement.id), 'queue-title');
     const suggestionTab = page.locator('[data-status="suggestion"]');
     await suggestionTab.focus();
@@ -1737,6 +1738,7 @@ async function runStaleMutationCompletions(browser, args, report) {
     await page.locator('#additional-copy-create-review').waitFor();
     await page.locator('#additional-copy-create-review-summary').filter({ hasText: /Creation for BIB .* could not be confirmed/ }).waitFor();
     await page.locator('.view-tab[data-view="queue"]').click();
+    await page.locator('#queue-view').waitFor({ state: 'visible' });
     const queueNavigationState = await page.evaluate(() => ({
       hidden: document.querySelector('#queue-view')?.hidden,
       activeTab: document.querySelector('.view-tab[aria-current="page"]')?.dataset.view,
@@ -3691,7 +3693,9 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     await page.locator('#settings-workflow').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#settings-scope').inputValue(), '2');
     await page.locator('[data-view="queue"]').click();
-    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.locator('#queue-view').waitFor({ state: 'visible' });
+    await page.locator('[data-view="settings"]').click();
+    await page.locator('#settings-view').waitFor({ state: 'visible' });
     assert.equal(new URL(page.url()).searchParams.get('settingsScope'), '2');
     assert.equal(new URL(page.url()).hash, '#settings-workflow');
     await page.reload({ waitUntil: 'networkidle' });

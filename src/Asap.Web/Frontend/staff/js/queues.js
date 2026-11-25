@@ -305,7 +305,9 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
       const scope = owner.role === 'super_admin' ? context.scope : String(owner.organizationId);
       const matchesDetail = items => !detail || items.some(item => item.id === detail.id &&
         item.status === detail.status && item.version === detail.version);
-      if (pendingRefresh && scope === getContext().scope) {
+      // A hidden count read can serve the incoming view. A visible queue may be
+      // finishing another dialog's mutation, so validate the new target independently.
+      if (pendingRefresh && getContext().activeView !== 'queue' && scope === getContext().scope) {
         const refreshed = await pendingRefresh;
         if (!live() || !refreshed || !isReady(context)) { return null; }
         if (matchesDetail(state.requests)) { return { scope, isCurrent: live, accept() {} }; }
