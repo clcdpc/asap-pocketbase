@@ -146,10 +146,27 @@ public sealed partial class PolarisPatronProvider
                 return false;
             }
 
+            var associated = new List<int>();
+            if (purchaseDiscovery && TryGetUniqueProperty(row, "TypeOfMaterialValues", out var values))
+            {
+                if (values.ValueKind != JsonValueKind.Array)
+                {
+                    return false;
+                }
+                foreach (var value in values.EnumerateArray())
+                {
+                    if (!TryReadPositiveInt32(value, out var id))
+                    {
+                        return false;
+                    }
+                    associated.Add(id);
+                }
+            }
             result.Add(new StaffBibSearchRow(bibId, Clean(model.Title), Clean(model.Author), Clean(model.PublicationDate),
                 Clean(model.TypeOfMaterial), Clean(model.ISBN) ?? Clean(model.UPC))
             {
                 Publisher = Clean(model.Publisher),
+                AssociatedToms = associated,
                 SearchIdentifiers = purchaseDiscovery ? new[] { model.ISBN, model.UPC,
                     TryGetUniqueProperty(row, "LCCN", out var lccn) && lccn.ValueKind == JsonValueKind.String
                         ? lccn.GetString() : null } : [],
@@ -438,8 +455,78 @@ public sealed partial class PolarisPatronProvider
             Regex.IsMatch(lccn, @"^[a-z]{0,3}(?:[0-9]{8}|[0-9]{10})$", RegexOptions.IgnoreCase);
     }
 
+    private async Task<StaffBibSearchResult> SearchPurchaseAsync(
+        string expression, int organizationId, IReadOnlyList<string> excludedToms, CancellationToken cancellationToken)
+    {
+        var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
+        var excludedIds = new HashSet<int>();
+        if (excludedToms.Count > 0)
+        {
+            var definitions = await LoadTomCodesAsync(client, organizationId, cancellationToken);
+            var byCode = definitions.Values.ToDictionary(row => row.SearchCode, StringComparer.Ordinal);
+            foreach (var code in excludedToms)
+            {
+                if (!PolarisTom.IsValidCode(code) || !byCode.TryGetValue(code, out var tom))
+                {
+                    throw TomReferenceFailure();
+                }
+                excludedIds.Add(tom.Id);
+            }
+            expression = $"({expression}) NOT ({string.Join(" OR ", excludedToms.Select(code => "TOM=" + code))})";
+        }
+        var search = await ReadCatalogPageAsync(client, organizationId, BibSearchTypes.boolean, SearchQualifiers.KW,
+            expression, SearchSortOptions.PDTI, 1, cancellationToken, purchaseDiscovery: true);
+        if (search.Results.Count != Math.Min(search.TotalMatches, StaffBibSearchResult.PageSize))
+        {
+            throw new PolarisOperationalException("incomplete_catalog_search", "Polaris returned an incomplete first page.");
+        }
+        if (search.TotalMatches == 1 && (excludedIds.Contains(search.Results[0].MaterialTypeId.GetValueOrDefault()) ||
+            search.Results[0].AssociatedToms.Any(excludedIds.Contains)))
+        {
+            throw new PolarisOperationalException("inconsistent_catalog_material", "A filtered Polaris match contains an excluded TOM.");
+        }
+        return search;
+    }
+
+    public async Task<IdentifierLookupResult> ValidatePurchaseBibAsync(int bibId, int organizationId,
+        IReadOnlyList<string> excludedToms, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var bib = await ValidateBibAsync(bibId, organizationId, cancellationToken);
+            if (!bib.IsValid)
+            {
+                return new(IdentifierLookupOutcome.DefinitiveNotFound);
+            }
+            if (excludedToms.Count == 0)
+            {
+                return new(IdentifierLookupOutcome.Found, bibId);
+            }
+            // BibGet supplies no complete list of associated TOMs. Ask the same Polaris index about this exact CN.
+            var search = await SearchPurchaseAsync($"CN={bibId}", organizationId, excludedToms, cancellationToken);
+            if (search.TotalMatches == 0)
+            {
+                return new(IdentifierLookupOutcome.DefinitiveNotFound, FilteredByMaterialType: true);
+            }
+            if (search.TotalMatches != 1 || search.Results[0].BibId != bibId ||
+                bib.PrimaryMaterialTypeId is int primary && search.Results[0].MaterialTypeId != primary)
+            {
+                return OperationalResult("inconsistent_catalog_material");
+            }
+            return new(IdentifierLookupOutcome.Found, bibId);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is PolarisOperationalException || IsExpectedProviderFailure(exception))
+        {
+            return OperationalResult("purchase_catalog_unavailable");
+        }
+    }
+
     public async Task<IdentifierLookupResult> LookupPurchaseIdentifierAsync(string identifier,
-        int organizationId, CancellationToken cancellationToken)
+        int organizationId, IReadOnlyList<string> excludedToms, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!SupportsPurchaseIdentifier(identifier))
@@ -460,51 +547,17 @@ public sealed partial class PolarisPatronProvider
 
         try
         {
-            var (client, _) = await CreateMemberClientAsync(organizationId, cancellationToken);
-            var term = IdentifierSearch(identifier);
-            StaffBibSearchRow? selected = null;
-            var corroborated = false;
-            var materials = new Dictionary<int, int?>();
-            int? total = null;
-            var examined = 0;
-            for (var page = 1; ; page++)
+            var result = await SearchPurchaseAsync(IdentifierSearch(identifier), organizationId, excludedToms, cancellationToken);
+            if (result.TotalMatches == 0)
             {
-                var result = await ReadCatalogPageAsync(client, organizationId, BibSearchTypes.boolean,
-                    SearchQualifiers.KW, term, SearchSortOptions.PDTI, page, cancellationToken, purchaseDiscovery: true);
-                total ??= result.TotalMatches;
-                if (result.TotalMatches != total || result.Results.Count != Math.Min(StaffBibSearchResult.PageSize, total.Value - examined))
-                {
-                    return OperationalResult("incomplete_catalog_search");
-                }
-                foreach (var row in result.Results)
-                {
-                    if (materials.TryGetValue(row.BibId, out var previousType) && previousType != row.MaterialTypeId)
-                    {
-                        return OperationalResult("inconsistent_catalog_material");
-                    }
-                    materials[row.BibId] = row.MaterialTypeId;
-                    if (row.MaterialTypeId is 36 or 41)
-                    {
-                        continue;
-                    }
-                    if (selected is not null && selected.BibId != row.BibId)
-                    {
-                        return new IdentifierLookupResult(IdentifierLookupOutcome.Found, MultipleMatches: true);
-                    }
-                    selected ??= row;
-                    corroborated |= row.SearchIdentifiers.Any(ConfirmsIdentifier);
-                }
-                examined += result.Results.Count;
-                if (examined == total)
-                {
-                    break;
-                }
+                return new(IdentifierLookupOutcome.DefinitiveNotFound);
             }
-            if (selected is null)
+            if (result.TotalMatches > 1)
             {
-                return new IdentifierLookupResult(IdentifierLookupOutcome.DefinitiveNotFound, FilteredByMaterialType: examined > 0);
+                return new(IdentifierLookupOutcome.Found, MultipleMatches: true);
             }
-            if (!corroborated)
+            var selected = result.Results.Single();
+            if (!selected.SearchIdentifiers.Any(ConfirmsIdentifier))
             {
                 // Search summaries can omit secondary identifiers and LCCNs.
                 var detail = await ValidateBibAsync(selected.BibId, organizationId, cancellationToken);

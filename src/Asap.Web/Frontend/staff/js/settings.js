@@ -172,11 +172,15 @@ function writeControl(control, value) {
   }
 }
 
+function controlValue(control) {
+  if (control.type === 'checkbox') return control.checked;
+  if (control.type === 'select-multiple') return Array.from(control.selectedOptions, option => option.value);
+  return control.value;
+}
+
 function snapshotForm(form) {
-  return [...form.elements].filter(control => control.matches('input, textarea, select') && !control.closest?.('[data-settings-ignore="true"]')).map(control => [
-    control.id,
-    control.type === 'checkbox' ? control.checked : control.value
-  ]);
+  return [...form.elements].filter(control => control.matches('input, textarea, select') && !control.closest?.('[data-settings-ignore="true"]'))
+    .map(control => [control.id, controlValue(control)]);
 }
 
 function sameSnapshot(first, second) {
@@ -688,7 +692,7 @@ export function createSettingsController({
     const scalars = new Map(scalarValues), templates = new Map(templateValues);
     const changed = settingsFields.filter(field => {
       const control = field.control;
-      return baseline.get(control.id) !== (control.type === 'checkbox' ? control.checked : control.value) ||
+      return !sameSnapshot(baseline.get(control.id), controlValue(control)) ||
         field.scalar && scalars.get(field.scalar) !== state.scalarIntents.get(field.scalar) ||
         field.template && templates.get(field.template) !== state.templateIntents.get(field.template);
     });
@@ -1097,7 +1101,7 @@ export function createSettingsController({
   function snapshotDrafts() {
     return ownershipSnapshot() + JSON.stringify([...dom.form.querySelectorAll('input, select, textarea')]
       .filter(control => control.id !== 'patron-code-picker' && control !== dom.staffShowInactive)
-      .map(control => [control.value, control.checked]));
+      .map(control => [controlValue(control), control.checked]));
   }
 
   function updateDirtyState() {
@@ -1874,6 +1878,20 @@ export function createSettingsController({
     setSystemFields(systemSettings);
     setPolarisFields(configuredSystem.polaris || stored.polaris);
     for (const [key, id, kind] of WORKFLOW_FIELDS) writeControl(document.getElementById(id), property(workflow, key));
+    const tomSelect = document.getElementById('excluded-promotion-toms');
+    const savedToms = systemWorkflow.excludedPromotionToms;
+    const choices = new Map((data.promotionToms || []).map(tom => [tom.searchCode, tom.description]));
+    for (const code of savedToms || []) {
+      if (!choices.has(code)) choices.set(code, `${code} (saved code, description unavailable)`);
+    }
+    tomSelect.replaceChildren(...Array.from(choices, ([value, text]) => {
+      const option = node('option', { value, text });
+      option.selected = savedToms?.includes(value) === true;
+      return option;
+    }));
+    tomSelect.disabled = !isSystem() || !data.promotionToms?.length || !Array.isArray(savedToms);
+    document.getElementById('promotion-toms-status').textContent = !data.promotionToms?.length
+      ? 'Polaris TOM choices are unavailable. Reload settings to retry.' : '';
     setScopedFields(patron, PATRON_FIELDS);
     setSender(email);
     acceptedPostmarkToken = property(configuredSystem.email, 'hasPostmarkToken') === true;
@@ -1946,10 +1964,15 @@ export function createSettingsController({
     dom.refresh.disabled = true;
     const clearLoading = !options.silent ? notify('Loading settings...') : null;
     try {
-      const [settingsResponse, organizationsResponse, patronCodesResponse] = await Promise.all([
+      const [settingsResponse, organizationsResponse, patronCodesResponse, tomResponse] = await Promise.all([
         authorizedJson(`/api/asap/staff/settings?orgId=${currentScopeForRequest()}`, { signal: loadState.signal }),
         authorizedJson('/api/asap/staff/organizations', { signal: loadState.signal }),
         authorizedJson(`/api/asap/staff/polaris/patron-codes?orgId=${currentScopeForRequest()}`, { signal: loadState.signal })
+          .catch(error => {
+            if (isAbortError(error) || error.status === 401) throw error;
+            return null;
+          }),
+        authorizedJson(`/api/asap/staff/polaris/promotion-toms?orgId=${currentScopeForRequest()}`, { signal: loadState.signal })
           .catch(error => {
             if (isAbortError(error) || error.status === 401) throw error;
             return null;
@@ -1969,6 +1992,8 @@ export function createSettingsController({
       populateScopeOptions();
       const patronCodeChoices = patronCodesResponse?.data ?? patronCodesResponse;
       data.patronCodeChoices = Array.isArray(patronCodeChoices) ? patronCodeChoices : [];
+      const toms = tomResponse?.data ?? tomResponse;
+      data.promotionToms = Array.isArray(toms) ? toms : null;
       data.patronCodeChoicesUnavailable = !Array.isArray(patronCodeChoices);
       const wasHidden = dom.form.hidden;
       const review = state.unconfirmedMutation || state.awaitingReloadMutation;
@@ -2357,6 +2382,12 @@ export function createSettingsController({
       if (intent) branding.altText = intent === 'reset' ? null : clean(brandingInput.value);
     }
 
+    const tomSelect = document.getElementById('excluded-promotion-toms');
+    if (isSystem() && !tomSelect.disabled) {
+      const selected = controlValue(tomSelect);
+      const baseline = state.baselineSnapshot.find(item => item[0] === tomSelect.id)?.[1];
+      if (!sameSnapshot(selected, baseline)) workflow.excludedPromotionToms = selected;
+    }
     payload.workflow = workflow;
     payload.patron = patron;
     payload.email = email;

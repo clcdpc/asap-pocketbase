@@ -37,6 +37,8 @@ async function flush() {
     let fromName = 'System';
     let staffUrl = 'https://staff.example.org';
     let hasToken = true;
+    let excludedPromotionToms = ['ebk', 'aeb'];
+    let tomsUnavailable = false;
     const organizations = [
       { id: 1, name: 'System', organizationCodeId: 1, parentOrganizationId: null, isActive: true, version: 'org-system-v1' },
       { id: 2, name: 'Library Two', organizationCodeId: 2, parentOrganizationId: 1, isActive: true, version: 'org-two-v1' },
@@ -116,7 +118,7 @@ async function flush() {
       stored: {
         systemSettings: { staffUrl, enabledLibraryOrgIds: [2], libraryOrgIds: [2, 3] }, polaris: {},
         configuredSystem: {
-          workflow: {}, patron: {}, email: { fromAddress: 'system@example.org', fromName, hasPostmarkToken: hasToken },
+          workflow: { excludedPromotionToms }, patron: {}, email: { fromAddress: 'system@example.org', fromName, hasPostmarkToken: hasToken },
           publicationOptions: emptySet, commonCreators: emptySet, allowedPatronCodeIds: emptySet,
           providers: [], formats: [], templates: [template, ...staffTemplates, ...additionalTemplates], branding: {}
         },
@@ -141,10 +143,17 @@ async function flush() {
       }
       if (requestUrl.includes('/api/asap/staff/settings?orgId=system')) return response(200, data());
       if (requestUrl.endsWith('/api/asap/staff/organizations')) return response(200, organizationResponse);
+      if (requestUrl.includes('/api/asap/staff/polaris/promotion-toms?')) {
+        return tomsUnavailable ? response(502, {}) : response(200, { data: [
+          { searchCode: 'ebk', description: 'eBook' }, { searchCode: 'aeb', description: 'eAudiobook' },
+          { searchCode: 'bks', description: 'Book' }
+        ] });
+      }
       if (requestUrl.includes('/api/asap/staff/polaris/patron-codes?')) return response(200, { code: 'ok', data: [] });
       if (requestUrl.endsWith('/api/asap/staff/settings')) {
         const payload = JSON.parse(options.body);
         saved.push(payload);
+        if (Object.hasOwn(payload.workflow, 'excludedPromotionToms')) excludedPromotionToms = payload.workflow.excludedPromotionToms;
         for (const patch of payload.templates || []) {
           const staff = staffTemplates.find(item => item.templateKey === patch.templateKey);
           if (staff) Object.assign(staff, patch);
@@ -606,6 +615,23 @@ async function flush() {
     assert.strictEqual(staffBody.value, 'Hello {{recipientName}}');
     assert.strictEqual(controller.isDirty(), false);
 
+    const toms = document.getElementById('excluded-promotion-toms');
+    assert.equal(toms.labels[0].textContent, 'Excluded TOMs for automatic promotion');
+    assert.equal(toms.multiple, true);
+    assert.deepEqual(Array.from(toms.selectedOptions, opt => opt.textContent), ['eBook', 'eAudiobook']);
+    for (const selection of [['ebk', 'bks'], []]) {
+      for (const opt of toms.options) opt.selected = selection.includes(opt.value);
+      toms.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      assert.equal(controller.isDirty(), true);
+      document.getElementById('settings-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      for (let attempt = 0; attempt < 30 && (controller.hasPendingMutation() || controller.isDirty()); attempt++) await flush();
+      assert.deepEqual(saved.at(-1).workflow.excludedPromotionToms, selection);
+      assert.deepEqual(Array.from(toms.selectedOptions, opt => opt.value), selection);
+    }
+    tomsUnavailable = true;
+    await controller.load();
+    assert.equal(toms.disabled, true);
+    assert.match(document.getElementById('promotion-toms-status').textContent, /unavailable/);
     dom.window.close();
     console.log('Patron and staff template placeholder separation, preview, discard, validation and save, plus System token and Staff URL editing passed');
   } finally {

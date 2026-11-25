@@ -109,6 +109,10 @@ public sealed class WorkflowSettings
     public bool? AdditionalCopyTimeoutEnabled { get; set; }
     public int? AdditionalCopyTimeoutDays { get; set; }
     public bool? AutoPromote { get; set; }
+    // NULL is the installation default. An empty string is an explicit empty selection.
+    public string? ExcludedPromotionToms { get; set; }
+    public string[] ReadExcludedPromotionToms() =>
+        (ExcludedPromotionToms ?? "aeb,ebk") is { Length: > 0 } codes ? codes.Split(',') : [];
     public bool? CommonAuthorsEnabled { get; set; }
     public string? CommonAuthorsLabel { get; set; }
     public string? CommonAuthorsHelp { get; set; }

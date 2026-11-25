@@ -1,3 +1,4 @@
+using Asap.Web.Features.Analytics;
 using Asap.Web.Features.Patron;
 using Asap.Web.Features.Staff;
 using Asap.Web.Infrastructure.Data;
@@ -11,24 +12,29 @@ namespace Asap.Tests.Integration;
 public sealed partial class PatronJourneyTests
 {
     [TestMethod]
-    [DataRow(true, false)]
-    [DataRow(true, true)]
-    [DataRow(false, false)]
-    public async Task ApprovedPurchaseDiscoversLaterCatalogRecordAndCompletesUnattended(bool autoHold, bool disableAfterPromotion)
+    [DataRow(true, false, "error_max_retries")]
+    [DataRow(true, true, "not_found")]
+    [DataRow(false, false, "error_max_retries")]
+    [DataRow(false, false, "not_found")]
+    public async Task ApprovedPurchaseDiscoversLaterCatalogRecordAndCompletesUnattended(bool autoHold, bool disableAfterPromotion, string initialStatus)
     {
         var actor = await GetOwnershipTestActorAsync();
         var scope = await CreateFulfillmentLibraryAsync();
         const string identifier = "9780306406157";
         const int bibId = 54301;
-        var seeded = await SeedBibOwnershipRequestAsync(identifier, null, false, "error_max_retries", 5,
-            autoHold: autoHold, libraryOrganizationId: scope);
+        var seeded = await SeedBibOwnershipRequestAsync(identifier, null, false, initialStatus, 5,
+            "Earlier identifier check.", "earlier_failure", timeProvider!.GetUtcNow().UtcDateTime.AddDays(-1),
+            identifierNotFoundTag: true, autoHold: autoHold, libraryOrganizationId: scope);
         var services = factory!.Services;
         var provider = services.GetRequiredService<DeterministicTestingPatronProvider>();
         var workflow = services.GetRequiredService<WorkflowProcessingService>();
         await using var db = await services.GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync();
         var row = await db.TitleRequests.SingleAsync(item => item.Id == seeded.Id);
+        var systemSettings = await db.WorkflowSettings.SingleAsync(item => item.OrganizationId == 1);
+        var originalExclusions = systemSettings.ExcludedPromotionToms;
         try
         {
+            row.Notes = "Earlier catalog check recorded by staff.";
             db.WorkflowSettings.Add(new WorkflowSettings { OrganizationId = scope, AutoPromote = true });
             await db.SaveChangesAsync();
             var patron = new PatronSnapshot(7001, row.Barcode, null, "Test", "Patron", 1, "Adult",
@@ -39,12 +45,20 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("updated", approval.Code);
             await db.Entry(row).ReloadAsync();
             Assert.AreEqual(RequestStatus.OutstandingPurchase, row.Status);
+            Assert.AreEqual(initialStatus, row.IsbnCheckStatus);
+            Assert.AreEqual(5, row.IsbnCheckRetryCount);
+            Assert.AreEqual("earlier_failure", row.IsbnCheckLastErrorCode);
+            var analytics = services.GetRequiredService<AnalyticsService>();
+            async Task<long> IdentifierFailuresAsync() => (await analytics.GetAsync(actor, LibraryScope.ForLibrary(scope),
+                "last30", null, null, CancellationToken.None)).Data!.Exceptions.IdentifierFailures;
+            Assert.AreEqual(initialStatus == "error_max_retries" ? 1L : 0L, await IdentifierFailuresAsync());
             var phaseStart = row.UpdatedUtc;
             var notes = row.Notes;
             var emails = await db.EmailOutbox.CountAsync(item => item.OrganizationId == scope);
-            var events = await db.TitleRequestEvents.CountAsync(item => item.TitleRequestId == row.Id);
+            var priorEvents = await db.TitleRequestEvents.Where(item => item.TitleRequestId == row.Id).Select(item => item.Id).ToArrayAsync();
+            var events = priorEvents.Length;
             provider.SetPurchaseIdentifierResult(identifier, scope, new(IdentifierLookupOutcome.DefinitiveNotFound));
-            for (var cycle = 0; cycle < 2; cycle++)
+            for (var cycle = 0; initialStatus == "not_found" && cycle < 2; cycle++)
             {
                 timeProvider!.SetUtcNow(timeProvider.GetUtcNow().AddMinutes(1));
                 Assert.AreEqual("completed", (await workflow.ProcessWorkflowAsync(scope)).Code);
@@ -56,6 +70,7 @@ public sealed partial class PatronJourneyTests
                 Assert.IsFalse(row.HasTrustedBib);
                 Assert.AreEqual(notes, row.Notes);
             }
+            timeProvider!.SetUtcNow(timeProvider.GetUtcNow().AddMinutes(1));
             provider.SetPurchaseIdentifierResult(identifier, scope, new(IdentifierLookupOutcome.Found, bibId,
                 CatalogTitle: "Catalog title", CatalogAuthor: "Catalog author"));
             if (disableAfterPromotion)
@@ -81,6 +96,8 @@ public sealed partial class PatronJourneyTests
                 await db.Entry(row).ReloadAsync();
                 Assert.AreEqual(RequestStatus.PendingHold, row.Status);
                 Assert.IsTrue(TitleRequestWorkflowPolicy.Evaluate(row, false, false).CanPlaceHold);
+                systemSettings.ExcludedPromotionToms = "bks";
+                await db.SaveChangesAsync();
                 await db.WorkflowSettings.Where(item => item.OrganizationId == scope)
                     .ExecuteUpdateAsync(set => set.SetProperty(item => item.AutoPromote, false));
             }
@@ -93,6 +110,17 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual(bibId, row.AutoVerifiedBibId);
             Assert.IsTrue(row.HasTrustedBib);
             Assert.IsFalse(row.BibIdStaffVerified);
+            StringAssert.Contains(row.Notes!, "Earlier catalog check recorded by staff.");
+            Assert.AreEqual(events, await db.TitleRequestEvents.CountAsync(item => priorEvents.Contains(item.Id)));
+            Assert.AreEqual("found", row.IsbnCheckStatus);
+            StringAssert.Contains(row.IsbnCheckResult!, bibId.ToString());
+            Assert.AreEqual(row.LastPromoterCheckUtc, row.LastCheckedUtc);
+            Assert.IsGreaterThan(phaseStart, row.LastCheckedUtc!.Value);
+            Assert.AreEqual(0, row.IsbnCheckRetryCount);
+            Assert.IsNull(row.IsbnCheckLastErrorCode);
+            Assert.AreEqual(0L, await IdentifierFailuresAsync());
+            CollectionAssert.AreEquivalent(new[] { "polaris_bib_found" }, (await ReadBibOwnershipRequestAsync(row.Id)).IdentifierTags.ToArray());
+            StringAssert.Contains(row.LastPromoterResult!, "unique Polaris identifier");
             Assert.AreEqual("Catalog title (Staff entered title)", row.Title);
             Assert.AreEqual("Catalog author (Staff entered author)", row.Author);
             var transition = await db.TitleRequestEvents.SingleAsync(item => item.TitleRequestId == row.Id && item.EventType == "promoted");
@@ -112,6 +140,11 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
+            if (disableAfterPromotion)
+            {
+                systemSettings.ExcludedPromotionToms = originalExclusions;
+                await db.SaveChangesAsync();
+            }
             await db.HoldPlacementOperations.Where(item => item.TitleRequestId == row.Id).ExecuteDeleteAsync();
             await DeleteOwnedEmailFixtureAsync(db, db.EmailOutbox.Where(item => item.OrganizationId == scope));
             await DeleteBibOwnershipRequestsAsync([row.Id]);
@@ -127,6 +160,7 @@ public sealed partial class PatronJourneyTests
     [DataRow("notes")]
     [DataRow("autohold")]
     [DataRow("setting")]
+    [DataRow("exclusions")]
     [DataRow("inactive")]
     [DataRow("cancel")]
     [DataRow("duplicate")]
@@ -144,6 +178,8 @@ public sealed partial class PatronJourneyTests
         var contexts = factory!.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
         await using var db = await contexts.CreateDbContextAsync();
         var row = await db.TitleRequests.SingleAsync(item => item.Id == seeded.Id);
+        var systemSettings = await db.WorkflowSettings.SingleAsync(item => item.OrganizationId == 1);
+        var originalExclusions = systemSettings.ExcludedPromotionToms;
         var settings = new WorkflowSettings { OrganizationId = scope, AutoPromote = true };
         db.WorkflowSettings.Add(settings);
         await db.SaveChangesAsync();
@@ -160,6 +196,7 @@ public sealed partial class PatronJourneyTests
                 case "status": row.Status = RequestStatus.Suggestion; break;
                 case "notes": row.Notes = "Staff edit"; break;
                 case "autohold": row.AutoHold = true; break;
+                case "exclusions": systemSettings.ExcludedPromotionToms = "bks"; break;
                 case "setting": settings.AutoPromote = false; break;
                 case "revoked": (await db.StaffUsers.SingleAsync(item => item.Id == actor.Id)).IsActive = false; break;
                 case "inactive": (await db.Organizations.SingleAsync(item => item.Id == scope)).IsActive = false; break;
@@ -214,6 +251,11 @@ public sealed partial class PatronJourneyTests
         }
         finally
         {
+            if (change == "exclusions")
+            {
+                systemSettings.ExcludedPromotionToms = originalExclusions;
+                await db.SaveChangesAsync();
+            }
             if (change == "revoked")
             {
                 await db.StaffUsers.Where(item => item.Id == actor.Id).ExecuteUpdateAsync(set => set.SetProperty(item => item.IsActive, true));
@@ -367,20 +409,26 @@ public sealed partial class PatronJourneyTests
     }
 
     [TestMethod]
-    [DataRow(1, true)]
-    [DataRow(36, false)]
-    [DataRow(41, false)]
-    [DataRow(null, false)]
-    public async Task PurchaseDiscoveryValidatesOnlyStaffSelectedBib(int? material, bool eligible)
+    [DataRow(1, null, true)]
+    [DataRow(36, null, false)]
+    [DataRow(41, null, false)]
+    [DataRow(null, null, false)]
+    [DataRow(1, "bks", false)]
+    [DataRow(36, "bks", true)]
+    [DataRow(41, "", true)]
+    public async Task PurchaseDiscoveryValidatesOnlyStaffSelectedBib(int? material, string? exclusions, bool eligible)
     {
         await GetOwnershipTestActorAsync();
         var scope = await CreateFulfillmentLibraryAsync();
-        var seeded = await SeedBibOwnershipRequestAsync("001234567890", 543, true, "found", identifierTags: true,
+        var seeded = await SeedBibOwnershipRequestAsync("001234567890", 543, true, "not_found", checkResult: "Earlier identifier check.",
             status: RequestStatus.OutstandingPurchase, libraryOrganizationId: scope);
         var services = factory!.Services;
         await using var db = await services.GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync();
+        var systemSettings = await db.WorkflowSettings.SingleAsync(item => item.OrganizationId == 1);
+        var originalExclusions = systemSettings.ExcludedPromotionToms;
         try
         {
+            systemSettings.ExcludedPromotionToms = exclusions;
             db.WorkflowSettings.Add(new WorkflowSettings { OrganizationId = scope, AutoPromote = true });
             await db.SaveChangesAsync();
             var provider = services.GetRequiredService<DeterministicTestingPatronProvider>();
@@ -391,11 +439,15 @@ public sealed partial class PatronJourneyTests
             Assert.AreEqual("Staff entered title", row.Title);
             Assert.IsTrue(row.BibIdStaffVerified);
             Assert.AreEqual(543, row.BibId);
+            Assert.AreEqual("not_found", row.IsbnCheckStatus);
+            Assert.AreEqual("Earlier identifier check.", row.IsbnCheckResult);
             Assert.IsNull(row.AutoVerifiedIdentifier);
             Assert.IsFalse(provider.Calls.Any(call => call.Operation == TestingPolarisOperation.PurchaseIdentifierLookup));
         }
         finally
         {
+            systemSettings.ExcludedPromotionToms = originalExclusions;
+            await db.SaveChangesAsync();
             await DeleteRequestAsync(seeded.Id);
             await db.WorkflowSettings.Where(item => item.OrganizationId == scope).ExecuteDeleteAsync();
             await DeleteFulfillmentLibraryAsync(scope);

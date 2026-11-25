@@ -108,6 +108,8 @@ public sealed partial class DatabaseBaselineTests
         await using var connection = new SqlConnection(_databaseConnectionString);
         await connection.OpenAsync();
         await NonQuery(connection, """
+            ALTER TABLE [asap].[WorkflowSettings] DROP CONSTRAINT [CK_WorkflowSettings_PromotionTomsSystemOnly];
+            ALTER TABLE [asap].[WorkflowSettings] DROP COLUMN [ExcludedPromotionToms];
             ALTER TABLE [asap].[TitleRequest] DROP COLUMN [HasTrustedBib];
             ALTER TABLE [asap].[TitleRequest] DROP COLUMN [AutoVerifiedBibId], [AutoVerifiedIdentifier], [LastPromoterResult];
             INSERT INTO [asap].[Organization] ([Id],[DisplayName],[OrganizationCodeId],[ParentOrganizationId],[IsActive])
@@ -119,6 +121,8 @@ public sealed partial class DatabaseBaselineTests
                 FROM (VALUES (0), (1)) flags(verified);
             """);
         new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+        Assert.AreEqual(1, await Scalar(connection,
+            "SELECT COUNT(*) FROM [asap].[WorkflowSettings] WHERE [OrganizationId] = 1 AND [ExcludedPromotionToms] IS NULL;"));
         Assert.AreEqual(2, await Scalar(connection, """
             SELECT COUNT(*) FROM [asap].[TitleRequest] WHERE [LibraryOrganizationId] = 543 AND [BibId] = 543
                 AND [HasTrustedBib] = [BibIdStaffVerified] AND [AutoVerifiedBibId] IS NULL AND [AutoVerifiedIdentifier] IS NULL;

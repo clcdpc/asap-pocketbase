@@ -283,6 +283,25 @@ public sealed partial class AdministrationService(
         }
 
         var isReset = organizationId != LibraryScope.SystemOrganizationId && command.Reset;
+        if (command.Workflow.ExcludedPromotionToms is { } exclusions)
+        {
+            if (organizationId != LibraryScope.SystemOrganizationId)
+            {
+                return new AdministrationResult("settings_system_only");
+            }
+            try
+            {
+                var choices = await polarisProvider.GetPromotionTomsAsync(cancellationToken);
+                if (exclusions.Except(choices.Select(row => row.SearchCode), StringComparer.Ordinal).Any())
+                {
+                    return new AdministrationResult("settings_payload_invalid", Message: "Select a current Polaris TOM.");
+                }
+            }
+            catch (PolarisOperationalException exception)
+            {
+                return new AdministrationResult("polaris_unavailable", Message: exception.Message);
+            }
+        }
         var patronCodeValidation = isReset
             ? (Snapshot: (PatronCodeValidation?)null, Failure: (AdministrationResult?)null)
             : await PreparePatronCodeValidationAsync(payload, organizationId, cancellationToken);
@@ -472,6 +491,22 @@ public sealed partial class AdministrationService(
                 item.IsActive,
                 item.LastSyncedUtc,
                 StaffVersion.Encode(item.RowVersion))).ToArray());
+    }
+
+    public async Task<AdministrationResult> ListPromotionTomsAsync(CurrentStaff actor, LibraryScope scope, CancellationToken cancellationToken)
+    {
+        if (!TryResolveScope(actor, scope, out _, out var failure))
+        {
+            return failure;
+        }
+        try
+        {
+            return new AdministrationResult("ok", await polarisProvider.GetPromotionTomsAsync(cancellationToken));
+        }
+        catch (PolarisOperationalException exception)
+        {
+            return new AdministrationResult("polaris_unavailable", Message: exception.Message);
+        }
     }
 
     public async Task<AdministrationResult> ListPatronCodesAsync(

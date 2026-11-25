@@ -9,7 +9,7 @@ public enum TestingPolarisOperation
 {
     Connection, Organizations, PatronCodes, Authenticate, Refresh, PatronId, PickupBranches,
     PickupUpdate, IdentifierLookup, BibValidation, BibSearch, PatronSearch, BibHoldings,
-    PatronHolds, PatronCheckouts, HoldCreate, HoldReply, PurchaseIdentifierLookup
+    PatronHolds, PatronCheckouts, HoldCreate, HoldReply, PurchaseIdentifierLookup, PromotionToms
 }
 
 public sealed record TestingPolarisCall(
@@ -177,7 +177,28 @@ public sealed class DeterministicTestingPatronProvider : IPatronProvider, IStaff
     public void SetPurchaseIdentifierResult(string identifier, int organizationId, IdentifierLookupResult result) =>
         Set(new(TestingPolarisOperation.PurchaseIdentifierLookup, organizationId, identifier), result);
 
-    public Task<IdentifierLookupResult> LookupPurchaseIdentifierAsync(string identifier, int organizationId, CancellationToken cancellationToken) =>
+    public void SetPromotionToms(params PolarisTom[] toms) =>
+        Set(new(TestingPolarisOperation.PromotionToms, LibraryScope.SystemOrganizationId), toms);
+
+    public Task<IReadOnlyList<PolarisTom>> GetPromotionTomsAsync(CancellationToken cancellationToken) =>
+        Read<IReadOnlyList<PolarisTom>>(new(TestingPolarisOperation.PromotionToms, LibraryScope.SystemOrganizationId), cancellationToken);
+
+    public async Task<IdentifierLookupResult> ValidatePurchaseBibAsync(int bibId, int organizationId,
+        IReadOnlyList<string> excludedToms, CancellationToken cancellationToken)
+    {
+        var bib = await ValidateBibAsync(bibId, organizationId, cancellationToken);
+        if (!bib.IsValid || excludedToms.Count > 0 && bib.PrimaryMaterialTypeId is null)
+        {
+            return new(IdentifierLookupOutcome.DefinitiveNotFound);
+        }
+        var toms = await GetPromotionTomsAsync(cancellationToken);
+        return toms.Any(row => row.Id == bib.PrimaryMaterialTypeId && excludedToms.Contains(row.SearchCode))
+            ? new(IdentifierLookupOutcome.DefinitiveNotFound, FilteredByMaterialType: true)
+            : new(IdentifierLookupOutcome.Found, bibId);
+    }
+
+    public Task<IdentifierLookupResult> LookupPurchaseIdentifierAsync(string identifier, int organizationId,
+        IReadOnlyList<string> excludedToms, CancellationToken cancellationToken) =>
         Read<IdentifierLookupResult>(new(TestingPolarisOperation.PurchaseIdentifierLookup, organizationId, identifier), cancellationToken);
 
     public Task<StaffBibSearchResult> SearchBibsAsync(string mode, string query, string title, string author,

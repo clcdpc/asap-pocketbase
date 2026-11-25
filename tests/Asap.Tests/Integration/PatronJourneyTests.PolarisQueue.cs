@@ -601,9 +601,9 @@ public sealed partial class PatronJourneyTests
 
     private sealed class QueueReadProbe(IStaffPolarisProvider inner, Func<Task> onValidated) : IStaffPolarisProvider
     {
-        public async Task<IdentifierLookupResult> LookupPurchaseIdentifierAsync(string identifier, int organizationId, CancellationToken token)
+        public async Task<IdentifierLookupResult> LookupPurchaseIdentifierAsync(string identifier, int organizationId, IReadOnlyList<string> exclusions, CancellationToken token)
         {
-            var result = await inner.LookupPurchaseIdentifierAsync(identifier, organizationId, token);
+            var result = await inner.LookupPurchaseIdentifierAsync(identifier, organizationId, exclusions, token);
             await onValidated();
             return result;
         }

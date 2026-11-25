@@ -443,6 +443,7 @@ public sealed partial class WorkflowProcessingService(
         {
             OrganizationId = organizationId,
             AutoPromote = library?.AutoPromote ?? system.AutoPromote,
+            ExcludedPromotionToms = system.ExcludedPromotionToms,
             OutstandingTimeoutEnabled = library?.OutstandingTimeoutEnabled ?? system.OutstandingTimeoutEnabled,
             OutstandingTimeoutDays = library?.OutstandingTimeoutDays ?? system.OutstandingTimeoutDays,
             OutstandingTimeoutSendEmail = library?.OutstandingTimeoutSendEmail ?? system.OutstandingTimeoutSendEmail,

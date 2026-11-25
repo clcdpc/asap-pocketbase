@@ -13,7 +13,12 @@ public interface IStaffPolarisProvider
 
     Task<BibValidationResult> ValidateBibAsync(int bibId, int organizationId, CancellationToken cancellationToken);
 
-    Task<IdentifierLookupResult> LookupPurchaseIdentifierAsync(string identifier, int organizationId, CancellationToken cancellationToken) =>
+    Task<IdentifierLookupResult> ValidatePurchaseBibAsync(int bibId, int organizationId, IReadOnlyList<string> excludedToms,
+        CancellationToken cancellationToken) => throw new PolarisOperationalException(
+            "purchase_validation_unimplemented", "The selected provider does not support purchase validation.");
+
+    Task<IdentifierLookupResult> LookupPurchaseIdentifierAsync(string identifier, int organizationId,
+        IReadOnlyList<string> excludedToms, CancellationToken cancellationToken) =>
         Task.FromException<IdentifierLookupResult>(new PolarisOperationalException(
             "purchase_lookup_unimplemented", "The selected provider does not support purchase discovery."));
 
@@ -59,7 +64,7 @@ public sealed record BibValidationResult(
     string? Format = null, string? Identifier = null, string? Publisher = null)
 {
     public int? MaterialTypeId { get; init; }
-    // The displayed Format can be a composite code. Only Polaris's explicit primary type establishes purchase eligibility.
+    // The primary TOM is separate from the composite display format.
     internal int? PrimaryMaterialTypeId { get; init; }
     internal IReadOnlyList<string?> CatalogIdentifiers { get; init; } = [];
 }
@@ -69,6 +74,7 @@ public sealed record StaffBibSearchRow(
 {
     public string? Publisher { get; init; }
     internal IReadOnlyList<string?> SearchIdentifiers { get; init; } = [];
+    internal IReadOnlyList<int> AssociatedToms { get; init; } = [];
     public int? MaterialTypeId { get; init; }
 }
 

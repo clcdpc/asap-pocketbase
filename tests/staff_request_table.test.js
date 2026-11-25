@@ -152,6 +152,9 @@ async function until(predicate, message) {
       research: { patronId: index + 1, leapPatronUrlPattern: 'https://catalog.example.org/patron/{{patron-id}}' }
     })).reverse();
     // Text order differs from numeric order, and one saved value includes punctuation.
+    data[0].isbnCheckStatus = 'found';
+    data[0].workflowTags = ['Polaris BIB found'];
+    data[1].isbnCheckStatus = 'not_found';
     data[0].identifier = '2';
     data[1].identifier = '10';
     data[2].identifier = '000-123';
@@ -174,6 +177,9 @@ async function until(predicate, message) {
     await until(() => first()?.querySelector('.request-title-link'), 'Real Grid.js renders request title links.');
     assert.deepEqual([...get('#request-grid').querySelectorAll('th')].map(node => node.querySelector('.gridjs-th-content').textContent),
       ['Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Identifier', 'Actions']);
+    assert.match(rows()[0].cells[1].textContent, /Polaris BIB found/);
+    assert.doesNotMatch(rows()[0].cells[1].textContent, /not found|error_max_retries/i);
+    assert.match(rows()[1].cells[1].textContent, /Identifier not found in Polaris/);
     const headings = [...get('#request-grid').querySelectorAll('th')];
     const assertSort = (header, direction, next) => {
       const name = header.querySelector('.gridjs-th-content').textContent;

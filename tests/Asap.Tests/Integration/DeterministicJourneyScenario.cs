@@ -11,6 +11,7 @@ internal static class DeterministicJourneyScenario
     public static DeterministicTestingPatronProvider Create()
     {
         var provider = new DeterministicTestingPatronProvider();
+        provider.SetPromotionToms(new(1, "bks", "Book"), new(36, "ebk", "eBook"), new(41, "aeb", "eAudiobook"));
         provider.SetReferenceData(
             [new(1, "System", null, 0, null), new(2, "Test Library", "Test", 2, 1),
              new(3, "Other Library", "Other", 2, 1)],

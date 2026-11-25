@@ -170,6 +170,9 @@ public sealed record WorkflowSettingsView
     public bool? PendingHoldTimeoutEnabled { get; init; }
     [JsonPropertyName("additionalCopyTimeoutEnabled")]
     public bool? AdditionalCopyTimeoutEnabled { get; init; }
+    [JsonPropertyName("excludedPromotionToms")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string[]? ExcludedPromotionToms { get; init; }
     [JsonPropertyName("autoPromote")]
     public bool? AutoPromote { get; init; }
     [JsonPropertyName("commonAuthorsEnabled")]

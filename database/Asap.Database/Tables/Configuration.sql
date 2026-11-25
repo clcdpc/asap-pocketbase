@@ -63,6 +63,8 @@ CREATE TABLE [asap].[WorkflowSettings]
     [AdditionalCopyTimeoutEnabled] bit NULL,
     [AdditionalCopyTimeoutDays] int NULL,
     [AutoPromote] bit NULL,
+    [ExcludedPromotionToms] nvarchar(max) NULL,
+    CONSTRAINT [CK_WorkflowSettings_PromotionTomsSystemOnly] CHECK ([OrganizationId] = 1 OR [ExcludedPromotionToms] IS NULL),
     [CommonAuthorsEnabled] bit NULL,
     [CommonAuthorsLabel] nvarchar(256) NULL,
     [CommonAuthorsHelp] nvarchar(max) NULL,

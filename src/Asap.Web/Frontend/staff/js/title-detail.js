@@ -838,7 +838,7 @@ export function createTitleDetailController({ host, sessionIdentity, polarisLook
     patronContext.prepend(details);
     body.append(patronContext);
     detailsPanel.append(element('p', { className: 'field-help request-metadata',
-      text: [`Identifier check: ${text(request.isbnCheckStatus)}`, `Phase entered ${dateTime(request.phaseEnteredAt)}`,
+      text: [`Last identifier check: ${[request.isbnCheckStatus, request.isbnCheckResult].filter(Boolean).join(' · ') || 'Not recorded'}`, `Phase entered ${dateTime(request.phaseEnteredAt)}`,
         request.status === 'closed' ? `Close reason: ${closeReasonLabel(request.closeReason)}` : ''].filter(Boolean).join(' · ') }));
     if (request.lastPromoterResult) {
       detailsPanel.append(element('p', { className: 'field-help', text: request.lastPromoterResult }));

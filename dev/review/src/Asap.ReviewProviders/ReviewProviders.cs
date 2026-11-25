@@ -58,6 +58,7 @@ internal sealed class ReviewFixtures(
         settings.WorkstationId = 1;
         settings.SystemPolarisUserId = 1;
         await database.SaveChangesAsync(cancellationToken);
+        provider.SetPromotionToms(new(1, "bks", "Book"), new(36, "ebk", "eBook"), new(41, "aeb", "eAudiobook"));
         provider.SetReferenceData(
             [new(1, "System", null, 0, null), new(2, "Review Library", "REVIEW", 2, 1),
                 new(3, "Q1 Synthetic Library with a deliberately long display name for wrapping", "Q1", 2, 1)],
