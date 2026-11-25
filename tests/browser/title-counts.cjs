@@ -182,6 +182,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await page.unroute(countPath);
     await page.locator('#refresh-additional-copies').click(); await nav.waitFor();
     await page.locator('[data-view="queue"]').click();
+    await page.locator('#queue-view').waitFor({ state: 'visible' });
   }
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, extraHTTPHeaders: headers(fixture.super) });
