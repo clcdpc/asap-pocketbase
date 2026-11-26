@@ -98,7 +98,8 @@ async function settled(page, rows) {
   await page.waitForFunction(expected => {
     const grid = document.querySelector('#request-grid');
     const actual = [...grid.querySelectorAll('.request-title-link')].map(node => node.dataset.requestId);
-    return !grid.firstElementChild?.inert && !grid.querySelector('.gridjs-loading') &&
+    return grid.hidden === (expected.length === 0) && document.querySelector('#queue-empty').hidden === (expected.length > 0) &&
+      !grid.firstElementChild?.inert && !grid.querySelector('.gridjs-loading') &&
       !!grid.querySelector('.request-title-link, .gridjs-notfound') && JSON.stringify(actual) === JSON.stringify(expected);
   }, rows);
 }

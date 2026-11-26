@@ -126,7 +126,7 @@ const scenarios = [
     run: async t => {
       await t.page.goto(t.origin + '/staff/?scope=2');
       await t.page.locator('#workspace').waitFor({ state: 'visible' });
-      await t.page.locator('#request-grid .request-title-link, #request-grid .gridjs-notfound').first().waitFor();
+      await t.page.locator('#request-grid .request-title-link:visible, #queue-empty:visible').first().waitFor();
       await checkpoint(t.page, t.directory, t.id, { visible: [t.page.locator('#queue-title'), t.page.locator('#staff-identity')] });
     } },
   { id: 'confirmation-desktop-mobile-zoom', requirements: ['#401: stacked dialog, keyboard, Escape, focus, responsive/native 200%'], writes: false,

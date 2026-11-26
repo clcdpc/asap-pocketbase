@@ -58,6 +58,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.match(await page.locator('#status-count-state').textContent(), loading ? /Counts loading/ : /requests unavailable/i);
     await page.getByRole('button', { name: 'Requests', exact: true }).waitFor();
     assert.match(await page.locator('#requests-count-state').textContent(), loading ? /loading/ : /unavailable/);
+    assert.equal(await page.locator('#queue-empty').isHidden(), true);
     assert.ok(await page.locator('#status-count-state').evaluate(node => node.getBoundingClientRect().height > 0),
       'Loading and unavailable feedback remains visible.');
   };
@@ -125,6 +126,34 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.equal(await button.evaluate(node => node === document.activeElement && node.matches(':focus-visible') &&
       getComputedStyle(node).outlineStyle !== 'none'), true);
   }
+  async function checkCopyHeading(page, status) {
+    const original = page.viewportSize();
+    for (const [width, height] of [[390, 844], [901, 862], [1280, 900], [1920, 1080], [3000, 1000]]) {
+      await page.setViewportSize({ width, height });
+      const layout = await page.locator('#additional-copy-view').evaluate(view => {
+        const bounds = selector => view.querySelector(selector).getBoundingClientRect();
+        const title = bounds('h1'), scope = bounds('#additional-copy-scope-field'), deletion = bounds('#bulk-delete-closed-copies');
+        return { summaryText: view.querySelector('#additional-copy-summary').textContent,
+          summaryHeight: bounds('#additional-copy-summary').height, titleBottom: title.bottom,
+          scopeTop: scope.top, scopeBottom: scope.bottom, deleteTop: deletion.top, deleteBottom: deletion.bottom,
+          tabsTop: bounds('[role="tablist"]').top, overflow: document.documentElement.scrollWidth > innerWidth };
+      });
+      assert.equal(layout.summaryText, '');
+      assert.equal(layout.summaryHeight, 0);
+      assert.equal(layout.overflow, false);
+      assert.equal(layout.deleteBottom > 0, status === 'closed');
+      assert.ok(layout.tabsTop > Math.max(layout.scopeBottom, layout.deleteBottom));
+      if (width === 390) {
+        assert.ok(layout.scopeTop > layout.titleBottom);
+        if (status === 'closed') assert.ok(layout.deleteTop > layout.scopeBottom);
+      } else {
+        assert.ok(Math.abs(layout.scopeBottom - layout.titleBottom) <= 1);
+        if (status === 'closed') assert.ok(Math.abs(layout.scopeBottom - layout.deleteBottom) <= 1);
+      }
+      (report.copyHeadings ||= []).push({ status, width, height, ...layout });
+    }
+    await page.setViewportSize(original);
+  }
   async function checkCopyWorkspace(page, name) {
     const countBeforeSort = await page.locator('#requests-count').textContent();
     await checkHeaders(page, '#request-grid', name + '-requests');
@@ -141,15 +170,18 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     page.on('request', observeCount);
     await checkHeaders(page, '#additional-copy-grid', name + '-copies');
     if (name === 'desktop') {
+      await checkCopyHeading(page, 'open');
       await page.locator('#additional-copy-grid').getByRole('button', { name: 'Next', exact: true }).click();
       await page.waitForFunction(() => document.querySelectorAll('#additional-copy-grid .additional-copy-open').length === 1);
       await page.locator('#additional-copy-search').fill('Counted copy 01');
-      await page.waitForFunction(() => document.querySelector('#additional-copy-summary').textContent === '1 open task');
+      await page.locator('#additional-copy-grid .gridjs-summary').filter({ hasText: 'Showing 1 to 1 of 1 results' }).waitFor();
+      assert.equal(await page.locator('#additional-copy-summary').isHidden(), true);
       await open.waitFor(); await closed.waitFor(); await nav.waitFor();
       await page.locator('#additional-copy-search').fill('');
       await page.locator('#additional-copy-claim-filter').selectOption('mine');
       await requestsNav(page, 0).waitFor();
-      await page.waitForFunction(() => document.querySelector('#additional-copy-summary').textContent === '0 open tasks');
+      await page.locator('#additional-copy-empty').waitFor();
+      assert.equal(await page.locator('#additional-copy-summary').isHidden(), true);
       await open.waitFor(); await closed.waitFor();
       await page.locator('#additional-copy-claim-filter').selectOption('all');
       await requestsNav(page, fixture.libraryCounts[0]).waitFor();
@@ -164,6 +196,8 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     page.off('request', observeCount);
     await open.focus(); await page.keyboard.press('End');
     await page.locator('[data-copy-status="closed"][aria-selected="true"]').waitFor();
+    await page.locator('#additional-copy-grid .gridjs-summary').filter({ hasText: 'Showing 1 to 3 of 3 results' }).waitFor();
+    if (name === 'desktop') await checkCopyHeading(page, 'closed');
     await nav.waitFor();
     assert.equal(await closed.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
     await scan(page, name + '-copy-totals', closed);
@@ -215,7 +249,12 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     page.on('request', request => {
       if (new URL(request.url()).pathname === '/api/asap/staff/additional-copies/counts') copyReads++;
     });
+    const initial = holdRead('hold');
     await page.goto(`${baseURL}/staff/?stage=suggestion&scope=${fixture.library}`);
+    await initial.started.promise;
+    assert.equal(await page.locator('#queue-empty').isHidden(), true);
+    assert.equal(await page.locator('#request-grid').isHidden(), true);
+    initial.release.resolve(); await initial.completed.promise;
     await counts(page, fixture.libraryCounts);
     await page.getByRole('button', { name: 'Additional copies (26)', exact: true }).waitFor();
     assert.equal(await page.locator('#additional-copy-grid table').count(), 0, 'Navigation totals load independently of the copy list.');
@@ -244,9 +283,9 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await counts(page, fixture.libraryCounts);
     await page.keyboard.press('ArrowUp');
     await page.waitForFunction(() => document.querySelector('#claim-filter').value === 'mine' &&
-      document.querySelector('#request-grid .gridjs-notfound')?.textContent === 'No requests match these filters.');
+      !document.querySelector('#queue-empty').hidden);
     assert.equal(await claim.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
-    await page.locator('#request-grid .gridjs-notfound').waitFor({ state: 'visible' });
+    await page.locator('#queue-empty').waitFor();
     assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), [],
       'Mine has no matching rows in the unclaimed SQL fixture.');
     await counts(page, fixture.libraryCounts, 0);
@@ -297,7 +336,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.equal(await page.locator('#request-grid .gridjs-summary').textContent(), 'Showing 26 to 28 of 28 results');
     await counts(page, fixture.libraryCounts);
     await page.locator('#request-search').fill('no matching requests');
-    await page.waitForFunction(() => document.querySelector('#request-grid .gridjs-notfound')?.textContent === 'No requests match these filters.');
+    await page.locator('#queue-empty').waitFor();
     await counts(page, fixture.libraryCounts, 0);
     await page.locator('#request-search').fill('');
     await page.locator('#request-grid .gridjs-summary').filter({ hasText: 'Showing 1 to 25 of 28 results' }).waitFor();
@@ -441,6 +480,8 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
           await zoomPage.locator('#bulk-delete-summary').filter({ hasText: 'Both Closed views were refreshed' }).waitFor();
           await zoomPage.keyboard.press('Escape');
           await zoomPage.getByRole('tab', { name: 'Closed (0)', exact: true }).waitFor();
+          await zoomPage.locator('#additional-copy-empty').waitFor();
+          assert.equal(await zoomPage.locator('#additional-copy-summary').isHidden(), true);
           await zoomPage.getByRole('button', { name: 'Additional copies (26)', exact: true }).waitFor();
         }
       } finally { await zoomContext.close(); }

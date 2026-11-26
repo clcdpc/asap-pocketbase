@@ -416,6 +416,7 @@ async function verifyPolarisSettings(page, width, scope, scan, report) {
         assert.equal(await page.locator('#queue-empty').getAttribute('role'), 'status');
         assert.equal(await page.locator('#queue-empty').getAttribute('aria-live'), 'polite');
         assert.match(await page.locator('#queue-empty').textContent(), /No requests match/);
+        assert.equal(await page.locator('#request-grid').boundingBox(), null);
         assert.equal(await page.locator('.view-tabs [data-view="profile"]').count(), 0);
         assert.equal(await page.locator('header #profile-button').count(), 1);
         assert.equal(await page.locator('#profile-button').getAttribute('aria-controls'), 'profile-view');
