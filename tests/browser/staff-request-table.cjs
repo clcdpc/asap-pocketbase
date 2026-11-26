@@ -48,7 +48,7 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
         await grid.getByRole('button', { name: 'Previous', exact: true }).waitFor();
       } else {
         assert.equal(await grid.getByRole('button', { name: 'Next', exact: true }).count(), 0);
-        assert.equal(await pages.locator('button').first().evaluate(button => {
+        assert.equal(await pages.locator('.gridjs-currentPage').evaluate(button => {
           button.focus(); return document.activeElement === button;
         }), false);
       }

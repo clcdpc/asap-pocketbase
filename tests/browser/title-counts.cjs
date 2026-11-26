@@ -126,6 +126,34 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.equal(await button.evaluate(node => node === document.activeElement && node.matches(':focus-visible') &&
       getComputedStyle(node).outlineStyle !== 'none'), true);
   }
+  async function checkCopyHeading(page, status) {
+    const original = page.viewportSize();
+    for (const [width, height] of [[390, 844], [901, 862], [1280, 900], [1920, 1080], [3000, 1000]]) {
+      await page.setViewportSize({ width, height });
+      const layout = await page.locator('#additional-copy-view').evaluate(view => {
+        const bounds = selector => view.querySelector(selector).getBoundingClientRect();
+        const title = bounds('h1'), scope = bounds('#additional-copy-scope-field'), deletion = bounds('#bulk-delete-closed-copies');
+        return { summaryText: view.querySelector('#additional-copy-summary').textContent,
+          summaryHeight: bounds('#additional-copy-summary').height, titleBottom: title.bottom,
+          scopeTop: scope.top, scopeBottom: scope.bottom, deleteTop: deletion.top, deleteBottom: deletion.bottom,
+          tabsTop: bounds('[role="tablist"]').top, overflow: document.documentElement.scrollWidth > innerWidth };
+      });
+      assert.equal(layout.summaryText, '');
+      assert.equal(layout.summaryHeight, 0);
+      assert.equal(layout.overflow, false);
+      assert.equal(layout.deleteBottom > 0, status === 'closed');
+      assert.ok(layout.tabsTop > Math.max(layout.scopeBottom, layout.deleteBottom));
+      if (width === 390) {
+        assert.ok(layout.scopeTop > layout.titleBottom);
+        if (status === 'closed') assert.ok(layout.deleteTop > layout.scopeBottom);
+      } else {
+        assert.ok(Math.abs(layout.scopeBottom - layout.titleBottom) <= 1);
+        if (status === 'closed') assert.ok(Math.abs(layout.scopeBottom - layout.deleteBottom) <= 1);
+      }
+      (report.copyHeadings ||= []).push({ status, width, height, ...layout });
+    }
+    await page.setViewportSize(original);
+  }
   async function checkCopyWorkspace(page, name) {
     const countBeforeSort = await page.locator('#requests-count').textContent();
     await checkHeaders(page, '#request-grid', name + '-requests');
@@ -142,6 +170,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     page.on('request', observeCount);
     await checkHeaders(page, '#additional-copy-grid', name + '-copies');
     if (name === 'desktop') {
+      await checkCopyHeading(page, 'open');
       await page.locator('#additional-copy-grid').getByRole('button', { name: 'Next', exact: true }).click();
       await page.waitForFunction(() => document.querySelectorAll('#additional-copy-grid .additional-copy-open').length === 1);
       await page.locator('#additional-copy-search').fill('Counted copy 01');
@@ -168,12 +197,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await open.focus(); await page.keyboard.press('End');
     await page.locator('[data-copy-status="closed"][aria-selected="true"]').waitFor();
     await page.locator('#additional-copy-grid .gridjs-summary').filter({ hasText: 'Showing 1 to 3 of 3 results' }).waitFor();
-    const heading = await page.locator('#additional-copy-title').evaluate(title => {
-      const summary = document.querySelector('#additional-copy-summary');
-      return { summary: summary.textContent, height: summary.getBoundingClientRect().height,
-        reserved: title.parentElement.getBoundingClientRect().height - title.getBoundingClientRect().height };
-    });
-    assert.deepEqual(heading, { summary: '', height: 0, reserved: 0 });
+    if (name === 'desktop') await checkCopyHeading(page, 'closed');
     await nav.waitFor();
     assert.equal(await closed.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
     await scan(page, name + '-copy-totals', closed);
@@ -456,6 +480,8 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
           await zoomPage.locator('#bulk-delete-summary').filter({ hasText: 'Both Closed views were refreshed' }).waitFor();
           await zoomPage.keyboard.press('Escape');
           await zoomPage.getByRole('tab', { name: 'Closed (0)', exact: true }).waitFor();
+          await zoomPage.locator('#additional-copy-empty').waitFor();
+          assert.equal(await zoomPage.locator('#additional-copy-summary').isHidden(), true);
           await zoomPage.getByRole('button', { name: 'Additional copies (26)', exact: true }).waitFor();
         }
       } finally { await zoomContext.close(); }
