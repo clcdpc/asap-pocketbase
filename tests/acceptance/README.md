@@ -146,9 +146,10 @@ desktop/mobile/native 200% geometry, forced colors and the existing checkpoint
 guards. The sixteen existing cardinality/pagination/scope fixtures are preserved.
 Five additional read-only SQL rows supply AutoHold on/off outstanding purchases,
 eligible/blocked Pending holds and a Placed hold. Each primary enters its inline
-confirmation and Cancel without a mutation. Claim leads an unclaimed Suggestion,
-and Purchase stays first in More at every width. Assign is checked in direct/overflow
-forms. Existing D1 Closed/protected fixtures prove one/zero commands.
+confirmation and Cancel without a mutation. Eligible Suggestions show Purchase
+first, followed by Reject when it fits. Geometry and screenshots cover centered
+action groups across all five stages from 390 to 2560 pixels. Assign is checked
+in direct/overflow forms. Existing D1 Closed/protected fixtures prove one/zero commands.
 Existing mutation fixtures remain independent.
 Their existing `ACCEPTANCE-I403-*` barcodes identify both seeding and API lookup
 on current schema 13; the retired `LegacyId` column/DTO is not used.
