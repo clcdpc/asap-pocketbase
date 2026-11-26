@@ -103,6 +103,60 @@ public sealed partial class DatabaseBaselineTests
 
 
     [TestMethod]
+    public async Task WorkflowTagDeploymentRefreshesCanonicalLabelsAndPreservesLinks()
+    {
+        await using var connection = new SqlConnection(_databaseConnectionString);
+        await connection.OpenAsync();
+        const string definitions = """
+            SELECT STRING_AGG(Label, N'|') WITHIN GROUP (ORDER BY SortOrder)
+            FROM [asap].[WorkflowTag] WHERE Code IN (N'duplicate_suggestion', N'polaris_bib_found',
+                N'polaris_bib_not_found', N'polaris_multiple_matches', N'polaris_ematerials_only');
+            """;
+        const string expected = "Another patron requested this|Found in Polaris|No Polaris match|Multiple Polaris matches|E-materials only";
+        Assert.AreEqual(expected, await Scalar(connection, definitions));
+        await NonQuery(connection, """
+            INSERT INTO [asap].[Organization] (Id,DisplayName,OrganizationCodeId,ParentOrganizationId,IsActive)
+            VALUES (549, N'Badge fixture', 2, 1, 1);
+            INSERT INTO [asap].[TitleRequest] (LibraryOrganizationId, Barcode, Title, AutoHold, MaterialFormatId, Status, CreatedUtc, UpdatedUtc)
+            SELECT TOP (1) 549, N'badge', N'Existing suggestion', 0, Id, N'suggestion', SYSUTCDATETIME(), SYSUTCDATETIME()
+            FROM [asap].[MaterialFormat] ORDER BY Id;
+            DECLARE @id bigint = SCOPE_IDENTITY();
+            DELETE FROM [asap].[WorkflowTag] WHERE Code = N'polaris_ematerials_only';
+            UPDATE [asap].[WorkflowTag] SET Label = N'Polaris BIB found' WHERE Code = N'polaris_bib_found';
+            UPDATE [asap].[WorkflowTag] SET Label = N'Polaris BIB not found' WHERE Code = N'polaris_bib_not_found';
+            UPDATE [asap].[WorkflowTag] SET Label = N'Duplicate suggestion' WHERE Code = N'duplicate_suggestion';
+            INSERT INTO [asap].[WorkflowTag] (Code,Label,SortOrder) VALUES (N'fixture_549',N'Local label',91);
+            INSERT INTO [asap].[TitleRequestWorkflowTag] (TitleRequestId, WorkflowTagId)
+            SELECT @id, Id FROM [asap].[WorkflowTag] WHERE Code IN
+                (N'duplicate_suggestion',N'polaris_bib_found',N'polaris_bib_not_found',N'polaris_multiple_matches',N'fixture_549');
+            """);
+        const string linkedIds = """
+            SELECT STRING_AGG(CONVERT(nvarchar(30), link.WorkflowTagId), ',') WITHIN GROUP (ORDER BY link.WorkflowTagId)
+            FROM [asap].[TitleRequestWorkflowTag] link JOIN [asap].[TitleRequest] r ON r.Id = link.TitleRequestId
+            WHERE r.LibraryOrganizationId = 549;
+            """;
+        try
+        {
+            var before = await Scalar(connection, linkedIds);
+            for (var deployment = 0; deployment < 2; deployment++)
+            {
+                new DacpacDeploymentService().Deploy(_databaseConnectionString, _dacpacPath);
+                Assert.AreEqual(expected, await Scalar(connection, definitions));
+                Assert.AreEqual(before, await Scalar(connection, linkedIds));
+                Assert.AreEqual("Local label", await Scalar(connection, "SELECT Label FROM [asap].[WorkflowTag] WHERE Code = N'fixture_549' AND SortOrder = 91;"));
+            }
+        }
+        finally
+        {
+            await NonQuery(connection, """
+                DELETE FROM [asap].[TitleRequest] WHERE LibraryOrganizationId = 549;
+                DELETE FROM [asap].[WorkflowTag] WHERE Code = N'fixture_549';
+                DELETE FROM [asap].[Organization] WHERE Id = 549;
+                """);
+        }
+    }
+
+    [TestMethod]
     public async Task PurchaseVerificationUpgradePreservesAssignedBibsWithoutBackfillingTrust()
     {
         await using var connection = new SqlConnection(_databaseConnectionString);

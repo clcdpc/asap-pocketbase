@@ -38,6 +38,8 @@ public sealed partial class PatronJourneyTests
                 CatalogTitle: "Different catalog title",
                 CatalogAuthor: "Different catalog author")),
             ("not-found", "ownership-not-found", new IdentifierLookupResult(IdentifierLookupOutcome.DefinitiveNotFound)),
+            ("electronic", "ownership-electronic", new IdentifierLookupResult(IdentifierLookupOutcome.DefinitiveNotFound, FilteredByMaterialType: true)),
+            ("multiple", "ownership-multiple", new IdentifierLookupResult(IdentifierLookupOutcome.Found, 456, MultipleMatches: true)),
             ("transient", "ownership-transient", new IdentifierLookupResult(
                 IdentifierLookupOutcome.TransientFailure,
                 ErrorCode: "testing_transient_failure")),
@@ -83,6 +85,13 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(afterSelection.BibIdStaffVerified);
                 Assert.AreEqual("pending", afterSelection.IsbnCheckStatus);
 
+                if (scenario is "found" or "not-found" or "multiple")
+                {
+                    await ExecuteNonQueryAsync("""
+                        INSERT INTO [asap].[TitleRequestWorkflowTag] ([TitleRequestId], [WorkflowTagId])
+                        SELECT @id, Id FROM [asap].[WorkflowTag] WHERE Code = N'polaris_ematerials_only';
+                        """, ("@id", seeded.Id));
+                }
                 var lookupService = CreateBibOwnershipSuggestionService(lookupResult);
                 var outcome = await lookupService.ProcessIdentifierLookupAsync(
                     seeded.Id,
@@ -97,6 +106,24 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(afterLookup.BibIdStaffVerified);
                 Assert.AreEqual("Staff entered title", afterLookup.Title);
                 Assert.AreEqual("Staff entered author", afterLookup.Author);
+                string[] expectedTags = scenario switch
+                {
+                    "found" => ["polaris_bib_found"],
+                    "multiple" => ["polaris_bib_found", "polaris_multiple_matches"],
+                    "electronic" => ["polaris_ematerials_only"],
+                    "not-found" or "issn-background-not-found" => ["polaris_bib_not_found"],
+                    _ => []
+                };
+                CollectionAssert.AreEquivalent(expectedTags, afterLookup.IdentifierTags.ToArray(), scenario);
+                var details = await factory.Services.GetRequiredService<TitleRequestViewService>()
+                    .GetAsync(actor, seeded.Id.ToString(), CancellationToken.None);
+                Assert.IsNotNull(details);
+                Assert.AreEqual(expectedTags.LastOrDefault(), details.CatalogLookup?.Code, scenario);
+                if (scenario == "electronic")
+                {
+                    Assert.AreEqual("not_found", afterLookup.IsbnCheckStatus);
+                    StringAssert.Contains(afterLookup.IsbnCheckResult!, "Only excluded e-materials");
+                }
             }
         }
         finally
@@ -957,7 +984,7 @@ public sealed partial class PatronJourneyTests
                 join tag in context.WorkflowTags.AsNoTracking() on link.WorkflowTagId equals tag.Id
                 where link.TitleRequestId == requestId &&
                       (tag.Code == "polaris_bib_found" || tag.Code == "polaris_bib_not_found" ||
-                       tag.Code == "polaris_multiple_matches")
+                       tag.Code == "polaris_multiple_matches" || tag.Code == "polaris_ematerials_only")
                 select tag.Code)
             .ToListAsync();
         return new BibOwnershipRequestState(

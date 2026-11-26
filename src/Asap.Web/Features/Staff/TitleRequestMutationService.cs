@@ -52,8 +52,6 @@ public sealed partial class TitleRequestMutationService(
     TimeProvider timeProvider)
 {
     private sealed record ActionClaimRuleSnapshot(long FormatId, long? RuleId, long? StaffUserId);
-    private static readonly string[] IdentifierDerivedTagCodes =
-        ["polaris_bib_found", "polaris_bib_not_found", "polaris_multiple_matches"];
     private const string InterruptedIdentifierResult =
         "Identifier processing was not completed before this request left suggestions.";
 
@@ -589,6 +587,7 @@ public sealed partial class TitleRequestMutationService(
         {
             return new TitleRequestMutationResult(capability.BlockingReason ?? "identifier_retry_not_allowed");
         }
+        await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
         request.IsbnCheckStatus = IdentifierCheckState.Pending;
         request.IsbnCheckRetryCount = 0;
         request.IsbnCheckLastErrorCode = null;
@@ -1151,7 +1150,7 @@ public sealed partial class TitleRequestMutationService(
         var links = await (
                 from link in context.TitleRequestWorkflowTags
                 join tag in context.WorkflowTags on link.WorkflowTagId equals tag.Id
-                where link.TitleRequestId == requestId && IdentifierDerivedTagCodes.Contains(tag.Code)
+                where link.TitleRequestId == requestId && IdentifierLookupTags.InDisplayOrder.Contains(tag.Code)
                 select link)
             .ToListAsync(cancellationToken);
         context.TitleRequestWorkflowTags.RemoveRange(links);

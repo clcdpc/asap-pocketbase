@@ -168,7 +168,7 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(claimantId.ToString(), visible.GetProperty("claimedByStaffUserId").GetString());
                 Assert.AreEqual("automatic_format_rule", visible.GetProperty("claimType").GetString());
                 Assert.AreEqual(index == 1, visible.GetProperty("workflowTags").EnumerateArray()
-                    .Any(tag => tag.GetString() == "Duplicate suggestion"));
+                    .Any(tag => tag.GetString() == "Another patron requested this"));
             }
             await using var verify = await contexts.CreateDbContextAsync();
             var rows = await verify.TitleRequests.Where(item => requestIds.Contains(item.Id)).OrderBy(item => item.Id).ToArrayAsync();

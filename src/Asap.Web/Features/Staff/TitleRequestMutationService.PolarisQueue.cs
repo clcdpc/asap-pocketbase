@@ -88,7 +88,7 @@ public sealed partial class TitleRequestMutationService
         request.LastCheckedUtc = timeProvider.GetUtcNow().UtcDateTime;
         if (request.Identifier is not null)
         {
-            var tagId = await context.WorkflowTags.Where(item => item.Code == "polaris_bib_found")
+            var tagId = await context.WorkflowTags.Where(item => item.Code == IdentifierLookupTags.Found)
                 .Select(item => item.Id).SingleAsync(cancellationToken);
             var tracked = context.ChangeTracker.Entries<TitleRequestWorkflowTag>().SingleOrDefault(entry =>
                 entry.Entity.TitleRequestId == request.Id && entry.Entity.WorkflowTagId == tagId);

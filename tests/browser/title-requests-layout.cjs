@@ -7,18 +7,18 @@ const { settleActions, activateRowAction, actionGeometry, actionColumn } = requi
 
 const [baseURL, artifacts] = process.argv.slice(2);
 const stages = ['suggestion', 'outstanding_purchase', 'pending_hold', 'hold_placed', 'closed'];
-const expectedCounts = { suggestion: 1, outstanding_purchase: 1, pending_hold: 0, hold_placed: 1, closed: 2 };
 const expectedTitles = {
   suggestion: ['Title layout suggestion 0'],
   outstanding_purchase: ['Title layout outstanding_purchase 0'],
-  pending_hold: [],
-  hold_placed: ['Title layout hold_placed 0'],
+  pending_hold: ['Title layout pending_hold 0'],
+  hold_placed: ['Title layout hold_placed 0', 'Title layout hold_placed 1', 'Title layout hold_placed 2'],
   closed: ['Title layout closed 0', 'Long bibliographic title segment']
 };
 const viewports = [
   { name: 'wide-3000', width: 3000, height: 1000 },
   { name: 'desktop-1440', width: 1440, height: 900 },
   { name: 'intermediate-900', width: 900, height: 900 },
+  { name: 'reported-901', width: 901, height: 862 },
   { name: 'mobile-390', width: 390, height: 844 },
   { name: 'short-narrow-320x480', width: 320, height: 480 }
 ];
@@ -73,7 +73,7 @@ async function selectStage(page, stage) {
   assert.equal(await page.getByRole('combobox', { name: 'Tag filter', exact: true }).count(), 1);
   await page.locator(`#status-tabs [data-status="${stage}"]`).click();
   await page.waitForFunction(stage => document.querySelector(`#status-tabs [data-status="${stage}"]`)?.getAttribute('aria-selected') === 'true', stage);
-  const expected = expectedCounts[stage];
+  const expected = expectedTitles[stage].length;
   if (expected === 0) {
     await page.locator('#request-grid .gridjs-notfound').waitFor();
   } else {
@@ -199,7 +199,11 @@ async function measure(page, name, width, stage) {
       rowCount: table?.tBodies[0]?.rows.length ?? 0,
       identifiers: [...grid.querySelectorAll('td[data-request-column="identifier"] .request-cell-text')].map(node => ({
         value: node.textContent, title: node.title, clipped: node.scrollHeight > node.clientHeight + 1,
-        reason: node.nextElementSibling?.textContent || null
+        reason: node.parentElement.querySelector('small')?.textContent || null,
+        lookup: [...node.parentElement.querySelectorAll('.tag')].map(badge => badge.textContent),
+        flags: [...node.closest('tr').querySelectorAll('[data-request-column="bibliographic"] .tag')].map(badge => badge.textContent),
+        badgeClipped: [...node.parentElement.querySelectorAll('.tag')].some(badge =>
+          badge.scrollWidth > badge.clientWidth + 1 || badge.scrollHeight > badge.clientHeight + 1)
       })),
       actionNames: [...grid.querySelectorAll('button[data-request-action]')].map(button => button.getAttribute('aria-label')),
       cleanup: {
@@ -240,10 +244,32 @@ async function measure(page, name, width, stage) {
     assert.equal(identifier.reason, stage === 'closed' ? 'Closed by staff' : null);
   }
   const identifiers = {
-    suggestion: ['012345678X'], outstanding_purchase: ['012345678905'], pending_hold: [],
-    hold_placed: ['Not recorded'], closed: ['0123456789-'.repeat(8), '978-0-123456-78-9']
+    suggestion: ['012345678X'], outstanding_purchase: ['012345678905'], pending_hold: ['Not recorded'],
+    hold_placed: ['012345678905', '012345678X', 'Not recorded'], closed: ['0123456789-'.repeat(8), '978-0-123456-78-9']
   };
   assert.deepEqual(metric.identifiers.map(item => item.value).sort(), identifiers[stage]);
+  for (const item of metric.identifiers) {
+    const expected = {
+      suggestion: 'Found in Polaris', outstanding_purchase: 'No Polaris match',
+      hold_placed: { 'Not recorded': 'Multiple Polaris matches', '012345678905': 'E-materials only' }[item.value],
+      closed: item.value === '978-0-123456-78-9' ? 'No Polaris match' : null
+    }[stage];
+    assert.deepEqual(item.lookup, expected ? [expected] : [], `${stage}: lookup beneath ${item.value}`);
+    assert.equal(item.badgeClipped, false);
+    const flags = {
+      suggestion: ['Another patron requested this', '1 related request'],
+      outstanding_purchase: ['1 related request'], pending_hold: ['1 related request'],
+      hold_placed: { '012345678X': ['2 related requests'], '012345678905': ['1 related request'] }[item.value]
+    }[stage];
+    assert.deepEqual(item.flags, flags || []);
+  }
+  if (stage === 'outstanding_purchase') {
+    assert.equal(await root.locator('small.request-promotion-result').textContent(), 'No eligible Polaris BIB was found.');
+  }
+  if (stage === 'pending_hold') {
+    assert.equal(await root.locator('[data-request-column="bibliographic"] .request-bib-link').getAttribute('href'),
+      'https://leap.example.test/bib/428900');
+  }
   assert.equal(metric.focusedRegion, true, `${name}/${stage}: the table region receives focus.`);
   assert.deepEqual(metric.region, { role: 'region', tabIndex: 0, label: 'Title requests' });
   assert.equal(metric.cleanup.removedNodesAbsent, true, `${name}/${stage}: removed helper elements are absent.`);
@@ -280,6 +306,31 @@ async function scan(page, label) {
   report.missingImages.push(...result.missingImages);
 }
 
+async function verifyPlacedHoldTags(page) {
+  await selectStage(page, 'hold_placed');
+  const filter = page.locator('#tag-filter');
+  const rows = page.locator('#request-grid tbody tr');
+  for (const [label, titles] of [
+    ['Found in Polaris', ['Title layout hold_placed 0', 'Title layout hold_placed 1']],
+    ['Multiple Polaris matches', ['Title layout hold_placed 1']],
+    ['No Polaris match', ['Title layout hold_placed 2']],
+    ['E-materials only', ['Title layout hold_placed 2']]
+  ]) {
+    await filter.selectOption({ label });
+    await page.waitForFunction(expected => {
+      const visible = [...document.querySelectorAll('#request-grid tbody .request-title-link')].map(link => link.textContent);
+      return visible.length === expected.length && expected.every(title => visible.includes(title));
+    }, titles);
+  }
+  await filter.selectOption('all');
+  const title = rows.getByRole('link', { name: /Open request .*Title layout hold_placed 0/ });
+  await title.click();
+  const dialog = page.locator('#request-dialog[open]');
+  await dialog.locator('[aria-label="Workflow tags"]').getByText('Found in Polaris', { exact: true }).waitFor();
+  await dialog.locator('.request-save-footer').getByRole('button', { name: 'Close', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+}
+
 async function capture(page, metric) {
   const wrapper = page.locator('#request-grid .gridjs-wrapper');
   await wrapper.scrollIntoViewIfNeeded();
@@ -287,7 +338,7 @@ async function capture(page, metric) {
   await wrapper.focus();
   const name = `${metric.stage}-${metric.name}`;
   await page.screenshot({ path: path.join(artifacts, `${name}.png`), fullPage: false });
-  if (name === 'closed-mobile-390') {
+  if (name === 'closed-mobile-390' || name === 'hold_placed-reported-901') {
     await wrapper.evaluate(node => { node.scrollLeft = node.scrollWidth; });
     await page.screenshot({ path: path.join(artifacts, `${name}-identifier.png`) });
     await wrapper.evaluate(node => { node.scrollLeft = 0; });
@@ -304,8 +355,8 @@ async function collectViewport(page, viewport) {
     await selectStage(page, stage);
     const metric = await measure(page, viewport.name, viewport.width, stage);
     entries.push(metric);
-    if ([3000, 390, 320].includes(viewport.width)) await scan(page, `${stage}-${viewport.name}`);
-    if ([3000, 320].includes(viewport.width) || viewport.width === 390 && ['closed', 'hold_placed'].includes(stage) ||
+    if ([3000, 901, 390, 320].includes(viewport.width)) await scan(page, `${stage}-${viewport.name}`);
+    if ([3000, 901, 320].includes(viewport.width) || viewport.width === 390 && ['closed', 'hold_placed'].includes(stage) ||
         viewport.width === 1440 && stage === 'closed') {
       await capture(page, metric);
     }
@@ -530,6 +581,7 @@ async function verifyActionColumnSizingAndCleanFlows(page, fixture, artifacts) {
     await guard(context, baseOrigin);
     const page = await context.newPage();
     await openStaffPage(page, fixture);
+    await verifyPlacedHoldTags(page);
     report.sortAndActions = await verifySortingAndActions(page, fixture);
     report.actionColumn = await verifyActionColumnSizingAndCleanFlows(page, fixture, artifacts);
     await resizeSameMountedGrid(page);

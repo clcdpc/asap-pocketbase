@@ -470,19 +470,15 @@ public sealed partial class PolarisPatronProvider(
                 .GroupBy(item => item.ControlNumber)
                 .Select(group => group.First())
                 .ToArray();
-            var filteredByMaterialType = false;
-            var rows = allRows.Where(row =>
-                {
-                    var excluded = row.PrimaryTypeOfMaterial is 36 or 41;
-                    filteredByMaterialType |= excluded;
-                    return !excluded;
-                })
-                .ToArray();
+            var rows = allRows.Where(row => row.PrimaryTypeOfMaterial is not (36 or 41)).ToArray();
             if (rows.Length == 0)
             {
                 return new IdentifierLookupResult(
                     IdentifierLookupOutcome.DefinitiveNotFound,
-                    FilteredByMaterialType: filteredByMaterialType);
+                    // An excluded first page cannot establish the material types on later pages.
+                    FilteredByMaterialType: allRows.Length > 0 && attempts.All(attempt =>
+                        attempt.Data!.TotalRecordsFound == attempt.Data.BibSearchRows.DistinctBy(row => row.ControlNumber).Count() &&
+                        attempt.Data.BibSearchRows.All(row => row.PrimaryTypeOfMaterial is 36 or 41)));
             }
 
             var selected = rows[0];
@@ -514,7 +510,7 @@ public sealed partial class PolarisPatronProvider(
                 IdentifierLookupOutcome.Found,
                 selected.ControlNumber,
                 MultipleMatches: rows.Length > 1 || attempts.Any(item => item.Data!.TotalRecordsFound > 1),
-                FilteredByMaterialType: filteredByMaterialType,
+                FilteredByMaterialType: rows.Length < allRows.Length,
                 CatalogTitle: catalogTitle,
                 CatalogAuthor: catalogAuthor);
         }

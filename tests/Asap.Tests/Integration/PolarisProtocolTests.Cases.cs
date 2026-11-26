@@ -53,6 +53,20 @@ public sealed partial class PolarisProtocolTests
     }
 
     [TestMethod]
+    [DataRow(1, true)]
+    [DataRow(12, false)]
+    public async Task IdentifierLookupRequiresCompleteExcludedResultsForEmaterialsOnly(int total, bool exclusive)
+    {
+        var handler = new StaticResponseHandler(HttpStatusCode.OK,
+            $$"""{"PAPIErrorCode":0,"TotalRecordsFound":{{total}},"BibSearchRows":[{"ControlNumber":9001,"PrimaryTypeOfMaterial":36}]}""");
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.LookupIdentifierAsync("9780000000099", 2, CancellationToken.None);
+        Assert.AreEqual(IdentifierLookupOutcome.DefinitiveNotFound, result.Outcome);
+        Assert.AreEqual(exclusive, result.FilteredByMaterialType);
+        Assert.AreEqual(3, handler.RequestCount);
+    }
+
+    [TestMethod]
     public async Task PolarisStaffSearchUsesSupportedQueriesAndMapsCatalogRows()
     {
         var handler = new StaticResponseHandler(HttpStatusCode.OK,

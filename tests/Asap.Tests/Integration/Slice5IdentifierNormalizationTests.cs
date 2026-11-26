@@ -57,7 +57,7 @@ public sealed partial class PatronJourneyTests
             await seed.SaveChangesAsync();
             staffVerifiedRequestId = staffVerifiedRequest.Id;
 
-            var codes = new[] { "polaris_bib_found", "polaris_bib_not_found", "polaris_multiple_matches", "slice5-unrelated" };
+            var codes = new[] { "polaris_bib_found", "polaris_bib_not_found", "polaris_multiple_matches", "polaris_ematerials_only", "slice5-unrelated" };
             foreach (var code in codes)
             {
                 var tag = await seed.WorkflowTags.SingleOrDefaultAsync(item => item.Code == code);

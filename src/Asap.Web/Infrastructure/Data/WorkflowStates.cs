@@ -51,3 +51,12 @@ public static class IdentifierCheckState
     public const string SkippedNoIdentifier = "skipped_no_isbn";
     public const string RetryExhausted = "error_max_retries";
 }
+
+internal static class IdentifierLookupTags
+{
+    public const string Multiple = "polaris_multiple_matches";
+    public const string EmaterialsOnly = "polaris_ematerials_only";
+    public const string Found = "polaris_bib_found";
+    public const string NotFound = "polaris_bib_not_found";
+    public static readonly string[] InDisplayOrder = [Multiple, EmaterialsOnly, Found, NotFound];
+}

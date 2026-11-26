@@ -116,17 +116,17 @@ public sealed partial class WorkflowProcessingService
         var (code, tag, message) = lookup switch
         {
             { Outcome: IdentifierLookupOutcome.Found, MultipleMatches: true } =>
-                ("multiple_matches", "polaris_multiple_matches", "Multiple eligible Polaris BIBs match. Select the correct BIB to continue."),
+                ("multiple_matches", IdentifierLookupTags.Multiple, "Multiple eligible Polaris BIBs match. Select the correct BIB to continue."),
             { Outcome: IdentifierLookupOutcome.Found, BibId: > 0 } when request.BibId.HasValue && request.BibId != lookup.BibId =>
-                ("bib_conflict", "polaris_bib_found", $"The identifier matches BIB {lookup.BibId}, but BIB {request.BibId} is assigned. Review the selection."),
+                ("bib_conflict", IdentifierLookupTags.Found, $"The identifier matches BIB {lookup.BibId}, but BIB {request.BibId} is assigned. Review the selection."),
             { Outcome: IdentifierLookupOutcome.Found, BibId: > 0 } when duplicate =>
-                ("duplicate_open_request", "polaris_bib_found", $"Another open request for this patron already has BIB {lookup.BibId}."),
+                ("duplicate_open_request", IdentifierLookupTags.Found, $"Another open request for this patron already has BIB {lookup.BibId}."),
             { Outcome: IdentifierLookupOutcome.Found, BibId: > 0 } =>
-                ("changed", "polaris_bib_found", request.BibIdStaffVerified ? "Staff-selected BIB confirmed in Polaris." : "BIB verified by a unique Polaris identifier match."),
+                ("changed", IdentifierLookupTags.Found, request.BibIdStaffVerified ? "Staff-selected BIB confirmed in Polaris." : "BIB verified by a unique Polaris identifier match."),
             { Outcome: IdentifierLookupOutcome.DefinitiveNotFound } when request.BibIdStaffVerified =>
                 ("no_eligible_bib", null, "The staff-selected BIB could not be confirmed as eligible for automatic promotion."),
             { Outcome: IdentifierLookupOutcome.DefinitiveNotFound } =>
-                ("no_eligible_bib", "polaris_bib_not_found", "No eligible Polaris BIB was found."),
+                ("no_eligible_bib", IdentifierLookupTags.NotFound, "No eligible Polaris BIB was found."),
             { ErrorCode: "unsupported_identifier" } => ("unsupported_identifier", null, "A supported identifier or staff-selected BIB is required."),
             _ => ("purchase_lookup_failed", null, "Polaris could not confirm the catalog result. ASAP will check again.")
         };
@@ -135,7 +135,7 @@ public sealed partial class WorkflowProcessingService
         {
             var links = await (from link in context.TitleRequestWorkflowTags
                                join definition in context.WorkflowTags on link.WorkflowTagId equals definition.Id
-                               where link.TitleRequestId == request.Id && IdentifierDerivedTagCodes.Contains(definition.Code)
+                               where link.TitleRequestId == request.Id && IdentifierLookupTags.InDisplayOrder.Contains(definition.Code)
                                select new { Link = link, definition.Code }).ToListAsync(cancellationToken);
             context.TitleRequestWorkflowTags.RemoveRange(links.Where(item => item.Code != tag).Select(item => item.Link));
             if (tag is not null && !links.Any(item => item.Code == tag))

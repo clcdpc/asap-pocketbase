@@ -66,6 +66,9 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(RequestStatus.OutstandingPurchase, row.Status);
                 Assert.AreEqual(phaseStart, row.UpdatedUtc);
                 Assert.AreEqual(timeProvider.GetUtcNow().UtcDateTime, row.LastPromoterCheckUtc);
+                CollectionAssert.AreEquivalent(new[] { "polaris_bib_not_found" },
+                    (await ReadBibOwnershipRequestAsync(row.Id)).IdentifierTags.ToArray());
+                Assert.AreEqual("No eligible Polaris BIB was found.", row.LastPromoterResult);
                 Assert.AreEqual(events, await db.TitleRequestEvents.CountAsync(item => item.TitleRequestId == row.Id));
                 Assert.IsFalse(row.HasTrustedBib);
                 Assert.AreEqual(notes, row.Notes);

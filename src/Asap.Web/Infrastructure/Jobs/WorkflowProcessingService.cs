@@ -58,9 +58,6 @@ public sealed partial class WorkflowProcessingService(
     ILogger<WorkflowProcessingService> logger,
     StaffEligibilityService staffEligibility)
 {
-    private static readonly string[] IdentifierDerivedTagCodes =
-        ["polaris_bib_found", "polaris_bib_not_found", "polaris_multiple_matches"];
-
     private readonly TimeZoneInfo businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(
         configuration.Application.BusinessTimeZone!);
 
@@ -272,7 +269,7 @@ public sealed partial class WorkflowProcessingService(
                 var derivedTags = await (
                     from link in context.TitleRequestWorkflowTags
                     join tag in context.WorkflowTags on link.WorkflowTagId equals tag.Id
-                    where link.TitleRequestId == request!.Id && IdentifierDerivedTagCodes.Contains(tag.Code)
+                    where link.TitleRequestId == request!.Id && IdentifierLookupTags.InDisplayOrder.Contains(tag.Code)
                     select link).ToListAsync(cancellationToken);
                 context.TitleRequestWorkflowTags.RemoveRange(derivedTags);
                 if (!request!.BibIdStaffVerified)
