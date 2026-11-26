@@ -20,6 +20,13 @@ public sealed partial class PatronJourneyTests
         await ExecuteNonQueryAsync("""
             INSERT INTO [asap].[Organization] ([Id],[DisplayName],[OrganizationCodeId],[ParentOrganizationId],[IsActive])
             VALUES (@library,N'Title layout library',2,1,1);
+            INSERT INTO asap.ExternalSearchProviderOverride (LibraryOrganizationId, ExternalSearchProviderId, IsEnabled, Label, UrlTemplate)
+            SELECT @library, Id, CASE WHEN ProviderKey IN ('external_search_1','external_search_2','external_search_4') THEN 1 ELSE 0 END,
+                CASE ProviderKey WHEN 'external_search_1' THEN 'Local index' WHEN 'external_search_2' THEN 'Catalog'
+                    WHEN 'external_search_4' THEN 'ConsortiumBibliographicResearchDirectoryWithALongLabel' END,
+                CASE WHEN ProviderKey = 'external_search_1' THEN 'https://research.example.test/?q={{title}}&id={{identifier}}'
+                    ELSE 'https://research.example.test/catalog/{{identifier}}' END
+            FROM asap.ExternalSearchProvider;
             """, ("@library", library));
 
         var contexts = factory.Services.GetRequiredService<IDbContextFactory<AsapDbContext>>();
@@ -48,7 +55,7 @@ public sealed partial class PatronJourneyTests
                         Barcode = $"LAYOUT-{status}-{index}",
                         Title = longTitle
                             ? string.Join(' ', Enumerable.Repeat("Long bibliographic title segment", 12))
-                            : $"Title layout {status} {index}",
+                            : status == "suggestion" ? "Title layout suggestion 0 — Café & O'Brien / \"Why?\"" : $"Title layout {status} {index}",
                         Author = longTitle
                             ? string.Join(' ', Enumerable.Repeat("Long author name segment", 10))
                             : $"Layout author {index}",
@@ -132,8 +139,8 @@ public sealed partial class PatronJourneyTests
                 client.BaseAddress!.GetLeftPart(UriPartial.Authority), artifacts);
             Assert.AreEqual(0, exitCode, $"{artifacts}{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "browser-results.json")));
-            Assert.AreEqual(6, report.RootElement.GetProperty("viewportMatrix").GetArrayLength());
-            Assert.AreEqual(14, report.RootElement.GetProperty("resizeOnly").GetArrayLength());
+            Assert.AreEqual(8, report.RootElement.GetProperty("viewportMatrix").GetArrayLength());
+            Assert.AreEqual(16, report.RootElement.GetProperty("resizeOnly").GetArrayLength());
             Assert.AreEqual(2, report.RootElement.GetProperty("nativeZoom").GetArrayLength());
         }
         finally
@@ -141,6 +148,7 @@ public sealed partial class PatronJourneyTests
             system.LeapBibUrlPattern = originalPattern;
             await settingsContext.SaveChangesAsync();
             await using var cleanup = await contexts.CreateDbContextAsync();
+            await cleanup.ExternalSearchProviderOverrides.Where(item => item.LibraryOrganizationId == library).ExecuteDeleteAsync();
             await cleanup.TitleRequests.Where(item => item.LibraryOrganizationId == library).ExecuteDeleteAsync();
             await cleanup.Organizations.Where(item => item.Id == library)
                 .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.IsActive, false));

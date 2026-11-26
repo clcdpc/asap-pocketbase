@@ -363,6 +363,9 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .request-search-shortcut:hover { border-color: var(--line); background: var(--surface); }
 .request-search-shortcut:disabled { color: var(--muted); cursor: default; }
 .request-bib-link { font-size: .78rem; }
+.request-provider-links { display: flex; flex-wrap: wrap; gap: 2px 8px; min-width: 0; font-size: .78rem; }
+.request-provider-links a { overflow-wrap: anywhere; }
+.request-provider-links .fa { font-size: .85em; }
 .request-row-flags { gap: 4px; }
 .request-row-flags .tag { padding: 2px 4px; font-size: .7rem; }
 .request-promotion-result { font-size: .78rem; color: var(--muted); }

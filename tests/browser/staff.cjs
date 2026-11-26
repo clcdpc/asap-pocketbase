@@ -408,13 +408,30 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     assert.deepEqual(storedBibErrors, []);
     await storedBibPage.close();
 
+    const gridProviders = page.locator('#request-grid tr')
+      .filter({ has: page.locator(`a[data-request-id="${args.primaryRequestId}"]`) }).locator('.request-provider-links a');
+    const savedUrls = () => gridProviders.evaluateAll(nodes => nodes.map(a => a.href));
+    const detailProviders = page.locator('#request-dialog .research-links a');
+    await detailProviders.first().waitFor();
+    const initialUrls = await savedUrls();
+    assert.equal(initialUrls.length, 2);
+    const otherLibrary = page.locator('#request-grid tr').filter({ hasText: 'Other browser library title' });
+    assert.deepEqual(await otherLibrary.locator('.request-provider-links a').evaluateAll(nodes => nodes.map(a => a.textContent.trim())),
+      ['Browser vendor', 'Search Goodreads'], 'This request inherits Goodreads and has no identifier for WorldCat.');
+    assert.deepEqual(await detailProviders.evaluateAll(nodes => nodes.map(a => a.href)), initialUrls);
     await page.getByLabel('Title', { exact: true }).fill('Browser staff title edited');
+    const editedUrl = await detailProviders.first().getAttribute('href');
+    assert.equal(new URL(editedUrl).searchParams.get('q'), 'Browser staff title edited');
+    assert.deepEqual(await savedUrls(), initialUrls);
     await publication.selectOption('Library backlist');
     await page.getByLabel('Audience note', { exact: true }).fill('Edited audience');
     await binding.selectOption('hardback');
     await page.getByRole('button', { name: 'Save changes' }).click();
     await page.getByText('Request changes saved.').waitFor();
     await page.getByRole('button', { name: 'Unclaim' }).waitFor();
+    await page.waitForFunction(({ id, href }) =>
+      document.querySelector(`#request-grid a[data-request-id="${id}"]`)?.closest('tr')
+        ?.querySelector('.request-provider-links a')?.href === href, { id: args.primaryRequestId, href: editedUrl });
 
     const currentRequest = await context.request.get(
       `${args.baseOrigin}/api/asap/staff/title-requests/${args.primaryRequestId}`
@@ -488,6 +505,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     });
     await page.getByRole('link', { name: `Open request ${args.primaryRequestId}:`, exact: false }).waitFor();
     assert.equal(await page.getByText('Other browser library title', { exact: true }).count(), 0);
+    assert.equal((await savedUrls())[0], editedUrl);
     const open = page.getByRole('link', { name: `Open request ${args.primaryRequestId}:`, exact: false });
     await open.click();
     await page.locator('#request-dialog[open]').waitFor();
@@ -511,7 +529,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     const researchLabels = await page.locator('.research-links a').allTextContents();
     assert.deepEqual(researchLabels, ['Browser vendor', 'Search WorldCat']);
     assert.equal(await page.getByRole('link', { name: 'Search Goodreads' }).count(), 0);
-    assert.match(await page.getByRole('link', { name: 'Browser vendor' }).getAttribute('href'),
+    assert.match(await page.locator('#request-dialog').getByRole('link', { name: 'Browser vendor' }).getAttribute('href'),
       /q=Browser%20staff%20title%20edited/);
 
     await page.getByLabel('BIB ID', { exact: true }).fill('9001');

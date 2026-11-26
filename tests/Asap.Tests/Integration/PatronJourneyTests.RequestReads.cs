@@ -68,6 +68,11 @@ public sealed partial class PatronJourneyTests
             Assert.IsNotNull(list);
             var listReads = probe.SnapshotAndReset();
             evidence["list"] = listReads;
+            foreach (var table in new[] { "ExternalSearchProvider", "ExternalSearchProviderOverride" })
+            {
+                Assert.AreEqual(1, listReads.Reads.Count(read => read.Sql.Contains($"[asap].[{table}]", StringComparison.Ordinal)),
+                    $"Loading {requestCount} requests reads {table} once.");
+            }
             Assert.IsFalse(listReads.Reads.Any(item => item.Columns.Contains("Message") || item.Columns.Contains("MetadataJson")),
                 "List phase entry must not load activity history.");
             var detail = await service.GetAsync(fixture.Actor, fixture.Source.Id.ToString(), CancellationToken.None);

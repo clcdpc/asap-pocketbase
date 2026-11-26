@@ -177,7 +177,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
         var branding = await LoadBrandingAsync(context, organizationId, organization.DisplayName, cancellationToken);
         var externalSearchProviders = await LoadExternalSearchProvidersAsync(
             context,
-            organizationId,
+            [organizationId],
             cancellationToken);
         var duplicateStatusLabels = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -234,7 +234,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             PickMessage(libraryPatron?.EaudiobookMessage, systemPatron.EaudiobookMessage,
                 "This is an eAudiobook suggestion, please use Libby to notify us of your interest.\n\nLearn how to suggest a purchase using Libby here:\nhttps://help.libbyapp.com/en-us/6260.htm"),
             duplicateStatusLabels,
-            externalSearchProviders,
+            externalSearchProviders[organizationId],
             publicationOptions,
             creators,
             Pick(libraryWorkflow?.CommonAuthorsLabel, systemWorkflow.CommonAuthorsLabel, "Popular Creators"),
@@ -484,9 +484,9 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             Pick(library?.LogoAltText, system?.LogoAltText, "Library Logo"));
     }
 
-    private static async Task<IReadOnlyList<EffectiveExternalSearchProvider>> LoadExternalSearchProvidersAsync(
+    internal static async Task<Dictionary<int, EffectiveExternalSearchProvider[]>> LoadExternalSearchProvidersAsync(
         AsapDbContext context,
-        int organizationId,
+        int[] organizationIds,
         CancellationToken cancellationToken)
     {
         var providers = await context.ExternalSearchProviders.AsNoTracking()
@@ -494,16 +494,17 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
             .OrderBy(item => item.SortOrder)
             .ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
-        var overrides = organizationId == LibraryScope.SystemOrganizationId
+        var libraryIds = organizationIds.Where(id => id != LibraryScope.SystemOrganizationId).ToArray();
+        var overrides = libraryIds.Length == 0
             ? []
             : await context.ExternalSearchProviderOverrides.AsNoTracking()
-                .Where(item => item.LibraryOrganizationId == organizationId)
+                .Where(item => libraryIds.Contains(item.LibraryOrganizationId))
                 .ToListAsync(cancellationToken);
-        var overridesByProvider = overrides.ToDictionary(item => item.ExternalSearchProviderId);
+        var overridesByProvider = overrides.ToDictionary(item => (item.LibraryOrganizationId, item.ExternalSearchProviderId));
 
-        return providers.Select(provider =>
+        return organizationIds.ToDictionary(id => id, id => providers.Select(provider =>
             {
-                overridesByProvider.TryGetValue(provider.Id, out var value);
+                overridesByProvider.TryGetValue((id, provider.Id), out var value);
                 return new EffectiveExternalSearchProvider(
                     provider.Id,
                     provider.ProviderKey,
@@ -512,7 +513,7 @@ public sealed class PatronConfigurationService(IDbContextFactory<AsapDbContext> 
                     value?.UrlTemplate ?? provider.UrlTemplate,
                     provider.SortOrder);
             })
-            .ToArray();
+            .ToArray());
     }
 
     private static EffectiveFieldRule Field(string mode, string? label, string fallbackLabel) =>

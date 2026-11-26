@@ -204,7 +204,6 @@ public static partial class TitleRequestEndpoints
         int? libraryOrgId,
         TitleRequestViewService views,
         StaffEligibilityService eligibility,
-        PatronConfigurationService configurations,
         IPatronProvider patrons,
         IDbContextFactory<AsapDbContext> contextFactory,
         ILoggerFactory loggerFactory,
@@ -216,12 +215,14 @@ public static partial class TitleRequestEndpoints
         {
             return scope.Error;
         }
-        var configuration = await configurations.GetAsync(scope.OrganizationId, cancellationToken);
-        if (configuration is null)
-        {
-            return Results.NotFound(new { code = "organization_not_found" });
-        }
         await using var db = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var providers = scope.Request?.Research?.ExternalSearchProviders;
+        if (providers is null)
+        {
+            var effective = await PatronConfigurationService.LoadExternalSearchProvidersAsync(
+                db, [scope.OrganizationId], cancellationToken);
+            providers = StaffSearchProvider.Enabled(effective[scope.OrganizationId]);
+        }
         var system = await db.SystemSettings.AsNoTracking()
             .SingleAsync(item => item.OrganizationId == 1, cancellationToken);
         var savedRequestIdentity = scope.Request is not null && requestId is { } scopedRequestId
@@ -259,9 +260,7 @@ public static partial class TitleRequestEndpoints
             system.LeapBibUrlPattern,
             system.LeapPatronUrlPattern,
             patronId,
-            externalSearchProviders = configuration.ExternalSearchProviders
-                .Where(item => item.IsEnabled)
-                .Select(item => new { item.Key, item.Label, item.UrlTemplate, item.SortOrder })
+            externalSearchProviders = providers
         });
     }
 

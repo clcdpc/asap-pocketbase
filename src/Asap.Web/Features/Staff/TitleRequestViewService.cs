@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Data;
 using System.Text.Json;
 using Asap.Web.Features.Email;
+using Asap.Web.Features.Patron;
 using Asap.Web.Infrastructure.Data;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -313,6 +314,9 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
             return [];
         }
         var ids = requests.Select(item => item.Id).ToArray();
+        var libraryIds = requests.Select(item => item.LibraryOrganizationId).Distinct().ToArray();
+        var providers = await PatronConfigurationService.LoadExternalSearchProvidersAsync(context, libraryIds, cancellationToken);
+        var enabledProviders = providers.ToDictionary(pair => pair.Key, pair => StaffSearchProvider.Enabled(pair.Value));
         var visibleOrganizationIds = relatedCandidates.Select(item => item.LibraryOrganizationId).Distinct().ToArray();
         var organizations = await context.Organizations.AsNoTracking()
             .Where(item => visibleOrganizationIds.Contains(item.Id))
@@ -545,7 +549,11 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
                 RequestTags = requestTags.Where(tag => !IdentifierLookupTags.InDisplayOrder.Contains(tag.Code))
                     .Select(tag => tag.Label).ToArray(),
                 LastPromoterResult = request.LastPromoterResult,
-                Research = research with { PatronId = request.PatronIdSnapshot is > 0 ? request.PatronIdSnapshot : null },
+                Research = research with
+                {
+                    PatronId = request.PatronIdSnapshot is > 0 ? request.PatronIdSnapshot : null,
+                    ExternalSearchProviders = enabledProviders[request.LibraryOrganizationId]
+                },
                 AdditionalCopyRequestId = latestCopy?.Id.ToString(CultureInfo.InvariantCulture),
                 HasOpenAdditionalCopy = copies.Any(item => item.IsOpen),
                 OpenAdditionalCopyRequestId = visibleOpenCopy?.Id.ToString(CultureInfo.InvariantCulture),

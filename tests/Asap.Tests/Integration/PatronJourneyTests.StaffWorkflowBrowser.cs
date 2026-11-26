@@ -160,6 +160,9 @@ public sealed partial class PatronJourneyTests
             VALUES (@org,1,1,N'Please contact the library.',SYSUTCDATETIME());
             INSERT INTO [asap].[PatronCodeEligibilitySet] ([OrganizationId]) VALUES (@org);
             INSERT INTO [asap].[PatronCodeEligibilityMember] ([OrganizationId],[PatronCodeId]) VALUES (@org,1);
+            INSERT INTO asap.ExternalSearchProviderOverride (LibraryOrganizationId, ExternalSearchProviderId, IsEnabled, Label, UrlTemplate)
+            SELECT @org, Id, 1, 'Library catalog', 'https://catalog.example.test/?title={{title}}&id={{identifier}}'
+            FROM asap.ExternalSearchProvider WHERE ProviderKey = 'external_search_1';
             """, ("@org", library), ("@home", home), ("@registration", registration), ("@pickup", pickup));
         await using var scopedFactory = factory!.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
         {
