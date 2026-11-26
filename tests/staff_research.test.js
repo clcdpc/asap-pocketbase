@@ -17,7 +17,7 @@ const { JSDOM } = require('jsdom');
     global.document = dom.window.document;
     global.window = dom.window;
     const { applyPolarisResultToControls, createPolarisLookup, mergeCatalogValue, selectedStaffBibId, positivePolarisId,
-      researchUrl, renderResearchLinks, researchRecordUrl, researchRecordValue } = await import(pathToFileURL(path.join(temporary, 'research.js')).href);
+      researchUrl, externalResearchLinks, renderResearchLinks, researchRecordUrl, researchRecordValue } = await import(pathToFileURL(path.join(temporary, 'research.js')).href);
     assert.equal(positivePolarisId('09001'), 9001);
     assert.equal(positivePolarisId(2147483647), 2147483647);
     for (const value of [null, undefined, '', 'bad', '0', '-1', '2147483648', 0, -1, 1.5, 2147483648]) {
@@ -73,6 +73,27 @@ const { JSDOM } = require('jsdom');
     assert.equal(recordLink.rel, 'noopener noreferrer');
     assert.equal(researchRecordValue('Patron', { ...recordResearch, leapPatronUrlPattern: 'javascript:{{patronId}}' }, 'patron').tagName, 'SPAN');
     const request = { title: 'A & B / C', identifier: '978 1', bibid: 9001 };
+    const saved = { title: ' Café & "O\'Brien" / why? 日本 ', identifier: ' à / "1" & ? ' };
+    const provider = (label, query, sortOrder = 1) => ({ label, urlTemplate: 'https://search.example.test/?' + query, sortOrder });
+    const sources = { externalSearchProviders: [
+      provider('Both', 'q={{title}}&id={{identifier}}', 2), provider('Title', 'q={{title}}'),
+      provider('Identifier', 'id={{identifier}}'), provider('   ', 'q={{title}}'),
+      ...['{{patron-id}}', '{{patronId}}', '{{bibid}}', '{{barcode}}', '{{email}}', '{{author}}',
+        '{{title}', '{title}}', '{{title}}}'].map(token => provider('Invalid', 'q=' + token)),
+      { label: 'Credentials', urlTemplate: 'https://user:pass@example.test/{{title}}' },
+      { label: 'Scheme', urlTemplate: 'file:///{{identifier}}' }
+    ] };
+    const savedLinks = externalResearchLinks(saved, sources);
+    assert.deepEqual(savedLinks.map(link => link.label), ['Title', 'Identifier', 'Both']);
+    const params = new URL(savedLinks[2].url).searchParams;
+    assert.deepEqual([...params], [['q', saved.title.trim()], ['id', saved.identifier.trim()]]);
+    for (const [draft, labels] of [[{}, ['Title', 'Identifier', 'Both']], [{ identifier: '' }, ['Title']],
+      [{ title: '   ' }, ['Identifier']], [{ title: '', identifier: '' }, []]]) {
+      renderResearchLinks(links, saved, sources, draft);
+      const anchors = [...links.querySelectorAll('a')];
+      assert.deepEqual(anchors.map(a => a.textContent), labels);
+      assert.deepEqual(anchors.map(a => a.href), externalResearchLinks(saved, sources, draft).map(link => link.url));
+    }
     renderResearchLinks(links, request, {
       leapBibUrlPattern: 'https://leap.example.test/bib/{{bibid}}',
       leapPatronUrlPattern: 'https://leap.example.test/patron/{{patronId}}',

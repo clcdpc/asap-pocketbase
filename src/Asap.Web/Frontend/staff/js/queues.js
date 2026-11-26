@@ -1,7 +1,7 @@
 import { authorizedJson, isAbortError } from './http.js';
 import { createLatestLoad } from '../../shared/latest-load.js';
 import { byDisplayLabel } from './display-order.js';
-import { researchRecordUrl } from './research.js';
+import { externalResearchLinks, researchRecordUrl } from './research.js';
 import { RequestRowActions, eligibleRowActions } from './request-row-actions.js';
 import { element, dateTime, closeReasonLabel, timeoutLabel } from './ui.js';
 
@@ -598,6 +598,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
         onClick: event => { if (live(event)) searchCatalog(request, mode, event.currentTarget); }
       }, glyph('search'));
       const bibUrl = researchRecordUrl(request.research, 'bib', request.bibid);
+      const providers = externalResearchLinks(request, request.research);
       const promotionResult = request.status === 'outstanding_purchase' ? request.lastPromoterResult : null;
       const flags = [...new Set(request.requestTags)];
       const count = request.relatedRequests?.count;
@@ -615,6 +616,10 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
         h('div', { className: 'request-bibliographic-line request-author-line' }, [
           h('span', { className: 'request-cell-text', title: request.author || 'Author not recorded' }, request.author || 'Author not recorded'), search('author', request.author)
         ]),
+        providers.length ? h('div', { className: 'request-provider-links' }, providers.map(({ label, url }) =>
+          h('a', { href: url, target: '_blank', rel: 'noopener noreferrer',
+            onClick: event => { if (!live(event)) event.preventDefault(); }
+          }, [label, '\u00a0', glyph('external-link')]))) : null,
         bibUrl ? h('a', { className: 'request-bib-link', href: bibUrl, target: '_blank', rel: 'noopener noreferrer' }, `BIB ${request.bibid}`) : null,
         flags.length ? h('div', { className: 'tags request-row-flags' }, flags.map(flag => h('span', { className: 'tag' }, flag))) : null,
         promotionResult && promotionResult !== request.catalogLookup?.label

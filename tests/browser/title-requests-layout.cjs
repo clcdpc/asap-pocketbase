@@ -16,7 +16,9 @@ const expectedTitles = {
 };
 const viewports = [
   { name: 'wide-3000', width: 3000, height: 1000 },
+  { name: 'desktop-1920', width: 1920, height: 1080 },
   { name: 'desktop-1440', width: 1440, height: 900 },
+  { name: 'desktop-1280', width: 1280, height: 900 },
   { name: 'intermediate-900', width: 900, height: 900 },
   { name: 'reported-901', width: 901, height: 862 },
   { name: 'mobile-390', width: 390, height: 844 },
@@ -197,6 +199,18 @@ async function measure(page, name, width, stage) {
       table: { ...elementMetrics(table), hasHorizontalOverflow: table.scrollWidth > wrapper.clientWidth },
       columns,
       rowCount: table?.tBodies[0]?.rows.length ?? 0,
+      providers: [...table.tBodies[0].rows].map(row => {
+        const line = row.querySelector('.request-provider-links');
+        const links = [...(line?.querySelectorAll('a') || [])];
+        return {
+          title: row.querySelector('.request-title-link').textContent,
+          identifier: row.querySelector('td[data-request-column="identifier"] .request-cell-text').textContent,
+          linePresent: !!line, afterAuthor: line?.previousElementSibling.matches('.request-author-line'),
+          labels: links.map(a => a.textContent.trim()), urls: links.map(a => a.href),
+          clipped: links.some(a => a.scrollWidth > a.clientWidth + 1 || a.scrollHeight > a.clientHeight + 1),
+          firstTwoShareLine: links.length >= 2 && links[0].offsetTop === links[1].offsetTop
+        };
+      }),
       identifiers: [...grid.querySelectorAll('td[data-request-column="identifier"] .request-cell-text')].map(node => ({
         value: node.textContent, title: node.title, clipped: node.scrollHeight > node.clientHeight + 1,
         reason: node.parentElement.querySelector('small')?.textContent || null,
@@ -248,6 +262,18 @@ async function measure(page, name, width, stage) {
     hold_placed: ['012345678905', '012345678X', 'Not recorded'], closed: ['0123456789-'.repeat(8), '978-0-123456-78-9']
   };
   assert.deepEqual(metric.identifiers.map(item => item.value).sort(), identifiers[stage]);
+  for (const item of metric.providers) {
+    if (item.identifier === 'Not recorded') {
+      assert.equal(item.linePresent, false);
+      continue;
+    }
+    assert.equal(item.afterAuthor, true);
+    assert.deepEqual(item.labels, ['Local index', 'Catalog', 'ConsortiumBibliographicResearchDirectoryWithALongLabel']);
+    const params = new URL(item.urls[0]).searchParams;
+    assert.deepEqual([...params], [['q', item.title], ['id', item.identifier]]);
+    assert.equal(item.clipped, false, `${name}/${stage}: full provider labels fit`);
+    if (width >= 1280) assert.equal(item.firstTwoShareLine, true);
+  }
   for (const item of metric.identifiers) {
     const expected = {
       suggestion: 'Found in Polaris', outstanding_purchase: 'No Polaris match',
@@ -364,7 +390,7 @@ async function collectViewport(page, viewport) {
     entries.push(metric);
     if ([3000, 901, 390, 320].includes(viewport.width)) await scan(page, `${stage}-${viewport.name}`);
     if ([3000, 901, 320].includes(viewport.width) || viewport.width === 390 && ['closed', 'hold_placed'].includes(stage) ||
-        viewport.width === 1440 && stage === 'closed') {
+        viewport.width === 1440 && stage === 'closed' || [1280, 1920].includes(viewport.width) && stage === 'suggestion') {
       await capture(page, metric);
     }
   }
@@ -428,6 +454,26 @@ async function verifySortingAndActions(page, fixture) {
       titleSearch?.isConnected && !titleSearch.disabled && titleSearch.getClientRects().length > 0;
   }, { id: fixture.closedIds[0], expectedFirst: expectedTitles.closed[0] });
   const row = page.locator(`#request-grid a[data-request-id="${fixture.closedIds[0]}"]`).locator('xpath=ancestor::tr');
+  const provider = row.getByRole('link', { name: 'Local index', exact: true });
+  const destination = await provider.getAttribute('href');
+  const isDestination = url => url.href === destination;
+  const intercepted = route => route.fulfill({ contentType: 'text/plain', body: 'Synthetic search destination' });
+  await page.context().route(isDestination, intercepted);
+  for (const activation of ['keyboard', 'mouse']) {
+    await row.locator('button.request-search-shortcut').last().focus();
+    await page.keyboard.press('Tab');
+    assert.equal(await provider.evaluate(a => a === document.activeElement && a.matches(':focus-visible')), true);
+    const opened = page.waitForEvent('popup');
+    if (activation === 'keyboard') await page.keyboard.press('Enter');
+    else await provider.click();
+    const popup = await opened;
+    await popup.waitForLoadState();
+    assert.equal(popup.url(), destination);
+    assert.equal(await popup.locator('body').textContent(), 'Synthetic search destination');
+    await popup.close();
+    assert.equal(await page.locator('#request-dialog[open]').count(), 0);
+  }
+  await page.context().unroute(isDestination, intercepted);
   assert.equal(await row.locator('button.request-search-shortcut').count(), 2, 'Title and author lookup shortcuts remain in the bibliographic cell.');
   const titleSearch = row.locator('button.request-search-shortcut').first();
   await titleSearch.focus();

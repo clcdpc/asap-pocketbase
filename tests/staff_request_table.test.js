@@ -146,7 +146,9 @@ async function until(predicate, message) {
       claimedByStaffUserId: index % 2 ? '20' : null, claimedByDisplayName: index % 2 ? 'Current staff' : null,
       workflowTags: index === 0 ? ['Visible warning'] : [], requestTags: index === 0 ? ['Visible warning'] : [], identifier: `IDENTIFIER-${index}`,
       capabilities: { allowedActions: ['purchase', 'reject', 'alreadyOwn', 'silentClose'] },
-      research: { patronId: index + 1, leapPatronUrlPattern: 'https://catalog.example.org/patron/{{patron-id}}' }
+      research: { patronId: index + 1, leapPatronUrlPattern: 'https://catalog.example.org/patron/{{patron-id}}',
+        externalSearchProviders: [{ label: 'Lookup <ID>', urlTemplate: 'https://lookup.example.test/{{identifier}}', sortOrder: 2 },
+          { label: 'Title search', urlTemplate: 'https://lookup.example.test/?q={{title}}', sortOrder: 1 }] }
     })).reverse();
     // Text order differs from numeric order, and one saved value includes punctuation.
     data[0].isbnCheckStatus = 'found';
@@ -161,6 +163,9 @@ async function until(predicate, message) {
     data[1].identifier = '10';
     data[2].identifier = '000-123';
     data[3].identifier = null;
+    data[3].research.externalSearchProviders = [data[3].research.externalSearchProviders[0]];
+    data[0].bibid = 123;
+    data[0].research.leapBibUrlPattern = 'https://catalog.example.org/bib/{{bibid}}';
     const queue = createTitleQueue({ root: get('#queue-view'), sessionIdentity: session, claimsFilter: createClaimsFilter({ sessionIdentity: session }), getContext: () => context,
       announce() {}, onOpen: (...args) => opened.push(args), onNewSuggestion: (...args) => created.push(args),
       polarisLookup: { open: value => searches.push(value), close: value => closed.push(value) },
@@ -185,6 +190,29 @@ async function until(predicate, message) {
     assert.deepEqual(badges(rows()[2].cells[1]), []);
     assert.deepEqual(badges(rows()[0].cells[6]), ['Found in Polaris']);
     assert.deepEqual(badges(rows()[1].cells[6]), ['No Polaris match']);
+    const providerLine = first().querySelector('.request-author-line + .request-provider-links');
+    const anchors = [...providerLine.querySelectorAll('a')];
+    assert.deepEqual(anchors.map(a => a.textContent.trim()), ['Title search', 'Lookup <ID>']);
+    assert.equal(anchors[1].href, 'https://lookup.example.test/2');
+    for (const anchor of anchors) {
+      assert.equal(anchor.target, '_blank');
+      assert.equal(anchor.rel, 'noopener noreferrer');
+      assert.equal(anchor.querySelector('.fa-external-link').getAttribute('aria-hidden'), 'true');
+    }
+    assert.ok(providerLine.nextElementSibling.matches('.request-bib-link'));
+    assert.ok(providerLine.nextElementSibling.nextElementSibling.matches('.request-row-flags'));
+    anchors[0].click();
+    assert.deepEqual(opened, []);
+    assert.equal(rows()[3].querySelector('.request-provider-links'), null);
+    const assertRowLinks = () => {
+      for (const row of rows()) {
+        const title = row.querySelector('.request-title-link');
+        const saved = data.find(item => item.id === title.dataset.requestId);
+        const anchor = row.querySelector('.request-provider-links a');
+        if (saved.identifier) assert.equal(new URL(anchor.href).searchParams.get('q'), saved.title);
+        else assert.equal(anchor, null);
+      }
+    };
     const headings = [...get('#request-grid').querySelectorAll('th')];
     const assertSort = (header, direction, next) => {
       const name = header.querySelector('.gridjs-th-content').textContent;
@@ -232,6 +260,7 @@ async function until(predicate, message) {
     await until(() => first()?.querySelector('.request-title-link')?.textContent === 'Title 00', 'Bibliographic details sort by Title.');
     const next = get('#request-grid button[aria-label="Next"]'); next.click();
     await until(() => first()?.querySelector('.request-title-link')?.textContent === 'Title 25', 'Pagination reaches the second sorted page.');
+    assertRowLinks();
     assertCounts();
     const beforeRefresh = first().querySelector('.request-title-link');
     data = data.slice(1); // A genuinely new 54-row response, not Grid's retained old store.
@@ -240,6 +269,7 @@ async function until(predicate, message) {
       get('#request-grid .gridjs-summary')?.textContent.includes('of 54'),
       'Refresh must render its new accepted rows before retention is assessed.');
     await until(() => first()?.querySelector('.request-title-link')?.textContent === 'Title 25', 'Refresh preserves sort and the current page.');
+    assertRowLinks();
     assertSort(get('#request-grid th:nth-child(2)'), 'ascending', 'descending');
     const full = data;
     data = data.slice(-10);
@@ -251,6 +281,7 @@ async function until(predicate, message) {
     await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 54'), 'The full accepted result renders before filtering.');
     get('#request-search').value = 'Author 03'; get('#request-search').dispatchEvent(new dom.window.Event('input'));
     await until(() => rows().length === 1 && first().textContent.includes('Title 03'), 'Author search resets paging and finds its request.');
+    assertRowLinks();
     assert.match(get('#request-grid .gridjs-summary').textContent, /1 to 1 of 1 results/);
     assertCounts();
     get('#request-search').value = 'IDENTIFIER-4'; get('#request-search').dispatchEvent(new dom.window.Event('input'));

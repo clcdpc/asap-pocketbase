@@ -91,32 +91,39 @@ export function researchRecordValue(value, research, kind, bibId = null) {
     : node('span', { text: label });
 }
 
-export function renderResearchLinks(container, request, research, draft = {}) {
+export function externalResearchLinks(request, research, draft = {}) {
   const links = [];
   const values = {
     title: draft.title ?? request.title,
-    identifier: draft.identifier ?? request.identifier,
-    bibid: positivePolarisId(draft.bibId ?? request.bibid)
+    identifier: draft.identifier ?? request.identifier
   };
-  const add = (label, url) => {
-    if (url) links.push(node('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text: label }));
-  };
-  if (values.bibid !== null) {
-    add('Open BIB in LEAP', researchUrl(research?.leapBibUrlPattern, values, 'bibid'));
-  }
   const providers = Array.isArray(research?.externalSearchProviders)
     ? [...research.externalSearchProviders].sort((a, b) => a.sortOrder - b.sortOrder)
     : [];
   for (const provider of providers) {
-    if (provider.isEnabled === false || !provider.label) continue;
+    if (provider.isEnabled === false || !provider.label?.trim()) continue;
     const template = String(provider.urlTemplate || '');
-    if (/\{\{(?!title\}\}|identifier\}\})/.test(template)) continue;
-    add(provider.label, researchUrl(template, values));
+    if (/[{}]/.test(template.replace(/\{\{(?:title|identifier)\}\}/g, ''))) continue;
+    const url = researchUrl(template, values);
+    if (url) links.push({ label: provider.label, url });
+  }
+  return links;
+}
+
+export function renderResearchLinks(container, request, research, draft = {}) {
+  const links = externalResearchLinks(request, research, draft);
+  const bibid = positivePolarisId(draft.bibId ?? request.bibid);
+  if (bibid !== null) {
+    const url = researchUrl(research?.leapBibUrlPattern, {
+      bibid, title: draft.title ?? request.title, identifier: draft.identifier ?? request.identifier
+    }, 'bibid');
+    if (url) links.unshift({ label: 'Open BIB in LEAP', url });
   }
   container.replaceChildren();
   container.hidden = links.length === 0;
   if (links.length) {
-    container.append(node('div', { className: 'research-links' }, links));
+    container.append(node('div', { className: 'research-links' }, links.map(({ label, url }) =>
+      node('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text: label }))));
   }
 }
 

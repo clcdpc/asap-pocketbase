@@ -105,15 +105,26 @@ const scenarios = [
       await unchanged(t.context, t.origin, f, before);
       await checkpoint(t.page, t.directory, t.id, { visible: [dialog(t.page).locator('.action-bar')] });
     } },
-  { id: 'd1-research-patron', requirements: ['#387: one compact research row, configured URLs/encoding/attributes and live drafts', '#408: one plus beside linked name, distinct patron fields'], writes: false,
+  { id: 'd1-research-patron', requirements: ['#387: one compact research row, configured URLs/encoding/attributes and live drafts', '#408: one plus beside linked name, distinct patron fields', '#551: saved grid links match details and survive draft edits'], writes: false,
     run: async t => {
-      const f = await fixture(t, 'draft'); await openFixture(t.page, t.origin, f);
+      const f = await fixture(t, 'draft');
       const before = await detail(t.context, t.origin, f);
+      await t.page.goto(t.origin + '/staff/?scope=2&stage=' + before.status);
+      await t.page.locator('#request-search').fill(before.title);
+      const opener = t.page.locator(`#request-grid .request-title-link[data-request-id="${f.id}"]`);
+      const grid = opener.locator('xpath=ancestor::tr').locator('.request-provider-links');
+      await grid.waitFor();
+      const savedUrls = () => grid.locator('a').evaluateAll(anchors => anchors.map(a => a.href));
+      const saved = await savedUrls();
+      await grid.scrollIntoViewIfNeeded();
+      await checkpoint(t.page, t.directory, t.id + '-grid', { visible: [grid] });
+      await opener.click();
       const config = await json(t.context, t.origin, '/api/asap/staff/research-configuration?requestId=' + f.id);
       const row = dialog(t.page).locator('.polaris-edit-tools');
       const enabled = config.externalSearchProviders.filter(p => p.isEnabled !== false && p.label).sort((a,b) => a.sortOrder - b.sortOrder);
       assert.ok(enabled.length >= 3, 'Existing deterministic provider configuration is present');
       for (const p of enabled) await row.getByRole('link', { name: p.label, exact: true }).waitFor();
+      assert.deepEqual(await Promise.all(enabled.map(p => row.getByRole('link', { name: p.label, exact: true }).getAttribute('href'))), saved);
       assert.equal(await dialog(t.page).locator('.research-section').count(), 0);
       assert.equal(await dialog(t.page).getByRole('heading', { name: 'Catalog and research links' }).count(), 0);
       assert.equal(await row.evaluate(n => n.previousElementSibling.textContent.includes('BIB ID') && n.nextElementSibling.textContent.includes('Publication timing')), true);
@@ -121,6 +132,7 @@ const scenarios = [
       await title.fill('D1 café & research / title');
       await dialog(t.page).getByLabel('Identifier', { exact: true }).fill('D1/a&b');
       await dialog(t.page).getByLabel('BIB ID', { exact: true }).fill('941003');
+      assert.deepEqual(await savedUrls(), saved);
       const urls = [];
       for (const p of enabled) {
         const a = row.getByRole('link', { name: p.label, exact: true });
