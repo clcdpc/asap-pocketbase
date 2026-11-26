@@ -64,7 +64,8 @@ public sealed partial class PatronJourneyTests
                             _ => null
                         },
                         Status = status,
-                        IsbnCheckStatus = status is "outstanding_purchase" or "closed" && !longTitle ? "not_found" : null,
+                        IsbnCheckStatus = status is "outstanding_purchase" or "closed" ? "not_found" : null,
+                        IsbnCheckLastErrorCode = longTitle ? "polaris_identifier_results_incomplete" : null,
                         LastPromoterResult = status == "outstanding_purchase" ? "No eligible Polaris BIB was found." : null,
                         Notes = status == "closed" && !longTitle
                             ? "Identifier number verification completed: only e-materials found matching identifier 978-0-123456-78-9; these cannot be placed on hold in Polaris."

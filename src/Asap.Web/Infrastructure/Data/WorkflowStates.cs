@@ -50,6 +50,7 @@ public static class IdentifierCheckState
     public const string NotFound = "not_found";
     public const string SkippedNoIdentifier = "skipped_no_isbn";
     public const string RetryExhausted = "error_max_retries";
+    public const string IncompleteResultsErrorCode = "polaris_identifier_results_incomplete";
 }
 
 internal static class IdentifierLookupTags

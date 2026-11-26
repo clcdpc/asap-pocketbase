@@ -167,7 +167,7 @@ public sealed partial class PolarisProtocolTests
         {
             term = $"({term}) NOT ({string.Join(" OR ", exclusions.Select(code => "TOM=" + code))})";
         }
-        AssertSearchRequest(handler.RequestUris.Last(), "/search/bibs/boolean", term, "PDTI", 1);
+        AssertSearchRequest(handler.RequestUris.Last(), "/search/bibs/boolean", term, "PDTI", 1, pageSize: 10);
         Assert.AreEqual(replies.Count, handler.RequestCount);
     }
 
@@ -294,14 +294,15 @@ public sealed partial class PolarisProtocolTests
     private static string PageResponse(int total, Dictionary<string, object?>[] rows) =>
         JsonSerializer.Serialize(new { PAPIErrorCode = rows.Length, TotalRecordsFound = total, BibSearchRows = rows });
 
-    private static void AssertSearchRequest(Uri uri, string path, string term, string sort, int page)
+    private static void AssertSearchRequest(Uri uri, string path, string term, string sort, int page, int pageSize = 10,
+        bool noTransaction = true)
     {
         Assert.AreEqual(path, SearchPath(uri));
         var parameters = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
         Assert.AreEqual(term, parameters["q"].Single());
         Assert.AreEqual(sort, parameters["sortby"].Single());
         Assert.AreEqual(page.ToString(System.Globalization.CultureInfo.InvariantCulture), parameters["page"].Single());
-        Assert.AreEqual("10", parameters["bibsperpage"].Single());
-        Assert.AreEqual("1", parameters["notran"].Single());
+        Assert.AreEqual(pageSize.ToString(System.Globalization.CultureInfo.InvariantCulture), parameters["bibsperpage"].Single());
+        Assert.AreEqual(noTransaction ? "1" : null, parameters.GetValueOrDefault("notran").SingleOrDefault());
     }
 }

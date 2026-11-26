@@ -402,6 +402,24 @@ public sealed class TitleRequest
     public int IsbnCheckRetryCount { get; set; }
     public string? IsbnCheckLastErrorCode { get; set; }
     public DateTime? LastCheckedUtc { get; set; }
+    // Staff-selected BIB verification leaves the independent identifier check intact.
+    internal bool PromotionSupersedesIdentifierCheck => !BibIdStaffVerified && LastPromoterCheckUtc.HasValue &&
+        (LastCheckedUtc is null || LastCheckedUtc <= LastPromoterCheckUtc);
+
+    internal void RetireCompletedIdentifierCheck()
+    {
+        // A blocked promotion match can have a checked timestamp and result without a status.
+        if (IsbnCheckStatus is not (IdentifierCheckState.Found or IdentifierCheckState.NotFound) &&
+            !(IsbnCheckStatus is null && LastCheckedUtc.HasValue))
+        {
+            return;
+        }
+        IsbnCheckStatus = null;
+        IsbnCheckResult = null;
+        IsbnCheckLastErrorCode = null;
+        IsbnCheckRetryCount = 0;
+        LastCheckedUtc = null;
+    }
     public DateTime CreatedUtc { get; set; }
     public DateTime UpdatedUtc { get; set; }
     public byte[] RowVersion { get; set; } = [];

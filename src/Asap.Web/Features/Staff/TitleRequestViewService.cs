@@ -455,11 +455,8 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
             var requestTags = tags[request.Id].ToList();
             var lookup = IdentifierLookupTags.InDisplayOrder
                 .Select(code => requestTags.Find(tag => tag.Code == code)).FirstOrDefault(tag => tag is not null);
-            // An unverified purchase check can retire tags while retaining earlier identifier status for diagnostics.
-            // A staff-selected BIB check verifies only that BIB and leaves the identifier evidence intact.
-            var statusStillApplies = request.LastPromoterCheckUtc is null || request.BibIdStaffVerified ||
-                request.LastCheckedUtc > request.LastPromoterCheckUtc;
-            if (lookup is null && statusStillApplies)
+            if (lookup is null && !request.PromotionSupersedesIdentifierCheck &&
+                request.IsbnCheckLastErrorCode != IdentifierCheckState.IncompleteResultsErrorCode)
             {
                 // Older completed checks can lack a tag. Editable notes cannot establish why a check missed.
                 var code = request.IsbnCheckStatus switch

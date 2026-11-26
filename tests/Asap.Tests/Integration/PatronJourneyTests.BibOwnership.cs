@@ -39,6 +39,7 @@ public sealed partial class PatronJourneyTests
                 CatalogAuthor: "Different catalog author")),
             ("not-found", "ownership-not-found", new IdentifierLookupResult(IdentifierLookupOutcome.DefinitiveNotFound)),
             ("electronic", "ownership-electronic", new IdentifierLookupResult(IdentifierLookupOutcome.DefinitiveNotFound, FilteredByMaterialType: true)),
+            ("incomplete", "ownership-incomplete", new IdentifierLookupResult(IdentifierLookupOutcome.IncompleteResults)),
             ("multiple", "ownership-multiple", new IdentifierLookupResult(IdentifierLookupOutcome.Found, 456, MultipleMatches: true)),
             ("transient", "ownership-transient", new IdentifierLookupResult(
                 IdentifierLookupOutcome.TransientFailure,
@@ -85,11 +86,18 @@ public sealed partial class PatronJourneyTests
                 Assert.IsTrue(afterSelection.BibIdStaffVerified);
                 Assert.AreEqual("pending", afterSelection.IsbnCheckStatus);
 
-                if (scenario is "found" or "not-found" or "multiple")
+                if (scenario is "found" or "not-found" or "multiple" or "incomplete")
                 {
                     await ExecuteNonQueryAsync("""
                         INSERT INTO [asap].[TitleRequestWorkflowTag] ([TitleRequestId], [WorkflowTagId])
                         SELECT @id, Id FROM [asap].[WorkflowTag] WHERE Code = N'polaris_ematerials_only';
+                        """, ("@id", seeded.Id));
+                }
+                if (scenario == "incomplete")
+                {
+                    await ExecuteNonQueryAsync("""
+                        INSERT INTO [asap].[TitleRequestWorkflowTag] ([TitleRequestId], [WorkflowTagId])
+                        SELECT @id, Id FROM [asap].[WorkflowTag] WHERE Code = N'duplicate_suggestion';
                         """, ("@id", seeded.Id));
                 }
                 var lookupService = CreateBibOwnershipSuggestionService(lookupResult);
@@ -124,11 +132,60 @@ public sealed partial class PatronJourneyTests
                     Assert.AreEqual("not_found", afterLookup.IsbnCheckStatus);
                     StringAssert.Contains(afterLookup.IsbnCheckResult!, "Only excluded e-materials");
                 }
+                if (scenario == "incomplete")
+                {
+                    Assert.AreEqual("not_found", afterLookup.IsbnCheckStatus);
+                    Assert.AreEqual("polaris_identifier_results_incomplete", afterLookup.IsbnCheckLastErrorCode);
+                    Assert.IsNotNull(afterLookup.LastCheckedUtc);
+                    StringAssert.Contains(afterLookup.IsbnCheckResult!, "incomplete identifier search results");
+                    Assert.AreEqual(afterLookup.IsbnCheckResult, details.IsbnCheckResult);
+                    StringAssert.Contains(details.Notes!, afterLookup.IsbnCheckResult);
+                    string[] labels = ["Another patron requested this"];
+                    CollectionAssert.AreEqual(labels, details.WorkflowTags.ToArray());
+                    var list = await factory.Services.GetRequiredService<TitleRequestViewService>()
+                        .ListAsync(actor, LibraryScope.ForLibrary(2), CancellationToken.None);
+                    var gridRow = list!.Items.Single(item => item.Id == details.Id);
+                    Assert.IsNull(gridRow.CatalogLookup);
+                    CollectionAssert.AreEqual(labels, gridRow.WorkflowTags.ToArray());
+
+                    var edit = new TitleRequestActionInput { Action = "edit", Version = details.Version,
+                        Identifier = JsonSerializer.SerializeToElement("replacement-identifier") };
+                    Assert.AreEqual("updated", (await mutations.ActionAsync(actor, seeded.Id, edit.ToCommand(), CancellationToken.None)).Code);
+                    var reset = await ReadBibOwnershipRequestAsync(seeded.Id);
+                    Assert.AreEqual("pending", reset.IsbnCheckStatus);
+                    Assert.IsNull(reset.IsbnCheckResult);
+                    Assert.IsNull(reset.IsbnCheckLastErrorCode);
+                    Assert.IsNull(reset.LastCheckedUtc);
+                }
             }
         }
         finally
         {
             await DeleteBibOwnershipRequestsAsync(requests);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("found", "polaris_bib_found", "Found in Polaris")]
+    [DataRow("not_found", "polaris_bib_not_found", "No Polaris match")]
+    [DataRow(null, null, null)]
+    public async Task HistoricalIdentifierBadgeRequiresACompletedCheck(string? status, string? code, string? label)
+    {
+        var actor = await GetOwnershipTestActorAsync();
+        var seeded = await SeedBibOwnershipRequestAsync("historical", 543, true, status);
+        try
+        {
+            var details = await factory!.Services.GetRequiredService<TitleRequestViewService>()
+                .GetAsync(actor, seeded.Id.ToString(), CancellationToken.None);
+            Assert.IsNotNull(details);
+            Assert.AreEqual(code, details.CatalogLookup?.Code);
+            string[] labels = label is null ? [] : [label];
+            CollectionAssert.AreEqual(labels, details.WorkflowTags.ToArray());
+            Assert.AreEqual(0, (await ReadBibOwnershipRequestAsync(seeded.Id)).IdentifierTags.Count);
+        }
+        finally
+        {
+            await DeleteBibOwnershipRequestsAsync([seeded.Id]);
         }
     }
 

@@ -473,12 +473,12 @@ public sealed partial class PolarisPatronProvider(
             var rows = allRows.Where(row => row.PrimaryTypeOfMaterial is not (36 or 41)).ToArray();
             if (rows.Length == 0)
             {
-                return new IdentifierLookupResult(
-                    IdentifierLookupOutcome.DefinitiveNotFound,
-                    // An excluded first page cannot establish the material types on later pages.
-                    FilteredByMaterialType: allRows.Length > 0 && attempts.All(attempt =>
-                        attempt.Data!.TotalRecordsFound == attempt.Data.BibSearchRows.DistinctBy(row => row.ControlNumber).Count() &&
-                        attempt.Data.BibSearchRows.All(row => row.PrimaryTypeOfMaterial is 36 or 41)));
+                var complete = attempts.All(attempt =>
+                    attempt.Data!.TotalRecordsFound == attempt.Data.BibSearchRows.DistinctBy(row => row.ControlNumber).Count() &&
+                    attempt.Data.BibSearchRows.All(row => row.PrimaryTypeOfMaterial is 36 or 41));
+                return complete
+                    ? new IdentifierLookupResult(IdentifierLookupOutcome.DefinitiveNotFound, FilteredByMaterialType: allRows.Length > 0)
+                    : new IdentifierLookupResult(IdentifierLookupOutcome.IncompleteResults);
             }
 
             var selected = rows[0];
@@ -1395,7 +1395,7 @@ public sealed partial class PolarisPatronProvider(
             Qualifier = qualifier,
             SortOption = SearchSortOptions.PDTI,
             Page = 1,
-            PageSize = 10
+            PageSize = 100
         };
 
     private static SearchAttempt InspectSearchResponse(

@@ -329,6 +329,13 @@ async function verifyPlacedHoldTags(page) {
   await dialog.locator('[aria-label="Workflow tags"]').getByText('Found in Polaris', { exact: true }).waitFor();
   await dialog.locator('.request-save-footer').getByRole('button', { name: 'Close', exact: true }).click();
   await dialog.waitFor({ state: 'hidden' });
+  await selectStage(page, 'closed');
+  await filter.selectOption({ label: 'No Polaris match' });
+  await page.waitForFunction(() => {
+    const titles = document.querySelectorAll('#request-grid tbody .request-title-link');
+    return titles.length === 1 && titles[0].textContent === 'Title layout closed 0';
+  });
+  await filter.selectOption('all');
 }
 
 async function capture(page, metric) {

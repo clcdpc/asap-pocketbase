@@ -157,6 +157,10 @@ public sealed partial class WorkflowProcessingService
                 request.IsbnCheckLastErrorCode = null;
                 request.LastCheckedUtc = now;
             }
+            else
+            {
+                request.RetireCompletedIdentifierCheck();
+            }
         }
         if (code != "changed")
         {
