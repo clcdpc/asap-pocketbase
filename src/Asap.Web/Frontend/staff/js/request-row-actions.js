@@ -14,6 +14,7 @@ export function eligibleRowActions(request, actor) {
     actions.push(action);
   };
   if (request.status === 'suggestion') {
+    if (allowed.has('purchase')) add('purchase', 'Purchase', 'shopping-cart', 'primary-button');
     if (allowed.has('reject')) add('reject', 'Reject', 'ban', 'danger-button');
     if (allowed.has('alreadyOwn')) add('alreadyOwn', 'Already own', 'book');
   } else if (request.status === 'outstanding_purchase' && allowed.has('catalogFound')) {
@@ -32,7 +33,6 @@ export function eligibleRowActions(request, actor) {
     add('assign', 'Assign', 'users');
   }
   if (request.status === 'suggestion' && allowed.has('silentClose')) add('silentClose', 'Close silently', 'archive');
-  if (request.status === 'suggestion' && allowed.has('purchase')) add('purchase', 'Purchase', 'shopping-cart', 'primary-button');
   return actions;
 }
 
@@ -73,7 +73,7 @@ export function requestRowActions({ id, actions, live, onOpen, fallback }) {
       }, { signal });
       return button;
     });
-    let frame = null, partition = null, availableWidth = null, controlWidths = null, anchor = null, mounted = node.isConnected, disposed = false;
+    let frame = null, inlineCount = null, availableWidth = null, controlWidths = null, anchor = null, mounted = node.isConnected, disposed = false;
     const opened = () => popup.isConnected && popup.matches(':popover-open');
     function close(restore = false) {
       if (!opened()) return;
@@ -135,61 +135,49 @@ export function requestRowActions({ id, actions, live, onOpen, fallback }) {
       // it creates no cloned/hidden focusable commands and never changes width.
       node.dataset.measuring = '';
       popup.dataset.measuring = '';
-      if (!more.isConnected) node.append(more);
       const widths = buttons.map(button => button.getBoundingClientRect().width);
       const metrics = widths.join(',');
       if (controlWidths !== null && metrics !== controlWidths) close(popup.contains(document.activeElement));
       controlWidths = metrics;
       const gap = parseFloat(window.getComputedStyle(node).columnGap) || 0;
-      const moreWidth = more.getBoundingClientRect().width;
-      const purchase = buttons.find(button => button.dataset.requestAction === 'purchase');
-      const otherActions = buttons.filter(button => button !== purchase);
-      const primary = otherActions.find(button => ['catalogFound', 'place-hold', 'close', 'reopen'].includes(button.dataset.requestAction)) ||
-        otherActions.find(button => button.dataset.requestAction === 'claim') ||
-        otherActions.find(button => button.dataset.requestAction === 'assign') || otherActions[0];
-      const layoutActions = primary ? [primary, ...otherActions.filter(button => button !== primary)] : otherActions;
-      const widthByButton = new Map(buttons.map((button, index) => [button, widths[index]]));
-      const layoutWidths = layoutActions.map(button => widthByButton.get(button));
-      const actionsWidth = layoutWidths.reduce((sum, value) => sum + value, 0) + gap * Math.max(0, layoutActions.length - 1);
-      const menuReservedWidth = purchase || actionsWidth > width ? gap + moreWidth : 0;
-      const total = actionsWidth + menuReservedWidth;
-      let directCount = layoutActions.length;
-      if (layoutActions.length > 1 && total > width) {
-        directCount = 1; // Always retain a meaningful direct action, even in a tiny cell.
-        let used = layoutWidths[0];
-        while (directCount < layoutActions.length && used + gap + layoutWidths[directCount] + menuReservedWidth <= width) {
-          used += gap + layoutWidths[directCount++];
+      const total = widths.reduce((sum, value) => sum + value, 0) + gap * (buttons.length - 1);
+      let directCount = buttons.length, wrap = false;
+      if (buttons.length > 1 && total > width) {
+        if (!more.isConnected) node.append(more);
+        directCount = 1; // The preferred command stays direct even if More needs its own line.
+        let used = widths[0] + gap + more.getBoundingClientRect().width;
+        wrap = used > width;
+        while (directCount < buttons.length - 1 && used + gap + widths[directCount] <= width) {
+          used += gap + widths[directCount++];
         }
       }
-      const directActions = layoutActions.slice(0, directCount);
-      const menuActions = [...(purchase ? [purchase] : []), ...layoutActions.slice(directCount)];
-      const nextPartition = `${directActions.map(button => button.dataset.requestAction).join(',')}|${menuActions.map(button => button.dataset.requestAction).join(',')}`;
       delete node.dataset.measuring;
       delete popup.dataset.measuring;
-      if (nextPartition !== partition) {
+      if (directCount !== inlineCount) {
         close();
         // Only reparent when the partition changes; resize notifications cannot
         // repeatedly destroy focus or oscillate based on the previous layout.
+        const directActions = buttons.slice(0, directCount);
         node.replaceChildren(...directActions);
-        if (menuActions.length) {
-          popup.replaceChildren(...menuActions); node.append(more, popup);
+        if (directCount < buttons.length) {
+          popup.replaceChildren(...buttons.slice(directCount)); node.append(more, popup);
         } else { popup.replaceChildren(); }
-        partition = nextPartition;
+        inlineCount = directCount;
         if (hadFocus) {
           const focusTarget = directActions.includes(focused)
             ? focused : more.isConnected ? more : directActions[0];
           focusTarget?.focus({ preventScroll: true });
         }
-      } else if (!menuActions.length) { more.remove(); }
+      }
       // At extreme widths the first action and More may occupy separate lines;
       // labels remain complete and the cell never expands the fixed table.
-      node.classList.toggle('request-actions-wrap', menuActions.length > 0 && layoutWidths[0] + gap + moreWidth > width);
+      node.classList.toggle('request-actions-wrap', wrap);
       node.dataset.ready = '';
     }
     function schedule() {
       if (!disposed && frame === null) frame = window.requestAnimationFrame(layout);
     }
-    node.append(...buttons, more);
+    node.append(...buttons);
     const observer = typeof window.ResizeObserver === 'function' ? new window.ResizeObserver(schedule) : null;
     observer?.observe(node);
     // Also detect changes to rendered control metrics (font size/family, theme).

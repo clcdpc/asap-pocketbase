@@ -369,7 +369,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 #request-grid time > span, #request-grid small { display: block; }
 #request-grid time small { margin-top: 3px; color: var(--muted); font-size: .78rem; }
 #request-grid .claim-label { font-size: .85rem; }
-.request-row-actions { position: relative; display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; }
+.request-row-actions { position: relative; display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%; min-width: 0; }
 .request-row-actions:not([data-ready]) { visibility: hidden; }
 .request-row-command, .request-row-more { flex: 0 0 auto; min-height: 36px; padding: 5px 6px; font-size: .78rem; white-space: nowrap; }
 .request-row-actions > .request-row-more { min-width: 36px; }

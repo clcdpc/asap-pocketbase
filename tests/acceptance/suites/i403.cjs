@@ -22,7 +22,8 @@ async function queue(t, status, title = '') {
 }
 async function evidence(t, row, name = t.id, capture = {}) {
   const direct = row.locator('.request-row-actions > [data-request-action]').first();
-  await (await direct.count() ? direct : row.locator('.request-title-link')).scrollIntoViewIfNeeded(); await settleActions(t.page);
+  await (await direct.count() ? row.locator('.request-row-actions') : row.locator('.request-title-link')).scrollIntoViewIfNeeded();
+  await settleActions(t.page);
   const geometry = await actionGeometry(row);
   await fs.writeFile(path.join(t.directory, name + '-geometry.json'), JSON.stringify(geometry, null, 2));
   await checkpoint(t.page, t.directory, name, { visible: [await direct.count()
@@ -92,18 +93,18 @@ const scenarios = [
     await actionColumn(t.page);
     const source = await start(t); row = source.row;
     const initial = await evidence(t, row, 'i403-many-default');
-    const directOrder = ['claim', 'reject', 'alreadyOwn', 'assign', 'silentClose'];
+    const directOrder = ['purchase', 'reject', 'alreadyOwn', 'claim', 'assign', 'silentClose'];
     assert.deepEqual(initial.inline, directOrder.slice(0, initial.inline.length));
-    assert.deepEqual(initial.overflow, ['purchase', ...directOrder.slice(initial.inline.length)]);
+    assert.deepEqual(initial.overflow, directOrder.slice(initial.inline.length));
     await actionColumn(t.page, 70);
     const wide = await actionGeometry(row);
     assert.deepEqual(wide.inline, directOrder);
-    assert.deepEqual(wide.overflow, ['purchase']);
+    assert.deepEqual(wide.overflow, []);
     await actionColumn(t.page, 12);
     const narrow = await actionGeometry(row);
     assert.ok(narrow.bounds.width < wide.bounds.width);
-    assert.deepEqual(narrow.inline, ['claim']);
-    assert.deepEqual(narrow.overflow, ['purchase', 'reject', 'alreadyOwn', 'assign', 'silentClose']);
+    assert.deepEqual(narrow.inline, ['purchase']);
+    assert.deepEqual(narrow.overflow, directOrder.slice(1));
     await actionColumn(t.page);
     const restored = await actionGeometry(row);
     assert.deepEqual(restored.inline, initial.inline);
@@ -156,12 +157,12 @@ const scenarios = [
     await more.press('Space'); assert.equal(await more.getAttribute('aria-expanded'), 'true');
     await t.page.keyboard.press('Escape'); assert.equal(await more.getAttribute('aria-expanded'), 'false');
     assert.equal(await more.evaluate(node => node === document.activeElement), true);
+    const firstOverflow = (await actionGeometry(row)).overflow[0];
     await more.press('Enter');
-    assert.equal(await t.page.evaluate(() => document.activeElement.dataset.requestAction), 'purchase');
+    assert.equal(await t.page.evaluate(() => document.activeElement.dataset.requestAction), firstOverflow);
     await actionColumn(t.page, 70);
-    assert.equal(await more.getAttribute('aria-expanded'), 'false');
-    assert.equal(await more.evaluate(node => node === document.activeElement), true);
-    assert.deepEqual((await actionGeometry(row)).overflow, ['purchase']);
+    assert.deepEqual((await actionGeometry(row)).overflow, []);
+    assert.equal(await t.page.evaluate(() => document.activeElement.dataset.requestAction), firstOverflow);
     const reads = []; t.page.on('request', request => { if (new URL(request.url()).pathname === '/api/asap/staff/title-requests/' + f.id) reads.push(request.method()); });
     await row.locator('.request-row-actions > [data-request-action="reject"]').press('Enter');
     const review = t.page.locator('#request-dialog .action-choice'); await review.locator('button[type="submit"]:not([disabled])').waitFor();
@@ -179,7 +180,7 @@ const scenarios = [
     await review.getByRole('button', { name: 'Cancel', exact: true }).click(); await close(t);
     await unchanged(t.context, t.origin, f, before); assert.equal(t.mutations.length, 0);
     await actionColumn(t.page);
-    await more.press('Space'); await t.page.keyboard.press('Enter');
+    await row.locator('.request-row-actions > [data-request-action="purchase"]').press('Space');
     await review.locator('button[type="submit"]:not([disabled])').waitFor();
     assert.equal(await review.locator('button[type=submit]').textContent(), 'Confirm purchase');
     assert.equal(reads.length, 3, 'Keyboard selection of Purchase opens details exactly once');
@@ -222,6 +223,25 @@ const scenarios = [
   } },
   { id: 'i403-mobile-native-and-forced-colors', writes: false, requirements: ['#403: desktop/mobile/native 200%; geometry, forced colors, direct labels, no clipping or unexpected page overflow'], run: async t => {
     const { f, before, row } = await start(t);
+    const items = (await json(t.context, t.origin, '/api/asap/staff/title-requests?scope=2')).items;
+    for (const [barcode, primary] of [
+      [before.barcode, 'purchase'], ['ACCEPTANCE-I403-catalog-hold', 'catalogFound'],
+      ['ACCEPTANCE-I403-pending-ready', 'place-hold'], ['ACCEPTANCE-I403-placed', 'close'],
+      ['ACCEPTANCE41013', 'reopen']
+    ]) {
+      const request = items.find(item => item.barcode === barcode);
+      assert.ok(request, 'Expected synthetic request ' + barcode);
+      await queue(t, request.status, request.title);
+      const sample = rowFor(t.page, request.id);
+      for (const [width, height] of [[390, 844], [901, 862], [1280, 900], [1920, 1080], [2560, 1080]]) {
+        await t.page.setViewportSize({ width, height }); await settleActions(t.page);
+        const geometry = await evidence(t, sample, `i403-${primary}-${width}x${height}`);
+        assert.equal(geometry.inline[0], primary);
+        assert.ok(Math.abs((geometry.bounds.left - geometry.cell.left) - (geometry.cell.right - geometry.bounds.right)) <= 1,
+          'Action group is centered within the actual table cell');
+      }
+    }
+    await queue(t, before.status, before.title);
     for (const [mode, width, zoom] of [['desktop', 1440, 1], ['mobile', 390, 1], ['native-200', 1280, 2]]) {
       await t.page.setViewportSize({ width, height: 900 });
       if (zoom === 2) await nativeZoom(t.context, t.page, 2);

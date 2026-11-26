@@ -37,7 +37,16 @@ async function actionGeometry(row) {
   if (result.keys.length <= 1) assert.equal(result.more, 0, 'Zero/one command never creates More');
   assert.ok(!result.keys.length || result.inline.length >= 1, 'A meaningful action remains direct');
   assert.ok(result.scrollWidth <= result.clientWidth + 1, 'Controls do not overflow their action area');
-  for (const { bounds: b, text } of result.controls) {
+  // Flex centers each line independently, including when More wraps below the primary action.
+  let lineStart;
+  for (const [index, { bounds: b, text }] of result.controls.entries()) {
+    lineStart ??= b.left;
+    const next = result.controls[index + 1];
+    if (!next || next.bounds.top >= b.bottom) {
+      assert.ok(Math.abs((lineStart - result.bounds.left) - (result.bounds.right - b.right)) <= 1,
+        'Visible buttons have equal space on both sides of each line');
+      lineStart = undefined;
+    }
     assert.ok(b.left >= result.bounds.left - 1 && b.right <= result.bounds.right + 1, 'Button fits actual container');
     assert.ok(b.height >= 36, 'Compact touch target is preserved');
     for (const r of text) assert.ok(r.left >= b.left - 1 && r.right <= b.right + 1 && r.top >= b.top - 1 && r.bottom <= b.bottom + 1,

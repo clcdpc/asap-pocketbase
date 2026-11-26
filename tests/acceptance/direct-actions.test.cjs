@@ -55,8 +55,8 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
     assert.equal(await fixture.locator('[data-request-action]').count(), count);
     if (!count) { assert.equal(await fixture.locator('button, [popover]').count(), 0); continue; }
     const wide = await actionGeometry(fixture);
-    assert.equal(wide.inline.length, count === 6 ? 5 : count);
-    assert.deepEqual(wide.overflow, count === 6 ? ['purchase'] : []);
+    assert.equal(wide.inline.length, count);
+    assert.deepEqual(wide.overflow, []);
     await fixture.evaluate(node => { node.style.width = '120px'; }); await settleActions(page);
     const narrow = await actionGeometry(fixture);
     assert.equal(narrow.inline.length, 1); assert.equal(narrow.more, count > 1 ? 1 : 0);
@@ -79,15 +79,17 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
   assert.equal(await more.getAttribute('aria-expanded'), 'false', 'Viewport-only resize dismisses a menu even when its column width is unchanged');
   assert.equal(await more.evaluate(n => n === document.activeElement), true);
   await more.press('Enter');
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.requestAction), 'purchase');
+  const promoted = (await actionGeometry(fixture)).overflow[0];
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.requestAction), promoted);
   await fixture.evaluate(node => { node.style.width = 'min(900px, 100%)'; }); await settleActions(page);
-  assert.equal(await more.getAttribute('aria-expanded'), 'false');
-  assert.equal(await more.evaluate(node => node === document.activeElement), true, 'Menu-only Purchase returns focus to More on resize');
+  assert.equal(await more.count(), 0);
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.requestAction), promoted);
   await fixture.evaluate(node => { node.style.width = '120px'; }); await settleActions(page);
+  assert.equal(await more.evaluate(node => node === document.activeElement), true, 'Demoting the focused command focuses More');
   await more.press('Enter'); await page.keyboard.press('Tab');
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.requestAction), 'reject');
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.requestAction), 'alreadyOwn');
   await fixture.evaluate(node => { node.style.width = 'min(900px, 100%)'; }); await settleActions(page);
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.requestAction), 'reject', 'Promoted command retains focus');
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.requestAction), 'alreadyOwn', 'Promoted command retains focus');
   await activateRowAction(fixture, 'assign', 'Enter');
   await fixture.evaluate(node => { node.style.width = '150px'; }); await settleActions(page);
   await activateRowAction(fixture, 'assign');
@@ -175,6 +177,8 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
     await nativeZoom(context, page, 1); await page.evaluate(() => mount(6)); await settleActions(page);
   }
   for (const [status, capabilities, primary, autohold = true] of [
+    ['suggestion', { allowedActions: ['reject', 'purchase'] }, 'purchase'],
+    ['suggestion', { allowedActions: ['reject'] }, 'reject'],
     ['outstanding_purchase', { allowedActions: ['catalogFound'] }, 'catalogFound', true],
     ['outstanding_purchase', { allowedActions: ['catalogFound'] }, 'catalogFound', false],
     ['pending_hold', { canPlaceHold: true, canChangeWorkflowState: true }, 'place-hold'],
@@ -201,6 +205,12 @@ test('real rendered row actions fit, resize, dispatch, dismiss and retire at nat
     await fixture.evaluate(node => { node.style.width = '100px'; }); await nativeZoom(context, page, 2); await settleActions(page);
     const narrow = await actionGeometry(fixture);
     assert.equal(narrow.inline[0] || null, primary);
+    if (status === 'suggestion') {
+      assert.equal(narrow.keys.includes('purchase'), capabilities.allowedActions.includes('purchase'));
+      if (primary === 'purchase') {
+        assert.ok(narrow.controls[1].bounds.top >= narrow.controls[0].bounds.bottom, 'More wraps below Purchase');
+      }
+    }
     if (narrow.keys.length <= 1) assert.equal(narrow.more, 0);
     await nativeZoom(context, page, 1);
   }

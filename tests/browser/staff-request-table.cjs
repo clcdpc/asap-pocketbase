@@ -96,22 +96,23 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   const original = await actionGeometry(row);
   assert.ok(original.inline.length >= 1 && original.overflow.length >= 1);
   assert.equal(original.keys.filter(key => key === 'purchase').length, 1, 'Purchase appears once in the row action set.');
-  assert.equal(original.inline.includes('purchase'), false, 'Purchase stays menu-only at the regular Actions width.');
-  assert.equal(await row.locator('.request-table-menu [data-request-action="purchase"] .fa-shopping-cart').count(), 1,
-    'The More-menu Purchase entry keeps its cart icon.');
+  assert.equal(original.inline[0], 'purchase');
+  assert.equal(await row.locator('.request-row-actions > .primary-button[data-request-action="purchase"] .fa-shopping-cart').count(), 1);
   await actionColumn(page, 70);
   const expanded = await actionGeometry(row);
-  assert.equal(expanded.more, 1, 'The More trigger remains for the menu-only Purchase entry at wide widths.');
-  assert.deepEqual(expanded.inline, original.keys.filter(key => key !== 'purchase'));
-  assert.deepEqual(expanded.overflow, ['purchase']);
+  assert.equal(expanded.more, 0);
+  assert.deepEqual(expanded.inline, original.keys);
+  assert.deepEqual(expanded.overflow, []);
   await actionColumn(page, 12);
-  assert.ok((await actionGeometry(row)).overflow.length > 0);
+  const narrow = await actionGeometry(row);
+  assert.equal(narrow.inline[0], 'purchase');
+  assert.ok(narrow.overflow.length > 0);
   await more.focus(); await page.keyboard.press('Enter');
   await page.waitForFunction(id => document.querySelector(`#request-row-${id}-actions`).matches(':popover-open') &&
     document.querySelector(`[aria-controls="request-row-${id}-actions"]`).getAttribute('aria-expanded') === 'true', id);
   assert.equal(await more.getAttribute('aria-expanded'), 'true');
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.requestAction), 'purchase',
-    'Keyboard activation opens More with Purchase focused.');
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.requestAction), narrow.overflow[0],
+    'Keyboard activation focuses the first overflow action.');
   const bounds = await page.locator(`#request-row-${id}-actions`).boundingBox(), viewport = page.viewportSize();
   assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= viewport.width && bounds.y + bounds.height <= viewport.height);
   await scan('table-more-keyboard');

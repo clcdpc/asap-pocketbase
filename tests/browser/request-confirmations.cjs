@@ -173,8 +173,7 @@ const purchaseTaskDescription = 'A matching BIB exists, and the patron does not 
   async function verifyOpenTaskConflict(zoomPage) {
     await footerClose(zoomPage).press('Enter');
     const row = zoomPage.locator(`#request-grid tr:has([data-request-id="${optoutId}"])`);
-    await row.getByRole('button', { name: `More actions for request ${optoutId}`, exact: true }).press('Enter');
-    await row.locator('.request-table-menu:popover-open [data-request-action="purchase"]').press('Enter');
+    await row.locator('.request-row-actions > [data-request-action="purchase"]').press('Enter');
     const panel = review(zoomPage), source = await getDetail(optoutId);
     await panel.getByText(purchaseTaskDescription, { exact: true }).waitFor();
     await scan('purchase-task-native-200', zoomPage, true);
@@ -1036,33 +1035,26 @@ const purchaseTaskDescription = 'A matching BIB exists, and the patron does not 
     const purchaseRow = page.locator(`#request-grid tr:has([data-request-id="${untouchedId}"])`);
     await purchaseRow.locator('.request-row-actions[data-ready]').waitFor();
     assert.equal(await page.locator('#library-scope').inputValue(), '2', 'The queue remains scoped to library 2.');
-    const sourceBeforeMore = await getDetail(untouchedId);
-    assert.equal(sourceBeforeMore.libraryOrgId, 2, 'The row request belongs to the selected library scope.');
-    const rowPurchase = purchaseRow.locator('[data-request-action="purchase"]');
-    assert.equal(await rowPurchase.count(), 1, 'The row exposes exactly one Purchase command.');
-    assert.equal(await purchaseRow.locator('.request-row-actions > [data-request-action="purchase"]').count(), 0,
-      'Purchase is menu-only and is never duplicated as a direct row action.');
-    const more = page.getByRole('button', { name: `More actions for request ${untouchedId}`, exact: true });
-    await more.waitFor(); await more.press('Enter');
-    const menuPurchase = purchaseRow.locator('.request-table-menu:popover-open [data-request-action="purchase"]');
-    await menuPurchase.waitFor();
-    assert.equal((await menuPurchase.textContent()).trim(), 'Purchase');
-    assert.equal(await rowPurchase.count(), 1, 'Opening More retains one Purchase command.');
-    assert.equal(await menuPurchase.locator('.fa-shopping-cart').count(), 1, 'The table More menu Purchase action keeps its cart icon.');
-    const actionCountBeforeMore = report.actions.length;
-    await menuPurchase.press('Enter');
+    const sourceBeforeReview = await getDetail(untouchedId);
+    assert.equal(sourceBeforeReview.libraryOrgId, 2, 'The row request belongs to the selected library scope.');
+    assert.equal(await purchaseRow.locator('[data-request-action="purchase"]').count(), 1);
+    const rowPurchase = purchaseRow.locator('.request-row-actions > .primary-button[data-request-action="purchase"]');
+    assert.equal((await rowPurchase.textContent()).trim(), 'Purchase');
+    assert.equal(await rowPurchase.locator('.fa-shopping-cart').count(), 1);
+    const actionCountBeforeReview = report.actions.length;
+    await rowPurchase.press('Enter');
     await dialog().waitFor({ state: 'visible' }); await review().waitFor();
     const openedURL = new URL(page.url());
-    assert.equal(openedURL.searchParams.get('scope'), '2', 'More-menu Purchase opens the request in the selected scope.');
+    assert.equal(openedURL.searchParams.get('scope'), '2', 'Purchase opens the request in the selected scope.');
     assert.equal(openedURL.searchParams.get('request'), untouchedId);
     assert.match(await page.locator('#request-dialog-kicker').textContent(), new RegExp(`Request ${untouchedId}`));
     await panelState(review());
     assert.equal((await getDetail(untouchedId)).libraryOrgId, 2, 'The reviewed request remains in library 2.');
-    assert.equal(report.actions.length, actionCountBeforeMore, 'More-menu Purchase opens its pending review without dispatching.');
+    assert.equal(report.actions.length, actionCountBeforeReview, 'Opening Purchase review sends no mutation.');
     await cancel(review(), 'Purchase');
     await page.keyboard.press('Escape'); await dialog().waitFor({ state: 'hidden' });
-    assert.equal(report.actions.length, actionCountBeforeMore, 'Canceling the menu review dispatches no Purchase action.');
-    assert.deepEqual(await getDetail(untouchedId), sourceBeforeMore, 'Canceling leaves the scoped source request unchanged.');
+    assert.equal(report.actions.length, actionCountBeforeReview, 'Canceling the review dispatches no Purchase action.');
+    assert.deepEqual(await getDetail(untouchedId), sourceBeforeReview, 'Canceling leaves the scoped source request unchanged.');
     await page.waitForFunction(id => {
       const opener = [...document.querySelectorAll('#request-grid .grid-open')].find(button => {
         const label = button.getAttribute('aria-label') || '';
@@ -1070,7 +1062,7 @@ const purchaseTaskDescription = 'A matching BIB exists, and the patron does not 
       });
       return opener && document.activeElement === opener && opener.matches(':focus-visible');
     }, untouchedId);
-    report.moreMenuPurchase = true;
+    report.directRowPurchase = true;
   } catch (error) {
     report.failure = error.stack; await page.screenshot({ path: path.join(artifacts, 'failure.png'), fullPage: true }).catch(() => {}); throw error;
   } finally {
