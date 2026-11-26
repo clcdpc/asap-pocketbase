@@ -470,19 +470,15 @@ public sealed partial class PolarisPatronProvider(
                 .GroupBy(item => item.ControlNumber)
                 .Select(group => group.First())
                 .ToArray();
-            var filteredByMaterialType = false;
-            var rows = allRows.Where(row =>
-                {
-                    var excluded = row.PrimaryTypeOfMaterial is 36 or 41;
-                    filteredByMaterialType |= excluded;
-                    return !excluded;
-                })
-                .ToArray();
+            var rows = allRows.Where(row => row.PrimaryTypeOfMaterial is not (36 or 41)).ToArray();
             if (rows.Length == 0)
             {
-                return new IdentifierLookupResult(
-                    IdentifierLookupOutcome.DefinitiveNotFound,
-                    FilteredByMaterialType: filteredByMaterialType);
+                var complete = attempts.All(attempt =>
+                    attempt.Data!.TotalRecordsFound == attempt.Data.BibSearchRows.DistinctBy(row => row.ControlNumber).Count() &&
+                    attempt.Data.BibSearchRows.All(row => row.PrimaryTypeOfMaterial is 36 or 41));
+                return complete
+                    ? new IdentifierLookupResult(IdentifierLookupOutcome.DefinitiveNotFound, FilteredByMaterialType: allRows.Length > 0)
+                    : new IdentifierLookupResult(IdentifierLookupOutcome.IncompleteResults);
             }
 
             var selected = rows[0];
@@ -514,7 +510,7 @@ public sealed partial class PolarisPatronProvider(
                 IdentifierLookupOutcome.Found,
                 selected.ControlNumber,
                 MultipleMatches: rows.Length > 1 || attempts.Any(item => item.Data!.TotalRecordsFound > 1),
-                FilteredByMaterialType: filteredByMaterialType,
+                FilteredByMaterialType: rows.Length < allRows.Length,
                 CatalogTitle: catalogTitle,
                 CatalogAuthor: catalogAuthor);
         }
@@ -1399,7 +1395,7 @@ public sealed partial class PolarisPatronProvider(
             Qualifier = qualifier,
             SortOption = SearchSortOptions.PDTI,
             Page = 1,
-            PageSize = 10
+            PageSize = 100
         };
 
     private static SearchAttempt InspectSearchResponse(

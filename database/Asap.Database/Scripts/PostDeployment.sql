@@ -163,17 +163,21 @@ IF NOT EXISTS (SELECT 1 FROM [asap].[MaterialFormat] WHERE [OwnerOrganizationId]
          [PublicationMode], [PublicationLabel], [CreatedUtc], [UpdatedUtc])
     VALUES (1, N'eaudiobook', N'eAudiobook', 60, 1, N'eaudiobookMessage', N'required', N'Title', N'required', N'Author', N'optional', N'Identifier number', N'required', N'Publication Timing', SYSUTCDATETIME(), SYSUTCDATETIME());
 
-IF NOT EXISTS (SELECT 1 FROM [asap].[WorkflowTag] WHERE [Code] = N'duplicate_suggestion')
-    INSERT INTO [asap].[WorkflowTag] ([Code], [Label], [SortOrder]) VALUES (N'duplicate_suggestion', N'Duplicate suggestion', 10);
+DECLARE @workflowTags TABLE (Code nvarchar(100) PRIMARY KEY, Label nvarchar(256), SortOrder int);
+INSERT INTO @workflowTags VALUES
+    (N'duplicate_suggestion', N'Another patron requested this', 10),
+    (N'polaris_bib_found', N'Found in Polaris', 20),
+    (N'polaris_bib_not_found', N'No Polaris match', 30),
+    (N'polaris_multiple_matches', N'Multiple Polaris matches', 40),
+    (N'polaris_ematerials_only', N'E-materials only', 50);
 
-IF NOT EXISTS (SELECT 1 FROM [asap].[WorkflowTag] WHERE [Code] = N'polaris_bib_found')
-    INSERT INTO [asap].[WorkflowTag] ([Code], [Label], [SortOrder]) VALUES (N'polaris_bib_found', N'Polaris BIB found', 20);
+UPDATE tag SET [Label] = seed.Label
+FROM [asap].[WorkflowTag] AS tag JOIN @workflowTags AS seed ON seed.Code = tag.Code
+WHERE tag.Label COLLATE Latin1_General_100_BIN2 <> seed.Label;
 
-IF NOT EXISTS (SELECT 1 FROM [asap].[WorkflowTag] WHERE [Code] = N'polaris_bib_not_found')
-    INSERT INTO [asap].[WorkflowTag] ([Code], [Label], [SortOrder]) VALUES (N'polaris_bib_not_found', N'Polaris BIB not found', 30);
-
-IF NOT EXISTS (SELECT 1 FROM [asap].[WorkflowTag] WHERE [Code] = N'polaris_multiple_matches')
-    INSERT INTO [asap].[WorkflowTag] ([Code], [Label], [SortOrder]) VALUES (N'polaris_multiple_matches', N'Multiple Polaris matches', 40);
+INSERT INTO [asap].[WorkflowTag] ([Code], [Label], [SortOrder])
+SELECT Code, Label, SortOrder FROM @workflowTags AS seed
+WHERE NOT EXISTS (SELECT 1 FROM [asap].[WorkflowTag] WHERE Code = seed.Code);
 
 -- Refresh only a complete, byte-for-byte match to a previously shipped system row.
 -- Hold placed is an editor default. The hold workflow composes its own plain-text notice.

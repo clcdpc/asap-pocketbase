@@ -599,9 +599,9 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
       }, glyph('search'));
       const bibUrl = researchRecordUrl(request.research, 'bib', request.bibid);
       const promotionResult = request.status === 'outstanding_purchase' ? request.lastPromoterResult : null;
-      const flags = [...new Set([...(request.workflowTags || []), promotionResult,
-        !promotionResult && request.isbnCheckStatus === 'not_found' && !(request.workflowTags || []).includes('Polaris BIB not found') ? 'Identifier not found in Polaris' : null,
-        request.relatedRequests?.count > 0 ? `${request.relatedRequests.count} related request(s)` : null].filter(Boolean))];
+      const flags = [...new Set(request.requestTags)];
+      const count = request.relatedRequests?.count;
+      if (count > 0) flags.push(`${count} related request${count === 1 ? '' : 's'}`);
       return h('div', { className: 'request-bibliographic-cell' }, [
         h('div', { className: 'request-bibliographic-line' }, [
           h('a', { href: url.pathname + url.search, className: 'grid-open request-title-link request-cell-text', title: request.title,
@@ -616,7 +616,9 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
           h('span', { className: 'request-cell-text', title: request.author || 'Author not recorded' }, request.author || 'Author not recorded'), search('author', request.author)
         ]),
         bibUrl ? h('a', { className: 'request-bib-link', href: bibUrl, target: '_blank', rel: 'noopener noreferrer' }, `BIB ${request.bibid}`) : null,
-        flags.length ? h('div', { className: 'tags request-row-flags' }, flags.map(flag => h('span', { className: 'tag' }, flag))) : null
+        flags.length ? h('div', { className: 'tags request-row-flags' }, flags.map(flag => h('span', { className: 'tag' }, flag))) : null,
+        promotionResult && promotionResult !== request.catalogLookup?.label
+          ? h('small', { className: 'request-promotion-result' }, promotionResult) : null
       ]);
     }
     if (column.kind === 'submitted') {
@@ -627,8 +629,11 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     }
     if (column.kind === 'claim') return h('span', { className: `claim-label${request.claimedByStaffUserId === owner.id ? ' mine' : ''}`, title: cell }, cell);
     if (column.kind === 'identifier') {
+      const lookup = request.catalogLookup;
       return h('div', {}, [
         h('span', { className: 'request-cell-text', title: cell }, cell),
+        lookup && !(request.status === 'hold_placed' && lookup.code === 'polaris_bib_found')
+          ? h('div', { className: 'tags request-row-flags' }, h('span', { className: 'tag' }, lookup.label)) : null,
         request.status === 'closed' ? h('small', {}, closeReasonLabel(request.closeReason)) : null
       ]);
     }

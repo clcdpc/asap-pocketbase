@@ -4377,7 +4377,7 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 DECLARE @requestId bigint = SCOPE_IDENTITY();
                 INSERT INTO [asap].[TitleRequestWorkflowTag] ([TitleRequestId], [WorkflowTagId])
                     SELECT @requestId, [Id] FROM [asap].[WorkflowTag]
-                    WHERE [Code] IN (N'polaris_bib_found', N'polaris_bib_not_found', N'polaris_multiple_matches');
+                    WHERE [Code] IN (N'polaris_bib_found', N'polaris_bib_not_found', N'polaris_multiple_matches', N'polaris_ematerials_only');
 
                 INSERT INTO [asap].[TitleRequest]
                     ([LibraryOrganizationId], [Barcode], [Title], [Identifier], [AutoHold], [MaterialFormatId],
@@ -4984,7 +4984,10 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 VALUES (2, N'20000000002110', N'Identifier retry title', N'9780000002110', 1, @formatId, N'suggestion',
                         N'error_max_retries', N'Upstream unavailable.', 5, N'provider_timeout',
                         SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME());
-                SELECT @actorId, CONVERT(bigint, SCOPE_IDENTITY());
+                DECLARE @id bigint = SCOPE_IDENTITY();
+                INSERT INTO [asap].[TitleRequestWorkflowTag] ([TitleRequestId], [WorkflowTagId])
+                SELECT @id, Id FROM [asap].[WorkflowTag] WHERE Code IN (N'polaris_ematerials_only', N'duplicate_suggestion');
+                SELECT @actorId, @id;
                 """;
             seed.Parameters.AddWithValue("@objectId", Guid.Parse(identity.ObjectId!));
             await using var reader = await WithFixtureClock(seed).ExecuteReaderAsync();
@@ -5016,6 +5019,11 @@ public sealed partial class PatronJourneyTests : PolarisProtocolTestSupport
                 $"/api/asap/staff/title-requests/{requestId}/retry-identifier-check",
                 new { version = getBody.RootElement.GetProperty("version").GetString() });
             Assert.AreEqual(HttpStatusCode.OK, retry.StatusCode, await retry.Content.ReadAsStringAsync());
+            using var reloaded = await client.GetAsync($"/api/asap/staff/title-requests/{requestId}");
+            using var reset = JsonDocument.Parse(await reloaded.Content.ReadAsStringAsync());
+            Assert.AreEqual(JsonValueKind.Null, reset.RootElement.GetProperty("catalogLookup").ValueKind);
+            CollectionAssert.AreEqual(new[] { "Another patron requested this" },
+                reset.RootElement.GetProperty("workflowTags").EnumerateArray().Select(tag => tag.GetString()).ToArray());
 
             await using var verify = new SqlConnection(databaseConnectionString);
             await verify.OpenAsync();

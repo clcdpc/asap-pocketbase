@@ -66,6 +66,9 @@ public sealed partial class PatronJourneyTests
                 Assert.AreEqual(RequestStatus.OutstandingPurchase, row.Status);
                 Assert.AreEqual(phaseStart, row.UpdatedUtc);
                 Assert.AreEqual(timeProvider.GetUtcNow().UtcDateTime, row.LastPromoterCheckUtc);
+                CollectionAssert.AreEquivalent(new[] { "polaris_bib_not_found" },
+                    (await ReadBibOwnershipRequestAsync(row.Id)).IdentifierTags.ToArray());
+                Assert.AreEqual("No eligible Polaris BIB was found.", row.LastPromoterResult);
                 Assert.AreEqual(events, await db.TitleRequestEvents.CountAsync(item => item.TitleRequestId == row.Id));
                 Assert.IsFalse(row.HasTrustedBib);
                 Assert.AreEqual(notes, row.Notes);
@@ -361,6 +364,99 @@ public sealed partial class PatronJourneyTests
             db.WorkflowSettings.Remove(library);
             await db.SaveChangesAsync();
             await DeleteRequestAsync(seeded.Id);
+            await DeleteFulfillmentLibraryAsync(scope);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(false, false, "reopen")]
+    [DataRow(false, false, "edit")]
+    [DataRow(false, true, "edit")]
+    [DataRow(true, false, "edit")]
+    public async Task ClearingPromotionContextRetainsOnlyIndependentIdentifierEvidence(
+        bool staffVerified, bool providerFailed, string action)
+    {
+        var actor = await GetOwnershipTestActorAsync();
+        var scope = await CreateFulfillmentLibraryAsync();
+        const string identifier = "9780306406157";
+        const string earlierResult = "Only excluded e-materials matched the identifier.";
+        var earlierCheck = timeProvider!.GetUtcNow().UtcDateTime.AddDays(-1);
+        var seeded = await SeedBibOwnershipRequestAsync(identifier, 543, staffVerified, "not_found",
+            checkResult: earlierResult, lastCheckedUtc: earlierCheck,
+            status: RequestStatus.OutstandingPurchase, libraryOrganizationId: scope);
+        var services = factory!.Services;
+        var views = services.GetRequiredService<TitleRequestViewService>();
+        var mutations = services.GetRequiredService<TitleRequestMutationService>();
+        var provider = services.GetRequiredService<DeterministicTestingPatronProvider>();
+        await using var db = await services.GetRequiredService<IDbContextFactory<AsapDbContext>>().CreateDbContextAsync();
+        try
+        {
+            await ExecuteNonQueryAsync("""
+                INSERT INTO [asap].[TitleRequestWorkflowTag] ([TitleRequestId], [WorkflowTagId])
+                SELECT @id, Id FROM [asap].[WorkflowTag] WHERE Code IN (N'polaris_ematerials_only', N'duplicate_suggestion');
+                """, ("@id", seeded.Id));
+            db.WorkflowSettings.Add(new WorkflowSettings { OrganizationId = scope, AutoPromote = true });
+            await db.SaveChangesAsync();
+            provider.SetBib(543, scope, new(true, "Staff selection") { PrimaryMaterialTypeId = 36 });
+            provider.SetPurchaseIdentifierResult(identifier, scope, new(providerFailed
+                ? IdentifierLookupOutcome.OperationalFailure : IdentifierLookupOutcome.DefinitiveNotFound));
+            Assert.AreEqual("completed", (await services.GetRequiredService<WorkflowProcessingService>().ProcessWorkflowAsync(scope)).Code);
+            var row = await db.TitleRequests.SingleAsync(item => item.Id == seeded.Id);
+            Assert.AreEqual(RequestStatus.OutstandingPurchase, row.Status);
+            Assert.IsNotNull(row.LastPromoterCheckUtc);
+            Assert.IsNotNull(row.LastPromoterResult);
+            if (providerFailed)
+            {
+                Assert.IsNull(row.IsbnCheckStatus);
+                Assert.IsNull(row.IsbnCheckResult);
+                Assert.IsNull(row.LastCheckedUtc);
+                StringAssert.Contains(row.LastPromoterResult, "check again");
+            }
+            else if (!staffVerified)
+            {
+                Assert.AreEqual("not_found", row.IsbnCheckStatus);
+                Assert.AreEqual("No eligible Polaris BIB was found.", row.IsbnCheckResult);
+                Assert.AreEqual(row.LastPromoterCheckUtc, row.LastCheckedUtc);
+            }
+            var details = await views.GetAsync(actor, seeded.Id.ToString(), CancellationToken.None);
+            Assert.AreEqual(staffVerified ? "polaris_ematerials_only" : providerFailed ? null : "polaris_bib_not_found",
+                details!.CatalogLookup?.Code);
+            if (action == "reopen")
+            {
+                var close = new TitleRequestActionInput { Action = "closeDuplicate", Version = details.Version };
+                Assert.AreEqual("updated", (await mutations.ActionAsync(actor, row.Id, close.ToCommand(), CancellationToken.None)).Code);
+                await db.Entry(row).ReloadAsync();
+            }
+            var version = StaffVersion.Encode(row.RowVersion);
+            var input = action == "edit"
+                ? new TitleRequestActionInput { Action = action, Version = version, Bibid = 543, StaffSelectedBibId = 543 }
+                : new TitleRequestActionInput { Action = action, Version = version };
+            Assert.AreEqual("updated", (await mutations.ActionAsync(actor, row.Id, input.ToCommand(), CancellationToken.None)).Code);
+            await db.Entry(row).ReloadAsync();
+            Assert.IsNull(row.LastPromoterCheckUtc);
+            Assert.IsNull(row.LastPromoterResult);
+            Assert.AreEqual(staffVerified ? earlierCheck : null, row.LastCheckedUtc);
+            Assert.AreEqual(staffVerified ? "not_found" : null, row.IsbnCheckStatus);
+            Assert.AreEqual(staffVerified ? earlierResult : null, row.IsbnCheckResult);
+            Assert.IsNull(row.IsbnCheckLastErrorCode);
+            Assert.AreEqual(action == "edit", row.BibIdStaffVerified);
+            var grid = (await views.ListAsync(actor, LibraryScope.ForLibrary(scope), CancellationToken.None))!.Items.Single();
+            details = await views.GetAsync(actor, seeded.Id.ToString(), CancellationToken.None);
+            string[] labels = staffVerified ? ["E-materials only", "Another patron requested this"] : ["Another patron requested this"];
+            foreach (var dto in new[] { grid, details! })
+            {
+                Assert.AreEqual(row.IsbnCheckStatus, dto.IsbnCheckStatus);
+                Assert.AreEqual(row.IsbnCheckResult, dto.IsbnCheckResult);
+                Assert.AreEqual(staffVerified ? "polaris_ematerials_only" : null, dto.CatalogLookup?.Code);
+                CollectionAssert.AreEquivalent(labels, dto.WorkflowTags.ToArray());
+            }
+            string[] persisted = staffVerified ? ["polaris_ematerials_only"] : [];
+            CollectionAssert.AreEqual(persisted, (await ReadBibOwnershipRequestAsync(row.Id)).IdentifierTags.ToArray());
+        }
+        finally
+        {
+            await DeleteRequestAsync(seeded.Id);
+            await db.WorkflowSettings.Where(item => item.OrganizationId == scope).ExecuteDeleteAsync();
             await DeleteFulfillmentLibraryAsync(scope);
         }
     }

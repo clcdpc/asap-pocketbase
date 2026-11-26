@@ -144,14 +144,19 @@ async function until(predicate, message) {
       libraryOrgId: 2, libraryOrgName: 'Library two', format: 'book', formatLabel: 'Book', status: 'suggestion',
       created: `2026-10-${String(index % 20 + 1).padStart(2, '0')}T13:14:15Z`,
       claimedByStaffUserId: index % 2 ? '20' : null, claimedByDisplayName: index % 2 ? 'Current staff' : null,
-      workflowTags: index === 0 ? ['Visible warning'] : [], identifier: `IDENTIFIER-${index}`,
+      workflowTags: index === 0 ? ['Visible warning'] : [], requestTags: index === 0 ? ['Visible warning'] : [], identifier: `IDENTIFIER-${index}`,
       capabilities: { allowedActions: ['purchase', 'reject', 'alreadyOwn', 'silentClose'] },
       research: { patronId: index + 1, leapPatronUrlPattern: 'https://catalog.example.org/patron/{{patron-id}}' }
     })).reverse();
     // Text order differs from numeric order, and one saved value includes punctuation.
     data[0].isbnCheckStatus = 'found';
-    data[0].workflowTags = ['Polaris BIB found'];
+    data[0].workflowTags = ['Found in Polaris', 'Another patron requested this'];
+    data[0].catalogLookup = { code: 'polaris_bib_found', label: 'Found in Polaris' };
+    data[0].requestTags = ['Another patron requested this'];
+    data[0].relatedRequests = { count: 1 };
     data[1].isbnCheckStatus = 'not_found';
+    data[1].catalogLookup = { code: 'polaris_bib_not_found', label: 'No Polaris match' };
+    data[1].relatedRequests = { count: 2 };
     data[0].identifier = '2';
     data[1].identifier = '10';
     data[2].identifier = '000-123';
@@ -174,9 +179,12 @@ async function until(predicate, message) {
     await until(() => first()?.querySelector('.request-title-link'), 'Real Grid.js renders request title links.');
     assert.deepEqual([...get('#request-grid').querySelectorAll('th')].map(node => node.querySelector('.gridjs-th-content').textContent),
       ['Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Identifier', 'Actions']);
-    assert.match(rows()[0].cells[1].textContent, /Polaris BIB found/);
-    assert.doesNotMatch(rows()[0].cells[1].textContent, /not found|error_max_retries/i);
-    assert.match(rows()[1].cells[1].textContent, /Identifier not found in Polaris/);
+    const badges = cell => [...cell.querySelectorAll('.tag')].map(node => node.textContent);
+    assert.deepEqual(badges(rows()[0].cells[1]), ['Another patron requested this', '1 related request']);
+    assert.deepEqual(badges(rows()[1].cells[1]), ['2 related requests']);
+    assert.deepEqual(badges(rows()[2].cells[1]), []);
+    assert.deepEqual(badges(rows()[0].cells[6]), ['Found in Polaris']);
+    assert.deepEqual(badges(rows()[1].cells[6]), ['No Polaris match']);
     const headings = [...get('#request-grid').querySelectorAll('th')];
     const assertSort = (header, direction, next) => {
       const name = header.querySelector('.gridjs-th-content').textContent;
@@ -193,7 +201,7 @@ async function until(predicate, message) {
         await until(() => header.getAttribute('aria-sort') === direction, `Keyboard sort exposes ${direction}`);
         assertSort(header, direction, next);
         if (header.dataset.requestColumn === 'identifier' && direction === 'ascending') {
-          assert.deepEqual(rows().slice(0, 3).map(row => row.cells[6].textContent), ['000-123', '10', '2']);
+          assert.deepEqual(rows().slice(0, 3).map(row => row.cells[6].querySelector('.request-cell-text').textContent), ['000-123', '10', '2']);
         }
         assert.equal(document.activeElement, header, 'Sorting retains its header focus');
       }

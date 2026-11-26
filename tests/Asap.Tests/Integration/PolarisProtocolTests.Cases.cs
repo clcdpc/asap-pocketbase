@@ -53,6 +53,54 @@ public sealed partial class PolarisProtocolTests
     }
 
     [TestMethod]
+    [DataRow(0, 0, false, IdentifierLookupOutcome.DefinitiveNotFound)]
+    [DataRow(1, 1, false, IdentifierLookupOutcome.DefinitiveNotFound)]
+    [DataRow(12, 12, false, IdentifierLookupOutcome.DefinitiveNotFound)]
+    [DataRow(100, 100, false, IdentifierLookupOutcome.DefinitiveNotFound)]
+    [DataRow(125, 100, false, IdentifierLookupOutcome.IncompleteResults)]
+    [DataRow(12, 1, false, IdentifierLookupOutcome.IncompleteResults)]
+    [DataRow(12, 12, true, IdentifierLookupOutcome.Found)]
+    [DataRow(125, 100, true, IdentifierLookupOutcome.Found)]
+    public async Task IdentifierLookupRequiresCompleteExcludedResultsForEmaterialsOnly(
+        int total, int returned, bool physical, IdentifierLookupOutcome expected)
+    {
+        const string identifier = "9780000000099";
+        var rows = Enumerable.Range(1, returned).Select(id =>
+            SearchRow(id, "Catalog title", physical && id >= 11 ? 1 : 36)).ToArray();
+        var handler = new SequenceResponseHandler(
+            (HttpStatusCode.OK, PageResponse(0, [])),
+            (HttpStatusCode.OK, PageResponse(total, rows)),
+            (HttpStatusCode.OK, PageResponse(returned, rows)),
+            (HttpStatusCode.ServiceUnavailable, "{}"));
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.LookupIdentifierAsync(identifier, 2, CancellationToken.None);
+        Assert.AreEqual(expected, result.Outcome);
+        Assert.AreEqual(returned > 0 && expected != IdentifierLookupOutcome.IncompleteResults, result.FilteredByMaterialType);
+        Assert.AreEqual(physical ? 11 : (int?)null, result.BibId);
+        Assert.AreEqual(physical, result.MultipleMatches);
+        Assert.AreEqual(physical ? 4 : 3, handler.RequestCount);
+        AssertSearchRequest(handler.RequestUris[0], "/search/bibs/keyword/ISBN", identifier, "PDTI", 1, 100, noTransaction: false);
+        AssertSearchRequest(handler.RequestUris[1], "/search/bibs/boolean", $"UPC=\"{identifier}\"", "PDTI", 1, 100, noTransaction: false);
+        AssertSearchRequest(handler.RequestUris[2], "/search/bibs/keyword/LCCN", identifier, "PDTI", 1, 100, noTransaction: false);
+    }
+
+    [TestMethod]
+    public async Task IdentifierLookupCountsTheSameEligibleBibAcrossAttemptsOnce()
+    {
+        var first = PageResponse(1, [SearchRow(42, "First title", 1)]);
+        var duplicate = PageResponse(1, [SearchRow(42, "Later title", 1)]);
+        var handler = new SequenceResponseHandler((HttpStatusCode.OK, first), (HttpStatusCode.OK, duplicate),
+            (HttpStatusCode.OK, duplicate), (HttpStatusCode.ServiceUnavailable, "{}"));
+        var provider = await CreatePolarisProviderAsync(handler);
+        var result = await provider.LookupIdentifierAsync("9780000000099", 2, CancellationToken.None);
+        Assert.AreEqual(IdentifierLookupOutcome.Found, result.Outcome);
+        Assert.AreEqual(42, result.BibId);
+        Assert.AreEqual("First title", result.CatalogTitle);
+        Assert.IsFalse(result.MultipleMatches);
+        Assert.AreEqual(4, handler.RequestCount);
+    }
+
+    [TestMethod]
     public async Task PolarisStaffSearchUsesSupportedQueriesAndMapsCatalogRows()
     {
         var handler = new StaticResponseHandler(HttpStatusCode.OK,

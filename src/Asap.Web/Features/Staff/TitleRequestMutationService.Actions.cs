@@ -308,6 +308,7 @@ public sealed partial class TitleRequestMutationService
             request.Identifier = Clean(proposedIdentifier);
         }
         var clearsPromotion = request.LastPromoterCheckUtc.HasValue && (staffSelectedBib || input.Action == "reopen");
+        var retiresLookup = clearsPromotion && request.PromotionSupersedesIdentifierCheck;
         if (identifierChanged || bibChanged || clearsPromotion)
         {
             request.AutoVerifiedBibId = null;
@@ -321,7 +322,11 @@ public sealed partial class TitleRequestMutationService
             request.BibIdStaffVerified = false;
             InvalidateIdentifierCheckState(request);
         }
-        if (identifierChanged || bibChanged || clearsPromotion)
+        else if (retiresLookup)
+        {
+            request.RetireCompletedIdentifierCheck();
+        }
+        if (identifierChanged || bibChanged || retiresLookup)
         {
             await RemoveIdentifierTagsAsync(context, request.Id, cancellationToken);
         }

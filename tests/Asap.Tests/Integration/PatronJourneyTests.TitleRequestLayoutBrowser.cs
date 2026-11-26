@@ -33,8 +33,8 @@ public sealed partial class PatronJourneyTests
             {
                 (Status: "suggestion", Count: 1),
                 (Status: "outstanding_purchase", Count: 1),
-                (Status: "pending_hold", Count: 0),
-                (Status: "hold_placed", Count: 1),
+                (Status: "pending_hold", Count: 1),
+                (Status: "hold_placed", Count: 3),
                 (Status: "closed", Count: 2)
             };
             foreach (var (status, count) in rows)
@@ -57,11 +57,19 @@ public sealed partial class PatronJourneyTests
                         {
                             "suggestion" => "012345678X",
                             "outstanding_purchase" => "012345678905",
+                            "hold_placed" when index == 0 => "012345678X",
+                            "hold_placed" when index == 2 => "012345678905",
                             "closed" when longTitle => string.Concat(Enumerable.Repeat("0123456789-", 8)),
                             "closed" => "978-0-123456-78-9",
                             _ => null
                         },
                         Status = status,
+                        IsbnCheckStatus = status is "outstanding_purchase" or "closed" ? "not_found" : null,
+                        IsbnCheckLastErrorCode = longTitle ? "polaris_identifier_results_incomplete" : null,
+                        LastPromoterResult = status == "outstanding_purchase" ? "No eligible Polaris BIB was found." : null,
+                        Notes = status == "closed" && !longTitle
+                            ? "Identifier number verification completed: only e-materials found matching identifier 978-0-123456-78-9; these cannot be placed on hold in Polaris."
+                            : null,
                         AutoHold = false,
                         BibId = status is "pending_hold" or "hold_placed" ? 428900 + index : null,
                         BibIdStaffVerified = status is "pending_hold" or "hold_placed",
@@ -72,6 +80,24 @@ public sealed partial class PatronJourneyTests
                 }
             }
 
+            await setup.SaveChangesAsync();
+            var tagIds = await setup.WorkflowTags.ToDictionaryAsync(tag => tag.Code, tag => tag.Id);
+            foreach (var row in setup.TitleRequests.Local)
+            {
+                string[] codes = row.Barcode switch
+                {
+                    "LAYOUT-suggestion-0" => ["polaris_bib_found", "duplicate_suggestion"],
+                    "LAYOUT-outstanding_purchase-0" => ["polaris_bib_not_found"],
+                    "LAYOUT-hold_placed-0" => ["polaris_bib_found"],
+                    "LAYOUT-hold_placed-1" => ["polaris_bib_found", "polaris_multiple_matches"],
+                    "LAYOUT-hold_placed-2" => ["polaris_bib_not_found", "polaris_ematerials_only"],
+                    _ => []
+                };
+                foreach (var code in codes)
+                {
+                    setup.TitleRequestWorkflowTags.Add(new TitleRequestWorkflowTag { TitleRequestId = row.Id, WorkflowTagId = tagIds[code] });
+                }
+            }
             await setup.SaveChangesAsync();
             suggestionId = await setup.TitleRequests.Where(item => item.LibraryOrganizationId == library && item.Status == "suggestion")
                 .Select(item => item.Id).SingleAsync();
@@ -95,18 +121,25 @@ public sealed partial class PatronJourneyTests
             }
         }));
 
+        await using var settingsContext = await contexts.CreateDbContextAsync();
+        var system = await settingsContext.SystemSettings.SingleAsync(item => item.OrganizationId == 1);
+        var originalPattern = system.LeapBibUrlPattern;
         try
         {
+            system.LeapBibUrlPattern = "https://leap.example.test/bib/{{bibid}}";
+            await settingsContext.SaveChangesAsync();
             var (exitCode, stdout, stderr) = await RunBrowserScriptAsync(root, "title-requests-layout.cjs",
                 client.BaseAddress!.GetLeftPart(UriPartial.Authority), artifacts);
             Assert.AreEqual(0, exitCode, $"{artifacts}{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(artifacts, "browser-results.json")));
-            Assert.AreEqual(5, report.RootElement.GetProperty("viewportMatrix").GetArrayLength());
-            Assert.AreEqual(13, report.RootElement.GetProperty("resizeOnly").GetArrayLength());
+            Assert.AreEqual(6, report.RootElement.GetProperty("viewportMatrix").GetArrayLength());
+            Assert.AreEqual(14, report.RootElement.GetProperty("resizeOnly").GetArrayLength());
             Assert.AreEqual(2, report.RootElement.GetProperty("nativeZoom").GetArrayLength());
         }
         finally
         {
+            system.LeapBibUrlPattern = originalPattern;
+            await settingsContext.SaveChangesAsync();
             await using var cleanup = await contexts.CreateDbContextAsync();
             await cleanup.TitleRequests.Where(item => item.LibraryOrganizationId == library).ExecuteDeleteAsync();
             await cleanup.Organizations.Where(item => item.Id == library)

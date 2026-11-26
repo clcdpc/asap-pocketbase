@@ -436,6 +436,8 @@ public sealed partial class PatronJourneyTests
             fixture.Source.BibIdStaffVerified = true;
             var tag = await setup.WorkflowTags.SingleAsync(item => item.Code == "polaris_bib_found");
             setup.TitleRequestWorkflowTags.Add(new TitleRequestWorkflowTag { TitleRequestId = fixture.Source.Id, WorkflowTagId = tag.Id });
+            var electronic = await setup.WorkflowTags.SingleAsync(item => item.Code == "polaris_ematerials_only");
+            setup.TitleRequestWorkflowTags.Add(new TitleRequestWorkflowTag { TitleRequestId = fixture.Source.Id, WorkflowTagId = electronic.Id });
             await setup.SaveChangesAsync();
         }
         fixture.Provider.SetBib(9001, 2, new(true, "Verified title", Identifier: hasIdentifier ? "CATALOG" : null),

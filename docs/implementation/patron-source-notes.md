@@ -83,7 +83,7 @@ next-available-date text. Duplicate checks cover all statuses/history for that
 barcode/library: identifier first, then title+format or supplied BIB. Existing
 duplicate context includes created/status/close reason/title/author/format and
 match type. A different patron's matching identifier in the same library tags
-the new record as Duplicate suggestion with the existing system note.
+the new record as Another patron requested this with the existing system note.
 
 ## Configuration And Mail
 

@@ -365,6 +365,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .request-bib-link { font-size: .78rem; }
 .request-row-flags { gap: 4px; }
 .request-row-flags .tag { padding: 2px 4px; font-size: .7rem; }
+.request-promotion-result { font-size: .78rem; color: var(--muted); }
 #request-grid time { display: block; font-size: .85rem; }
 #request-grid time > span, #request-grid small { display: block; }
 #request-grid time small { margin-top: 3px; color: var(--muted); font-size: .78rem; }

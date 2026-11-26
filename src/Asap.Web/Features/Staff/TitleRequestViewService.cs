@@ -68,6 +68,8 @@ public sealed record RequestWorkflowContext(
     bool HoldPickupTimeoutEnabled,
     int? HoldPickupTimeoutDays);
 
+public sealed record LookupBadge(string Code, string Label);
+
 public sealed record TitleRequestDto(
     string Id,
     string Type,
@@ -123,6 +125,8 @@ public sealed record TitleRequestDto(
 {
     public bool CustomFieldsValid { get; init; } = true;
     public string? LastPromoterResult { get; init; }
+    public LookupBadge? CatalogLookup { get; init; }
+    public IReadOnlyList<string> RequestTags { get; init; } = [];
     public RelatedRequestSummary? RelatedRequests { get; init; }
     public RequestWorkflowContext? WorkflowContext { get; init; }
     public PickupOperationSummary? PickupOperation { get; init; }
@@ -362,15 +366,17 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
         var emailActivity = includeActivity
             ? await LoadEmailActivityAsync(context, requests.Single(), staff, cancellationToken)
             : [];
-        var tagRows = await (
-                from link in context.TitleRequestWorkflowTags.AsNoTracking()
-                join tag in context.WorkflowTags.AsNoTracking() on link.WorkflowTagId equals tag.Id
-                where ids.Contains(link.TitleRequestId)
-                orderby tag.SortOrder, tag.Id
-                select new { link.TitleRequestId, tag.Label })
+        var statusBadges = await context.WorkflowTags.AsNoTracking()
+            .Where(tag => tag.Code == IdentifierLookupTags.Found || tag.Code == IdentifierLookupTags.NotFound)
+            .Select(tag => new LookupBadge(tag.Code, tag.Label))
+            .ToDictionaryAsync(tag => tag.Code, cancellationToken);
+        var tagRows = await (from link in context.TitleRequestWorkflowTags.AsNoTracking()
+                             join tag in context.WorkflowTags on link.WorkflowTagId equals tag.Id
+                             where ids.Contains(link.TitleRequestId)
+                             orderby tag.SortOrder, tag.Id
+                             select new { link.TitleRequestId, Badge = new LookupBadge(tag.Code, tag.Label) })
             .ToListAsync(cancellationToken);
-        var tags = tagRows.GroupBy(item => item.TitleRequestId)
-            .ToDictionary(item => item.Key, item => (IReadOnlyList<string>)item.Select(value => value.Label).ToList());
+        var tags = tagRows.ToLookup(link => link.TitleRequestId, link => link.Badge);
         var operations = await context.HoldPlacementOperations.AsNoTracking()
             .Where(item => ids.Contains(item.TitleRequestId) &&
                 (item.CompletedUtc == null && !context.HoldPlacementOperations.Any(newer => newer.TitleRequestId == item.TitleRequestId &&
@@ -446,6 +452,25 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
                 customFields = null;
                 customFieldsValid = false;
             }
+            var requestTags = tags[request.Id].ToList();
+            var lookup = IdentifierLookupTags.InDisplayOrder
+                .Select(code => requestTags.Find(tag => tag.Code == code)).FirstOrDefault(tag => tag is not null);
+            if (lookup is null && !request.PromotionSupersedesIdentifierCheck &&
+                request.IsbnCheckLastErrorCode != IdentifierCheckState.IncompleteResultsErrorCode)
+            {
+                // Older completed checks can lack a tag. Editable notes cannot establish why a check missed.
+                var code = request.IsbnCheckStatus switch
+                {
+                    IdentifierCheckState.Found => IdentifierLookupTags.Found,
+                    IdentifierCheckState.NotFound => IdentifierLookupTags.NotFound,
+                    _ => null
+                };
+                if (code is not null)
+                {
+                    lookup = statusBadges[code];
+                    requestTags.Add(lookup);
+                }
+            }
             result.Add(new TitleRequestDto(
                 request.Id.ToString(CultureInfo.InvariantCulture),
                 "title_request",
@@ -484,7 +509,7 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
                 request.IsbnCheckRetryCount,
                 request.IsbnCheckLastErrorCode,
                 AsUtc(request.LastCheckedUtc),
-                tags.GetValueOrDefault(request.Id) ?? [],
+                requestTags.Select(tag => tag.Label).ToArray(),
                 AsUtc(phaseEnteredAt),
                 AsUtc(request.CreatedUtc),
                 AsUtc(request.UpdatedUtc),
@@ -516,6 +541,9 @@ public sealed partial class TitleRequestViewService(IDbContextFactory<AsapDbCont
                     .ThenBy(item => long.Parse(item.Id, CultureInfo.InvariantCulture)).ToArray() : [])
             {
                 CustomFieldsValid = customFieldsValid,
+                CatalogLookup = lookup,
+                RequestTags = requestTags.Where(tag => !IdentifierLookupTags.InDisplayOrder.Contains(tag.Code))
+                    .Select(tag => tag.Label).ToArray(),
                 LastPromoterResult = request.LastPromoterResult,
                 Research = research with { PatronId = request.PatronIdSnapshot is > 0 ? request.PatronIdSnapshot : null },
                 AdditionalCopyRequestId = latestCopy?.Id.ToString(CultureInfo.InvariantCulture),

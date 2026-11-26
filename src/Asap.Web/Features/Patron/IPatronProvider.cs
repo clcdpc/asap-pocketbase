@@ -85,7 +85,8 @@ public enum IdentifierLookupOutcome
     DefinitiveNotFound,
     NotFound = DefinitiveNotFound,
     TransientFailure,
-    OperationalFailure
+    OperationalFailure,
+    IncompleteResults
 }
 
 public sealed record IdentifierLookupResult(

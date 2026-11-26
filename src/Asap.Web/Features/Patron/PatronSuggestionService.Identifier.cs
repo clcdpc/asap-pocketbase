@@ -187,10 +187,12 @@ public sealed partial class PatronSuggestionService
             }
         }
 
+        var incomplete = result.Outcome == IdentifierLookupOutcome.IncompleteResults;
+        const string incompleteExplanation = "Polaris returned incomplete identifier search results. No eligible BIB could be confirmed.";
         var status = result.Outcome switch
         {
             IdentifierLookupOutcome.Found when result.BibId is > 0 => "found",
-            IdentifierLookupOutcome.DefinitiveNotFound => "not_found",
+            IdentifierLookupOutcome.DefinitiveNotFound or IdentifierLookupOutcome.IncompleteResults => "not_found",
             IdentifierLookupOutcome.TransientFailure => "pending",
             _ => null
         };
@@ -206,6 +208,7 @@ public sealed partial class PatronSuggestionService
             "found" when bibIdStaffVerified =>
                 $"Identifier number verification found a Polaris bibliographic match (BIB ID {result.BibId}); staff-selected BIB ID {currentBibId} was retained.",
             "found" => $"Identifier number verification found a Polaris bibliographic match (BIB ID {result.BibId}).",
+            "not_found" when incomplete => incompleteExplanation,
             "not_found" when result.FilteredByMaterialType =>
                 $"Identifier number verification completed: only e-materials found matching identifier {identifier}; these cannot be placed on hold in Polaris.",
             "not_found" => "Identifier number verification completed: no Polaris bibliographic match found.",
@@ -240,6 +243,8 @@ public sealed partial class PatronSuggestionService
                 [IsbnCheckResult] =
                     CASE
                         WHEN @status = N'found' THEN N'Polaris bibliographic match found.'
+                        WHEN @incompleteExplanation IS NOT NULL THEN @incompleteExplanation
+                        WHEN @status = N'not_found' AND @filtered = 1 THEN N'Only excluded e-materials matched the identifier.'
                         WHEN @status = N'not_found' THEN N'No Polaris bibliographic match found.'
                         ELSE [IsbnCheckResult]
                     END,
@@ -264,11 +269,13 @@ public sealed partial class PatronSuggestionService
         {
             Add(update, "@now", SqlDbType.DateTime2, timeProvider.GetUtcNow().UtcDateTime);
             Add(update, "@status", SqlDbType.NVarChar, status, 32);
+            Add(update, "@filtered", SqlDbType.Bit, result.FilteredByMaterialType);
+            Add(update, "@incompleteExplanation", SqlDbType.NVarChar, incomplete ? incompleteExplanation : null, 500);
             Add(update, "@retryIncrement", SqlDbType.Int, retryIncrement);
             Add(update, "@bibId", SqlDbType.Int, result.BibId);
             Add(update, "@title", SqlDbType.NVarChar, reconciledTitle, 500);
             Add(update, "@author", SqlDbType.NVarChar, reconciledAuthor, 500);
-            Add(update, "@errorCode", SqlDbType.NVarChar, result.ErrorCode, 100);
+            Add(update, "@errorCode", SqlDbType.NVarChar, incomplete ? IdentifierCheckState.IncompleteResultsErrorCode : result.ErrorCode, 100);
             Add(update, "@note", SqlDbType.NVarChar, note, -1);
             Add(update, "@requestId", SqlDbType.BigInt, requestId);
             Add(update, "@organizationId", SqlDbType.Int, organizationId);
@@ -283,52 +290,34 @@ public sealed partial class PatronSuggestionService
             return new IdentifierLookupProcessingResult(result.Outcome);
         }
 
-        if (status == "found" || status == "not_found" && !result.FilteredByMaterialType)
+        if (status is "found" or "not_found")
         {
             await using var tag = new SqlCommand(
                 """
-                INSERT INTO [asap].[TitleRequestWorkflowTag] ([TitleRequestId], [WorkflowTagId])
-                SELECT @requestId, tag.[Id]
-                FROM [asap].[WorkflowTag] AS tag
-                WHERE tag.[Code] = @tagCode
-                  AND NOT EXISTS
-                  (
-                      SELECT 1 FROM [asap].[TitleRequestWorkflowTag]
-                      WHERE [TitleRequestId] = @requestId
-                        AND [WorkflowTagId] = tag.[Id]
-                  );
-                """,
-                connection,
-                transaction);
-            Add(tag, "@requestId", SqlDbType.BigInt, requestId);
-            Add(
-                tag,
-                "@tagCode",
-                SqlDbType.NVarChar,
-                status == "found" ? "polaris_bib_found" : "polaris_bib_not_found",
-                100);
-            await tag.ExecuteNonQueryAsync(cancellationToken);
-        }
+                DELETE link FROM [asap].[TitleRequestWorkflowTag] AS link
+                JOIN [asap].[WorkflowTag] AS tag ON tag.[Id] = link.[WorkflowTagId]
+                WHERE link.[TitleRequestId] = @requestId
+                  AND tag.[Code] IN (SELECT value FROM STRING_SPLIT(@derivedCodes, ','));
 
-        if (result.MultipleMatches)
-        {
-            await using var multiple = new SqlCommand(
-                """
                 INSERT INTO [asap].[TitleRequestWorkflowTag] ([TitleRequestId], [WorkflowTagId])
                 SELECT @requestId, tag.[Id]
                 FROM [asap].[WorkflowTag] AS tag
-                WHERE tag.[Code] = N'polaris_multiple_matches'
-                  AND NOT EXISTS
-                  (
-                      SELECT 1 FROM [asap].[TitleRequestWorkflowTag]
-                      WHERE [TitleRequestId] = @requestId
-                        AND [WorkflowTagId] = tag.[Id]
-                  );
+                WHERE tag.[Code] IN (@outcome, @multiple);
                 """,
                 connection,
                 transaction);
-            Add(multiple, "@requestId", SqlDbType.BigInt, requestId);
-            await multiple.ExecuteNonQueryAsync(cancellationToken);
+            var outcomeTag = result.Outcome switch
+            {
+                IdentifierLookupOutcome.Found => IdentifierLookupTags.Found,
+                IdentifierLookupOutcome.DefinitiveNotFound => result.FilteredByMaterialType
+                    ? IdentifierLookupTags.EmaterialsOnly : IdentifierLookupTags.NotFound,
+                _ => null
+            };
+            Add(tag, "@requestId", SqlDbType.BigInt, requestId);
+            Add(tag, "@derivedCodes", SqlDbType.NVarChar, string.Join(',', IdentifierLookupTags.InDisplayOrder), -1);
+            Add(tag, "@outcome", SqlDbType.NVarChar, outcomeTag, 100);
+            Add(tag, "@multiple", SqlDbType.NVarChar, result.MultipleMatches ? IdentifierLookupTags.Multiple : null, 100);
+            await tag.ExecuteNonQueryAsync(cancellationToken);
         }
 
         byte[]? queueProgressVersion = null;

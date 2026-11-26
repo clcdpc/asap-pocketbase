@@ -166,7 +166,7 @@ const [baseURL, artifacts, staffId, tenantId, email, sourceId, library, barcode,
     await claims.selectOption('all');
     await page.getByRole('button', { name: `Requests (${priorSuggestions + 1})`, exact: true }).waitFor();
     const row = page.locator('#request-grid tr').filter({ has: page.getByRole('link', { name: `Open request ${created.id}:`, exact: false }) });
-    await row.waitFor(); assert.match(await row.textContent(), /Browser claimant/); assert.match(await row.textContent(), /Duplicate suggestion/i);
+    await row.waitFor(); assert.match(await row.textContent(), /Browser claimant/); assert.match(await row.textContent(), /Another patron requested this/);
     await claims.selectOption('mine_unclaimed');
     await row.waitFor({ state: 'hidden' });
     await page.getByRole('link', { name: `Open request ${sourceId}:`, exact: false }).waitFor();
