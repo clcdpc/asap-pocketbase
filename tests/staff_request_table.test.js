@@ -294,7 +294,8 @@ async function until(predicate, message) {
     get('#claim-filter').value = 'all'; get('#claim-filter').dispatchEvent(new dom.window.Event('change'));
     await until(() => rows().length === 25 && get('#request-grid .gridjs-summary')?.textContent.includes('of 54'), 'Clearing claim renders before another filter action.');
     get('#similar-filter').value = 'unique'; get('#similar-filter').dispatchEvent(new dom.window.Event('change'));
-    await until(() => get('#request-grid .gridjs-notfound'), 'Similarity can hide all rows without changing scope totals.');
+    await until(() => !get('#queue-empty').hidden, 'Similarity can hide all rows without changing scope totals.');
+    assert.equal(get('#request-grid').hidden, true);
     assertCounts();
     get('#similar-filter').value = 'all'; get('#similar-filter').dispatchEvent(new dom.window.Event('change'));
     await until(() => rows().length === 25, 'Clearing similarity restores the accepted records.');

@@ -77,7 +77,7 @@ async function selectStage(page, stage) {
   await page.waitForFunction(stage => document.querySelector(`#status-tabs [data-status="${stage}"]`)?.getAttribute('aria-selected') === 'true', stage);
   const expected = expectedTitles[stage].length;
   if (expected === 0) {
-    await page.locator('#request-grid .gridjs-notfound').waitFor();
+    await page.locator('#queue-empty').waitFor();
   } else {
     await page.getByText(`Showing 1 to ${expected} of ${expected} results`, { exact: true }).waitFor();
     await page.waitForFunction(expected => {
@@ -184,10 +184,13 @@ async function measure(page, name, width, stage) {
     const title = queue.querySelector('h1').getBoundingClientRect();
     const actions = heading.querySelector('.section-heading-actions').getBoundingClientRect();
     const headingStyle = getComputedStyle(heading);
+    const footer = grid.querySelector('.gridjs-footer').getBoundingClientRect();
     return {
       name: info.name,
       viewportWidth: innerWidth,
       stage: info.stage,
+      afterRow: footer.top - table.tBodies[0].lastElementChild.getBoundingClientRect().bottom,
+      afterFooter: grid.getBoundingClientRect().bottom - footer.bottom,
       tableIdentity: tableIds.get(table),
       document: { clientWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth },
       focusedRegion: active === wrapper,
@@ -297,6 +300,8 @@ async function measure(page, name, width, stage) {
       'https://leap.example.test/bib/428900');
   }
   assert.equal(metric.focusedRegion, true, `${name}/${stage}: the table region receives focus.`);
+  assert.ok(metric.afterRow >= -1 && metric.afterRow <= 20 && Math.abs(metric.afterFooter) <= 3,
+    `${name}/${stage}: short grid ends at its footer (gaps ${metric.afterRow}, ${metric.afterFooter})`);
   assert.deepEqual(metric.region, { role: 'region', tabIndex: 0, label: 'Title requests' });
   assert.equal(metric.cleanup.removedNodesAbsent, true, `${name}/${stage}: removed helper elements are absent.`);
   assert.ok(metric.cleanup.headingAlignmentError <= 1, `${name}/${stage}: title and controls align without space for a subtitle.`);
@@ -395,6 +400,21 @@ async function collectViewport(page, viewport) {
     }
   }
   report.viewportMatrix.push({ ...viewport, stages: entries });
+  const grid = page.locator('#request-grid'), search = page.locator('#request-search');
+  await search.fill('no matching layout fixture');
+  const empty = page.locator('#queue-empty');
+  await empty.waitFor();
+  assert.equal(await grid.isHidden(), true);
+  assert.equal(await page.getByText('No requests match these filters.', { exact: true }).filter({ visible: true }).count(), 1);
+  const emptyGap = await empty.evaluate(node => node.getBoundingClientRect().top -
+    document.querySelector('#queue-view .queue-filters').getBoundingClientRect().bottom);
+  assert.ok(Math.abs(emptyGap) <= 1, `${viewport.name}: empty message immediately follows the filters`);
+  if (viewport.width === 901) {
+    await scan(page, 'filtered-empty-901');
+    await page.screenshot({ path: path.join(artifacts, 'filtered-empty-901.png') });
+  }
+  await search.fill('');
+  await grid.locator('.gridjs-summary').filter({ hasText: 'Showing 1 to 2 of 2 results' }).waitFor();
   if (viewport.width === 390) {
     const closed = entries.find(entry => entry.stage === 'closed');
     const wrapper = page.locator('#request-grid .gridjs-wrapper');

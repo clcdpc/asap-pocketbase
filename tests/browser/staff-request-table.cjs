@@ -23,6 +23,55 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await page.locator('#refresh-queue:not([disabled])').waitFor();
   await page.locator('#claim-filter').selectOption('all');
   await page.waitForFunction(() => document.querySelectorAll('#request-grid tbody tr').length === 25);
+  // Use the fixture's authorized suggestions to exercise exact page-size boundaries.
+  const listPath = '**/api/asap/staff/title-requests?*';
+  let population = 51;
+  const limitedList = async route => {
+    const response = await route.fetch(), list = await response.json();
+    const items = list.items.filter(item => item.status === 'suggestion').slice(0, population)
+      .map((item, index) => ({ ...item, workflowTags: [1, 5, 24, 25, 26].filter(limit => index < limit).map(String) }));
+    await route.fulfill({ response, json: { ...list, items } });
+  };
+  const summary = text => grid.locator('.gridjs-summary').filter({ hasText: text }).waitFor();
+  const pages = grid.locator('.gridjs-pages');
+  await page.route(listPath, limitedList);
+  try {
+    await page.locator('#refresh-queue').click();
+    await summary('Showing 1 to 25 of 51 results');
+    for (const limit of [26, 25, 24, 5, 1]) {
+      await page.locator('#tag-filter').selectOption(String(limit));
+      await summary(`Showing 1 to ${Math.min(25, limit)} of ${limit} results`);
+      assert.equal(await pages.isVisible(), limit > 25);
+      if (limit === 26) {
+        await grid.getByRole('button', { name: 'Next', exact: true }).click();
+        await summary('Showing 26 to 26 of 26 results');
+        await grid.getByRole('button', { name: 'Previous', exact: true }).waitFor();
+      } else {
+        assert.equal(await grid.getByRole('button', { name: 'Next', exact: true }).count(), 0);
+        assert.equal(await pages.locator('button').first().evaluate(button => {
+          button.focus(); return document.activeElement === button;
+        }), false);
+      }
+    }
+    await search.fill('no matching fixture title');
+    await page.locator('#queue-empty').waitFor();
+    assert.equal(await grid.isHidden(), true);
+    await search.fill(''); await page.locator('#tag-filter').selectOption('all');
+    await summary('Showing 1 to 25 of 51 results');
+    await pages.getByText('3', { exact: true }).click();
+    await summary('Showing 51 to 51 of 51 results');
+    await page.locator('#refresh-queue').click();
+    await page.locator('#refresh-queue:enabled').waitFor();
+    await summary('Showing 51 to 51 of 51 results');
+    population = 25;
+    await page.locator('#refresh-queue').click();
+    await summary('Showing 1 to 25 of 25 results');
+    assert.equal(await pages.isHidden(), true);
+  } finally {
+    await page.unroute(listPath, limitedList);
+  }
+  await page.locator('#refresh-queue').click();
+  await summary('Showing 1 to 25 of 56 results');
   assert.deepEqual(await grid.locator('th .gridjs-th-content').allTextContents(),
     ['Barcode', 'Bibliographic details', 'Format', 'Submitted', 'Library', 'Claim', 'Identifier', 'Actions']);
   for (const header of await grid.locator('th').all().then(headers => headers.slice(0, 7))) {

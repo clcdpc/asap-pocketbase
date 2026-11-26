@@ -11,7 +11,7 @@ function detachGridContainer(container) {
   return replacement;
 }
 
-function createQueueGrid(options, container) {
+function createQueueGrid(options, container, onDisplay) {
   // Grid.js 6 forceRender reuses a mutable store/pipeline: old sort completions
   // can replace newer filtered rows. Give each revision its own instance while
   // keeping the outer queue/focus owner stable and preserving its selected sort.
@@ -73,6 +73,11 @@ function createQueueGrid(options, container) {
       observer?.disconnect(); unsubscribe?.();
       frame.remove(); cleanup();
     } };
+    const display = () => {
+      container.replaceChildren(frame);
+      displayed = revision;
+      onDisplay?.(frame, configuration);
+    };
     if (stage) {
       // A status selection filters accepted rows. Grid.js first mounts an empty
       // body, then commits data asynchronously. Keep the previous frame inert
@@ -84,15 +89,13 @@ function createQueueGrid(options, container) {
             !body || body.rows.length !== Math.max(1, state.data?.rows.length ?? 0)) return;
         observer.disconnect(); unsubscribe();
         displayed?.retire();
-        container.replaceChildren(frame);
-        displayed = revision;
+        display();
       };
       observer = new window.MutationObserver(present);
       observer.observe(frame, { childList: true, subtree: true });
       unsubscribe = grid.config.store.subscribe(present);
     } else {
-      container.replaceChildren(frame);
-      displayed = revision;
+      display();
     }
     grid.render(frame);
     return revision;
@@ -284,7 +287,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     const available = state.countState === 'ready' && !state.stale &&
       state.loadedContext?.scope === getContext().scope && sessionIdentity.isCurrent(state.loadedOwner);
     const loading = state.countState === 'loading';
-    if (!available) { renderNavigationCount(); }
+    if (!available) { dom.empty.hidden = true; renderNavigationCount(); }
     for (const { tab, label, count } of statusCounts) {
       const total = available ? state.requests.filter(request => request.status === tab.dataset.status).length : null;
       count.textContent = available ? `(${total})` : loading ? '(…)' : '(—)';
@@ -666,8 +669,12 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     onRendered();
     const requests = filteredRequests();
     if (getContext().status === 'suggestion' && isReady(getContext())) { renderNavigationCount(requests.length); }
-    dom.empty.hidden = state.stale || requests.length !== 0;
-    if (state.stale) return;
+    if (state.stale) {
+      dom.grid.hidden = true;
+      dom.empty.hidden = true;
+      return;
+    }
+    if (state.gridStatus !== getContext().status) { dom.empty.hidden = true; }
     const definitions = queueColumns();
     const rows = requests.map(request => definitions.map(column => column.value(request)));
     const currentPage = state.grid?.page() ?? 0;
@@ -685,7 +692,11 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
         sort: true,
         pagination: { limit: 25, summary: true, resetPageOnUpdate: false },
         language: { noRecordsFound: 'No requests match these filters.' }
-      }, dom.grid);
+      }, dom.grid, (frame, { data, pagination }) => {
+        frame.classList.toggle('single-page', data.length <= pagination.limit);
+        dom.grid.hidden = data.length === 0;
+        dom.empty.hidden = data.length !== 0 || !isReady(getContext());
+      });
     } else {
       // Refresh retains the current page, clamped to the accepted rows. Filters reset it.
       state.grid.replaceRows(rows, page, state.gridStatus !== getContext().status);
@@ -761,7 +772,7 @@ export function createTitleQueue({ root, sessionIdentity, claimsFilter, getConte
     preferencesChanged() { if (disposed) { return; } claimsControl.sync(); renderProjection(); },
     clear: retireProjection,
     signedOut() { if (disposed) return; claimsControl.setStaff(null); retireProjection(); },
-    dispose() { if (disposed) return; disposed = true; claimsControl.dispose(); gridAccessibility.disconnect(); events.abort(); invalidate(); cancelRefresh(); state.countState = 'unavailable'; renderNavigationCount(); state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
+    dispose() { if (disposed) return; disposed = true; claimsControl.dispose(); gridAccessibility.disconnect(); events.abort(); invalidate(); cancelRefresh(); state.countState = 'unavailable'; renderNavigationCount(); dom.empty.hidden = true; state.grid?.destroy?.(); state.grid = null; dom.grid = detachGridContainer(dom.grid); state.requests = []; }
   };
 }
 
@@ -800,7 +811,19 @@ export function createCopyQueue({ root, sessionIdentity, claimsFilter, getContex
     { name: 'Action', kind: 'action', width: '150px' }
   ];
 
-  function invalidate() { targetGeneration++; reads.begin('queue-target').abort(); reads.begin('queue').abort(); if (!disposed) dom.additionalCopyRefresh.disabled = false; }
+  const unavailable = 'Additional-copy tasks unavailable. Refresh to load current tasks.';
+  function setStatus(message) {
+    dom.additionalCopySummary.textContent = message;
+    dom.additionalCopySummary.hidden = !message;
+  }
+
+  function invalidate() {
+    targetGeneration++; reads.begin('queue-target').abort(); reads.begin('queue').abort();
+    if (!disposed) {
+      dom.additionalCopyRefresh.disabled = false;
+      if (state.stale) setStatus(unavailable);
+    }
+  }
 
   async function prepare(context) {
     const owner = sessionIdentity.preferences(), load = reads.begin('queue-target'), ticket = ++targetGeneration;
@@ -819,6 +842,7 @@ export function createCopyQueue({ root, sessionIdentity, claimsFilter, getContex
     state.loadedContext = Object.freeze({ scope: result.scope, status: getContext().additionalCopyStatus });
     state.loadedOwner = owner;
     state.stale = false;
+    setStatus('');
     if (sessionIdentity.actor()?.role === 'super_admin') { setLibraries(result.availableLibraries); onLibraries(result.availableLibraries); }
     const reviewReady = evidence && recovery.loaded(evidence, { scope: result.scope, status: result.status });
     if (reviewReady) dom.additionalCopySearch.value = '';
@@ -833,6 +857,7 @@ export function createCopyQueue({ root, sessionIdentity, claimsFilter, getContex
     const wasReviewReady = recovery.current()?.reviewReady;
     const evidence = recovery.begin();
     dom.additionalCopyRefresh.disabled = true;
+    if (state.stale) setStatus('Loading authorized tasks...');
     if (wasReviewReady) renderAdditionalCopyGrid();
     const clearLoading = !options.silent ? announce('Loading authorized additional-copy tasks...') : null;
     try {
@@ -849,12 +874,17 @@ export function createCopyQueue({ root, sessionIdentity, claimsFilter, getContex
       if (!options.silent && reviewReady) announce('Open additional-copy tasks loaded. Review the matching tasks and acknowledge the review before trying again.');
       return true;
     } catch (error) {
-      if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) &&
-          !options.silent && !isAbortError(error) && error.status !== 401) announce(error.message || 'Additional-copy tasks could not be loaded.', 'error');
+      if (!disposed && load.isCurrent() && sessionIdentity.isCurrent(owner) && !isAbortError(error) && error.status !== 401) {
+        setStatus(unavailable);
+        if (!options.silent) announce(error.message || 'Additional-copy tasks could not be loaded.', 'error');
+      }
       return false;
     } finally {
       if (typeof clearLoading === 'function') clearLoading();
-      if (!disposed && load.isCurrent()) dom.additionalCopyRefresh.disabled = false;
+      if (!disposed && load.isCurrent()) {
+        dom.additionalCopyRefresh.disabled = false;
+        if (state.stale) setStatus(unavailable);
+      }
       reads.finish('queue', load.token);
     }
   }
@@ -998,8 +1028,6 @@ export function createCopyQueue({ root, sessionIdentity, claimsFilter, getContex
       }
     }
     const requests = filteredAdditionalCopies();
-    dom.additionalCopySummary.textContent = state.stale ? 'Additional-copy tasks unavailable. Refresh to load current tasks.'
-      : `${requests.length} ${getContext().additionalCopyStatus} task${requests.length === 1 ? '' : 's'}`;
     dom.additionalCopyEmpty.hidden = state.stale || requests.length !== 0;
     if (state.stale) return;
     // Every cell carries the same immutable task identity and accepted context.

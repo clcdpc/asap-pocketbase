@@ -69,7 +69,7 @@ async function until(predicate, message) {
         const before = { reads: calls.length, rendered };
         get(`#status-tabs [data-status="${status}"]`).click();
         await until(() => !get('#request-grid').firstElementChild.inert &&
-          (status === 'pending_hold' ? get('#request-grid .gridjs-notfound') :
+          (status === 'pending_hold' ? !get('#queue-empty').hidden && get('#request-grid').hidden :
             get('#request-grid .request-title-link')?.textContent.startsWith(status)), `${status} commits its own rows.`);
         assert.equal(calls.length, before.reads, 'Fresh status-only selection must not fetch.');
         assert.equal(rendered, before.rendered + 1, 'One selection must request exactly one table revision.');

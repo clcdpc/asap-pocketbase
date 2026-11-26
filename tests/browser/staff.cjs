@@ -3392,7 +3392,7 @@ async function runNavigationSupport(browser, args, axeSource, report) {
     ]) {
       await page.locator('#similar-filter').selectOption(filter);
       if (expected === 0) {
-        await page.locator('#request-grid .gridjs-notfound').waitFor();
+        await page.locator('#queue-empty').waitFor();
       } else {
         await page.locator('#request-grid .gridjs-summary').filter({ hasText: `of ${expected} results` }).waitFor();
       }

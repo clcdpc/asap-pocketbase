@@ -3185,8 +3185,11 @@ for (const copy of [false, true]) {
         assert.equal(ui.get(`${grid} .grid-open`), null);
         assert.doesNotMatch(ui.get(grid).textContent, /Before configuration commit/);
         assert.match(ui.get(copy ? '#additional-copy-summary' : '#status-count-state').textContent, /unavailable/i);
+        assert.equal(ui.get(copy ? '#additional-copy-summary' : '#status-count-state').hidden, false);
+        assert.equal(ui.get(copy ? '#additional-copy-empty' : '#queue-empty').hidden, true);
         available = true; ui.get(copy ? '#refresh-additional-copies' : '#refresh-queue').click();
         await until(() => /Reviewed request/.test(ui.get(grid).textContent), 'explicit retry renders fresh data');
+        if (copy) assert.equal(ui.get('#additional-copy-summary').hidden, true);
       }, { request: { title: 'Before configuration commit' }, copyRequest: {} }));
   }
   for (const settingsScope of ['2', '3', 'system', '1']) {

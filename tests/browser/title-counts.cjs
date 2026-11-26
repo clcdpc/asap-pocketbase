@@ -58,6 +58,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.match(await page.locator('#status-count-state').textContent(), loading ? /Counts loading/ : /requests unavailable/i);
     await page.getByRole('button', { name: 'Requests', exact: true }).waitFor();
     assert.match(await page.locator('#requests-count-state').textContent(), loading ? /loading/ : /unavailable/);
+    assert.equal(await page.locator('#queue-empty').isHidden(), true);
     assert.ok(await page.locator('#status-count-state').evaluate(node => node.getBoundingClientRect().height > 0),
       'Loading and unavailable feedback remains visible.');
   };
@@ -144,12 +145,14 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
       await page.locator('#additional-copy-grid').getByRole('button', { name: 'Next', exact: true }).click();
       await page.waitForFunction(() => document.querySelectorAll('#additional-copy-grid .additional-copy-open').length === 1);
       await page.locator('#additional-copy-search').fill('Counted copy 01');
-      await page.waitForFunction(() => document.querySelector('#additional-copy-summary').textContent === '1 open task');
+      await page.locator('#additional-copy-grid .gridjs-summary').filter({ hasText: 'Showing 1 to 1 of 1 results' }).waitFor();
+      assert.equal(await page.locator('#additional-copy-summary').isHidden(), true);
       await open.waitFor(); await closed.waitFor(); await nav.waitFor();
       await page.locator('#additional-copy-search').fill('');
       await page.locator('#additional-copy-claim-filter').selectOption('mine');
       await requestsNav(page, 0).waitFor();
-      await page.waitForFunction(() => document.querySelector('#additional-copy-summary').textContent === '0 open tasks');
+      await page.locator('#additional-copy-empty').waitFor();
+      assert.equal(await page.locator('#additional-copy-summary').isHidden(), true);
       await open.waitFor(); await closed.waitFor();
       await page.locator('#additional-copy-claim-filter').selectOption('all');
       await requestsNav(page, fixture.libraryCounts[0]).waitFor();
@@ -164,6 +167,13 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     page.off('request', observeCount);
     await open.focus(); await page.keyboard.press('End');
     await page.locator('[data-copy-status="closed"][aria-selected="true"]').waitFor();
+    await page.locator('#additional-copy-grid .gridjs-summary').filter({ hasText: 'Showing 1 to 3 of 3 results' }).waitFor();
+    const heading = await page.locator('#additional-copy-title').evaluate(title => {
+      const summary = document.querySelector('#additional-copy-summary');
+      return { summary: summary.textContent, height: summary.getBoundingClientRect().height,
+        reserved: title.parentElement.getBoundingClientRect().height - title.getBoundingClientRect().height };
+    });
+    assert.deepEqual(heading, { summary: '', height: 0, reserved: 0 });
     await nav.waitFor();
     assert.equal(await closed.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
     await scan(page, name + '-copy-totals', closed);
@@ -215,7 +225,12 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     page.on('request', request => {
       if (new URL(request.url()).pathname === '/api/asap/staff/additional-copies/counts') copyReads++;
     });
+    const initial = holdRead('hold');
     await page.goto(`${baseURL}/staff/?stage=suggestion&scope=${fixture.library}`);
+    await initial.started.promise;
+    assert.equal(await page.locator('#queue-empty').isHidden(), true);
+    assert.equal(await page.locator('#request-grid').isHidden(), true);
+    initial.release.resolve(); await initial.completed.promise;
     await counts(page, fixture.libraryCounts);
     await page.getByRole('button', { name: 'Additional copies (26)', exact: true }).waitFor();
     assert.equal(await page.locator('#additional-copy-grid table').count(), 0, 'Navigation totals load independently of the copy list.');
@@ -244,9 +259,9 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     await counts(page, fixture.libraryCounts);
     await page.keyboard.press('ArrowUp');
     await page.waitForFunction(() => document.querySelector('#claim-filter').value === 'mine' &&
-      document.querySelector('#request-grid .gridjs-notfound')?.textContent === 'No requests match these filters.');
+      !document.querySelector('#queue-empty').hidden);
     assert.equal(await claim.evaluate(node => node === document.activeElement && node.matches(':focus-visible')), true);
-    await page.locator('#request-grid .gridjs-notfound').waitFor({ state: 'visible' });
+    await page.locator('#queue-empty').waitFor();
     assert.deepEqual(await visibleIds(page.locator('#request-grid tbody .request-title-link')), [],
       'Mine has no matching rows in the unclaimed SQL fixture.');
     await counts(page, fixture.libraryCounts, 0);
@@ -297,7 +312,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
     assert.equal(await page.locator('#request-grid .gridjs-summary').textContent(), 'Showing 26 to 28 of 28 results');
     await counts(page, fixture.libraryCounts);
     await page.locator('#request-search').fill('no matching requests');
-    await page.waitForFunction(() => document.querySelector('#request-grid .gridjs-notfound')?.textContent === 'No requests match these filters.');
+    await page.locator('#queue-empty').waitFor();
     await counts(page, fixture.libraryCounts, 0);
     await page.locator('#request-search').fill('');
     await page.locator('#request-grid .gridjs-summary').filter({ hasText: 'Showing 1 to 25 of 28 results' }).waitFor();

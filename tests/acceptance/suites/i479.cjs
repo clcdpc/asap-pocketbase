@@ -36,17 +36,14 @@ async function rows(t, copy, scope, status, choice, actor) {
   const grid = copy ? '#additional-copy-grid' : '#request-grid';
   const selector = grid + (copy ? ' .additional-copy-open' : ' .request-title-link');
   await t.page.locator(copy ? '#refresh-additional-copies:enabled' : '#refresh-queue:enabled').waitFor();
-  if (copy) {
-    await t.page.locator('#additional-copy-summary').filter({ hasText: new RegExp('^' + expected.length + ' ') }).waitFor();
-  } else if (expected.length) {
-    await t.page.locator('#request-grid .gridjs-summary').filter({ hasText: `of ${expected.length} results` }).waitFor();
+  if (expected.length) {
+    await t.page.locator(grid + ' .gridjs-summary').filter({ hasText: `of ${expected.length} results` }).waitFor();
   } else {
-    await t.page.locator('#request-grid .gridjs-notfound').waitFor();
+    await t.page.locator(copy ? '#additional-copy-empty' : '#queue-empty').waitFor();
   }
+  if (copy) assert.equal(await t.page.locator('#additional-copy-summary').isHidden(), true);
   // Refresh intentionally preserves the current page. Reset before asserting
   // first-page cardinality, then collect every page for the exact-row oracle.
-  // The controller summary becomes ready before asynchronous Grid.js mounting;
-  // wait for the pagination control rather than skipping a not-yet-mounted one.
   const first = t.page.locator(grid + ' .gridjs-pages button').filter({ hasText: /^1$/ });
   if (expected.length > 25) {
     await first.waitFor({ state: 'visible' });

@@ -245,7 +245,9 @@ input, select, textarea { min-height: 40px; padding: 8px 10px; color: var(--ink)
 input:disabled, select:disabled, textarea:disabled { color: var(--muted); background: var(--soft); cursor: not-allowed; opacity: 1; }
 textarea { min-height: 108px; resize: vertical; }
 
-.request-grid { min-height: 280px; background: var(--surface); border-top: 3px solid var(--brand); }
+.request-grid { background: var(--surface); border-top: 3px solid var(--brand); }
+#additional-copy-grid { min-height: 280px; }
+#request-grid .single-page .gridjs-pages { display: none; }
 .gridjs-container { display: block; width: 100%; overflow: visible; color: var(--ink); font-size: .91rem; }
 .gridjs-wrapper { width: 100%; overflow-x: auto; border-radius: 0; box-shadow: none; border-color: var(--line); }
 /* Override the vendored light theme here; vendor assets stay unchanged. */
@@ -393,6 +395,7 @@ td.gridjs-td, th.gridjs-th { min-width: 0; padding: 11px 12px; overflow-wrap: an
 .status-badge.closed { background: var(--neutral-surface); color: var(--neutral-ink); }
 .status-badge.blocked { background: var(--warning-surface); color: var(--warning); }
 .empty-state { padding: 28px; text-align: center; color: var(--muted); background: var(--surface); border: 1px solid var(--line); }
+#queue-empty { margin: 0; padding: 12px; }
 
 .profile-form { width: min(680px, 100%); padding: 22px; background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--brand); }
 .profile-form > label:not(.check-field) { display: grid; gap: 5px; margin-bottom: 16px; font-weight: 700; }
