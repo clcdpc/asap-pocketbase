@@ -4,6 +4,16 @@ const { activateRowAction, actionGeometry, actionColumn } = require('../acceptan
 
 module.exports = async function verifyRequestTable({ page, context, baseURL, library, scan }) {
   const grid = page.locator('#request-grid'), search = page.locator('#request-search');
+  const checkProviderLinks = async () => {
+    const requests = await grid.locator('tbody tr').evaluateAll(rows => rows.map(row => ({
+      title: row.querySelector('.request-title-link').textContent,
+      identifier: row.querySelector('td[data-request-column="identifier"] .request-cell-text').textContent,
+      url: [...row.querySelectorAll('.request-provider-links a')].find(a => a.textContent.trim() === 'Library catalog')?.href
+    })));
+    for (const request of requests) {
+      assert.deepEqual([...new URL(request.url).searchParams], [['title', request.title], ['id', request.identifier]]);
+    }
+  };
   const closeDetail = async () => {
     await page.keyboard.press('Escape');
     await page.locator('#request-dialog').waitFor({ state: 'hidden' });
@@ -35,6 +45,7 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Quick-create source');
   await grid.getByRole('button', { name: 'Next', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#request-grid .request-title-link')?.textContent === 'Table browser record 24');
+  await checkProviderLinks();
   const previous = await grid.locator('.request-title-link').first().elementHandle();
   await page.locator('#refresh-queue').click();
   await page.waitForFunction(node => !node.isConnected, previous);
@@ -46,8 +57,10 @@ module.exports = async function verifyRequestTable({ page, context, baseURL, lib
   assert.equal(await grid.locator('th:nth-child(2)').getAttribute('aria-sort'), 'ascending');
   assert.equal(await grid.locator('th:nth-child(2) button').getAttribute('aria-label'), 'Sort Bibliographic details descending');
   assert.match(await grid.locator('.gridjs-summary').textContent(), /26 to 50 of 56/);
+  await checkProviderLinks();
   await search.fill('TABLE-BROWSER-00');
   await page.waitForFunction(() => document.querySelectorAll('#request-grid .request-title-link').length === 1);
+  await checkProviderLinks();
   const row = grid.locator('tbody tr');
   const id = await row.locator('.request-title-link').getAttribute('data-request-id');
   const before = await (await context.request.get(`${baseURL}/api/asap/staff/title-requests/${id}`)).json();

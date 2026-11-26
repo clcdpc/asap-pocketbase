@@ -415,6 +415,9 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     await detailProviders.first().waitFor();
     const initialUrls = await savedUrls();
     assert.equal(initialUrls.length, 2);
+    const otherLibrary = page.locator('#request-grid tr').filter({ hasText: 'Other browser library title' });
+    assert.deepEqual(await otherLibrary.locator('.request-provider-links a').evaluateAll(nodes => nodes.map(a => a.textContent.trim())),
+      ['Browser vendor', 'Search Goodreads'], 'This request inherits Goodreads and has no identifier for WorldCat.');
     assert.deepEqual(await detailProviders.evaluateAll(nodes => nodes.map(a => a.href)), initialUrls);
     await page.getByLabel('Title', { exact: true }).fill('Browser staff title edited');
     const editedUrl = await detailProviders.first().getAttribute('href');
@@ -526,7 +529,7 @@ async function runSuperAdmin(browser, args, axeSource, report) {
     const researchLabels = await page.locator('.research-links a').allTextContents();
     assert.deepEqual(researchLabels, ['Browser vendor', 'Search WorldCat']);
     assert.equal(await page.getByRole('link', { name: 'Search Goodreads' }).count(), 0);
-    assert.match(await page.getByRole('link', { name: 'Browser vendor' }).getAttribute('href'),
+    assert.match(await page.locator('#request-dialog').getByRole('link', { name: 'Browser vendor' }).getAttribute('href'),
       /q=Browser%20staff%20title%20edited/);
 
     await page.getByLabel('BIB ID', { exact: true }).fill('9001');
